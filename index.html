@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>The House Index — Recipes & Cocktails</title>
+  <meta name="description" content="A personal index of kitchen recipes and house cocktails.">
+
+  <!-- iPhone home-screen app support -->
+  <meta name="theme-color" content="#FCFBF8">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="House Index">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="manifest" href="manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="wrap header-row">
+      <h1 class="site-title">The House Index</h1>
+      <nav class="section-tabs" role="tablist" aria-label="Sections">
+        <button class="tab tab-kitchen is-active" role="tab" aria-selected="true" data-section="recipes">Kitchen</button>
+        <button class="tab tab-bar" role="tab" aria-selected="false" data-section="cocktails">Bar</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+
+    <div class="controls">
+      <div class="search-row">
+        <input id="search" class="search" type="search"
+               placeholder="Search by name, tag, or ingredient…"
+               aria-label="Search recipes and cocktails">
+        <button id="toggle-filters" class="ghost-btn" aria-expanded="false">Filter by tag</button>
+      </div>
+      <div id="tag-filters" class="tag-filters" hidden></div>
+      <div id="active-filters" class="active-filters" hidden></div>
+    </div>
+
+    <p id="result-count" class="result-count" aria-live="polite"></p>
+
+    <ul id="item-list" class="item-list"></ul>
+
+    <p id="empty-state" class="empty-state" hidden>
+      Nothing matches that search. Clear a tag or try a different word.
+    </p>
+
+  </main>
+
+  <!-- Grocery bar (appears when items are selected) -->
+  <div id="grocery-bar" class="grocery-bar" hidden>
+    <div class="wrap grocery-bar-row">
+      <span id="grocery-summary" class="grocery-summary"></span>
+      <div class="grocery-bar-actions">
+        <button id="open-grocery" class="solid-btn">View grocery list</button>
+        <button id="clear-grocery" class="ghost-btn small">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Grocery list panel -->
+  <div id="grocery-panel" class="grocery-panel" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Grocery list</h2>
+        <button id="close-grocery" class="ghost-btn small" aria-label="Close grocery list">Close</button>
+      </div>
+      <div id="grocery-content" class="grocery-content"></div>
+      <div class="grocery-actions">
+        <button id="share-grocery" class="solid-btn">Send to phone / Keep</button>
+        <button id="copy-grocery" class="ghost-btn">Copy list</button>
+        <button id="download-grocery" class="ghost-btn">Download .txt</button>
+      </div>
+      <p class="keep-hint">On your phone, <strong>Send to phone / Keep</strong> opens the share sheet — pick
+        Google Keep to drop the list straight into a note. On desktop, use <strong>Copy list</strong> and paste
+        into <a href="https://keep.google.com" target="_blank" rel="noopener">keep.google.com</a>.</p>
+    </div>
+  </div>
+
+  <footer class="site-footer wrap">
+    <p>To add or edit entries, update <code>data/recipes.js</code> or <code>data/cocktails.js</code> and replace the file on GitHub.</p>
+  </footer>
+
+  <script src="data/recipes.js"></script>
+  <script src="data/cocktails.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
