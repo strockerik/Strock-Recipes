@@ -20,6 +20,21 @@
 </head>
 <body>
 
+  <!-- Sign-in gate (shown when no active session) -->
+  <div id="auth-gate" class="auth-gate">
+    <div class="auth-card">
+      <h1 class="site-title">The House Index</h1>
+      <p class="auth-sub">Sign in with your email to view your recipes.</p>
+      <form id="auth-form" class="auth-form">
+        <input id="auth-email" class="search" type="email" inputmode="email"
+               autocomplete="email" placeholder="you@example.com" required
+               aria-label="Email address">
+        <button type="submit" class="solid-btn">Send magic link</button>
+      </form>
+      <p id="auth-status" class="auth-status" aria-live="polite"></p>
+    </div>
+  </div>
+
   <header class="site-header">
     <div class="wrap header-row">
       <h1 class="site-title">The House Index</h1>
@@ -27,6 +42,10 @@
         <button class="tab tab-kitchen is-active" role="tab" aria-selected="true" data-section="recipes">Kitchen</button>
         <button class="tab tab-bar" role="tab" aria-selected="false" data-section="cocktails">Bar</button>
       </nav>
+      <div id="account-area" class="account-area" hidden>
+        <span id="account-email" class="account-email"></span>
+        <button id="sign-out" class="ghost-btn small">Sign out</button>
+      </div>
     </div>
   </header>
 
@@ -87,8 +106,8 @@
     <p>To add or edit entries, update <code>data/recipes.js</code> or <code>data/cocktails.js</code> and replace the file on GitHub.</p>
   </footer>
 
-  <script src="data/recipes.js"></script>
-  <script src="data/cocktails.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

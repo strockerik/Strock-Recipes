@@ -107,6 +107,54 @@ button:focus-visible, input:focus-visible {
 .tab.is-active.tab-kitchen { background: #3E6B3A; color: #fff; }
 .tab.is-active.tab-bar     { background: #B5402A; color: #fff; }
 
+.account-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.account-email {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--faint);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Sign-in gate ---------- */
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  background: var(--paper);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.auth-card {
+  width: 100%;
+  max-width: 360px;
+  text-align: center;
+}
+.auth-card .site-title { margin-bottom: 8px; }
+.auth-sub {
+  color: var(--faint);
+  margin: 0 0 20px;
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.auth-status {
+  margin-top: 14px;
+  font-size: 0.85rem;
+  color: var(--faint);
+  min-height: 1.2em;
+}
+
 /* ---------- Controls ---------- */
 .controls { margin-top: 26px; }
 .search-row { display: flex; gap: 10px; }

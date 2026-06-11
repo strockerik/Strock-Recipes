@@ -10,9 +10,12 @@
   // grocery: id -> { servings }
   const basket = new Map();
 
-  const DATA = { recipes: RECIPES, cocktails: COCKTAILS };
-  const byId = {};
-  [...RECIPES, ...COCKTAILS].forEach((r) => (byId[r.id] = r));
+  const DATA = { recipes: [], cocktails: [] };
+  let byId = {};
+
+  // ---------- Supabase ----------
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  let session = null;
 
   // ---------- Elements ----------
   const $ = (sel) => document.querySelector(sel);
@@ -27,6 +30,13 @@
   const grocerySummary = $("#grocery-summary");
   const groceryPanel = $("#grocery-panel");
   const groceryContent = $("#grocery-content");
+  const authGate = $("#auth-gate");
+  const authForm = $("#auth-form");
+  const authEmailEl = $("#auth-email");
+  const authStatusEl = $("#auth-status");
+  const accountArea = $("#account-area");
+  const accountEmailEl = $("#account-email");
+  const signOutBtn = $("#sign-out");
 
   // ---------- Helpers ----------
   function esc(s) {
@@ -66,6 +76,105 @@
     const amtStr = amt == null ? "\u2014" : fmtAmount(amt) + (ing.unit ? " " + ing.unit : "");
     return { amtStr, item: ing.item };
   }
+
+  // ---------- Data loading (Supabase) ----------
+  function mapRecipe(row) {
+    return {
+      id: row.id,
+      section: row.section,
+      name: row.name,
+      subtitle: row.subtitle,
+      source: row.source,
+      tags: row.tags || [],
+      baseServings: row.base_servings,
+      servingsLabel: row.servings_label,
+      ingredients: row.ingredients || [],
+      method: row.method || [],
+      specs: row.specs,
+      notes: row.notes
+    };
+  }
+
+  async function loadData() {
+    const { data, error } = await supabaseClient
+      .from("recipes")
+      .select("*")
+      .order("name");
+
+    if (error) {
+      toast("Couldn’t load your recipes — try refreshing");
+      return;
+    }
+
+    const items = (data || []).map(mapRecipe);
+    DATA.recipes = items.filter((it) => it.section === "kitchen");
+    DATA.cocktails = items.filter((it) => it.section === "bar");
+    byId = {};
+    items.forEach((it) => (byId[it.id] = it));
+
+    activeTags.clear();
+    openItems.clear();
+    basket.clear();
+    renderTagFilters();
+    renderActiveFilters();
+    renderList();
+    renderGroceryBar();
+  }
+
+  function clearData() {
+    DATA.recipes = [];
+    DATA.cocktails = [];
+    byId = {};
+    activeTags.clear();
+    openItems.clear();
+    basket.clear();
+    renderTagFilters();
+    renderActiveFilters();
+    renderList();
+    renderGroceryBar();
+  }
+
+  // ---------- Auth ----------
+  function updateAuthUI() {
+    authGate.hidden = !!session;
+    accountArea.hidden = !session;
+    if (session) accountEmailEl.textContent = session.user.email;
+  }
+
+  async function initAuth() {
+    const { data } = await supabaseClient.auth.getSession();
+    session = data.session;
+    updateAuthUI();
+    if (session) await loadData();
+
+    supabaseClient.auth.onAuthStateChange((_event, newSession) => {
+      const wasSignedIn = !!session;
+      session = newSession;
+      updateAuthUI();
+      if (session) {
+        if (window.location.hash) history.replaceState(null, "", window.location.pathname + window.location.search);
+        loadData();
+      } else if (wasSignedIn) {
+        clearData();
+      }
+    });
+  }
+
+  authForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = authEmailEl.value.trim();
+    if (!email) return;
+    authStatusEl.textContent = "Sending magic link…";
+    const { error } = await supabaseClient.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin + window.location.pathname }
+    });
+    authStatusEl.textContent = error
+      ? `Error: ${error.message}`
+      : `Check ${email} for a sign-in link.`;
+  });
+
+  signOutBtn.addEventListener("click", () => supabaseClient.auth.signOut());
 
   // ---------- Filtering ----------
   function currentItems() {
@@ -366,4 +475,5 @@
   renderTagFilters();
   renderList();
   renderGroceryBar();
+  initAuth();
 })();
