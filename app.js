@@ -33,6 +33,9 @@
   const authGate = $("#auth-gate");
   const authForm = $("#auth-form");
   const authEmailEl = $("#auth-email");
+  const authPasswordEl = $("#auth-password");
+  const authSignUpBtn = $("#auth-signup");
+  const authForgotBtn = $("#auth-forgot");
   const authStatusEl = $("#auth-status");
   const accountArea = $("#account-area");
   const accountEmailEl = $("#account-email");
@@ -166,7 +169,7 @@
     updateAuthUI();
     if (session) await loadData();
 
-    supabaseClient.auth.onAuthStateChange((_event, newSession) => {
+    supabaseClient.auth.onAuthStateChange((event, newSession) => {
       const wasSignedIn = !!session;
       session = newSession;
       updateAuthUI();
@@ -176,21 +179,67 @@
       } else if (wasSignedIn) {
         clearData();
       }
+      // Arrived via a "Forgot password?" reset link — let them set a new one.
+      if (event === "PASSWORD_RECOVERY") promptForNewPassword();
     });
   }
 
+  async function promptForNewPassword() {
+    const password = prompt("Set a new password (at least 6 characters):");
+    if (!password) return;
+    const { error } = await supabaseClient.auth.updateUser({ password });
+    toast(error ? `Error: ${error.message}` : "Password updated.");
+  }
+
+  // Sign in (form submit / Enter key / primary button)
   authForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const email = authEmailEl.value.trim();
-    if (!email) return;
-    authStatusEl.textContent = "Sending magic link…";
-    const { error } = await supabaseClient.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin + window.location.pathname }
+    const password = authPasswordEl.value;
+    if (!email || !password) return;
+    authStatusEl.textContent = "Signing in…";
+    const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) authStatusEl.textContent = `Error: ${error.message}`;
+    // On success, onAuthStateChange takes over (hides the gate, loads data).
+  });
+
+  // Create a new account
+  authSignUpBtn.addEventListener("click", async () => {
+    const email = authEmailEl.value.trim();
+    const password = authPasswordEl.value;
+    if (!email || !password) {
+      authStatusEl.textContent = "Enter an email and password first.";
+      return;
+    }
+    if (password.length < 6) {
+      authStatusEl.textContent = "Password must be at least 6 characters.";
+      return;
+    }
+    authStatusEl.textContent = "Creating account…";
+    const { data, error } = await supabaseClient.auth.signUp({ email, password });
+    if (error) {
+      authStatusEl.textContent = `Error: ${error.message}`;
+    } else if (data.session) {
+      authStatusEl.textContent = "Account created!"; // confirmation off → signed in now
+    } else {
+      authStatusEl.textContent = `Account created — check ${email} to confirm, then sign in.`;
+    }
+  });
+
+  // Forgot / set password — emails a link that returns here in recovery mode
+  authForgotBtn.addEventListener("click", async () => {
+    const email = authEmailEl.value.trim();
+    if (!email) {
+      authStatusEl.textContent = "Enter your email above first.";
+      return;
+    }
+    authStatusEl.textContent = "Sending reset link…";
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname
     });
     authStatusEl.textContent = error
       ? `Error: ${error.message}`
-      : `Check ${email} for a sign-in link.`;
+      : `Check ${email} for a link to set your password.`;
   });
 
   signOutBtn.addEventListener("click", () => supabaseClient.auth.signOut());

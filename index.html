@@ -24,13 +24,18 @@
   <div id="auth-gate" class="auth-gate">
     <div class="auth-card">
       <h1 class="site-title">The House Index</h1>
-      <p class="auth-sub">Sign in with your email to view your recipes.</p>
+      <p class="auth-sub">Sign in to view your recipes.</p>
       <form id="auth-form" class="auth-form">
         <input id="auth-email" class="search" type="email" inputmode="email"
                autocomplete="email" placeholder="you@example.com" required
                aria-label="Email address">
-        <button type="submit" class="solid-btn">Send magic link</button>
+        <input id="auth-password" class="search" type="password"
+               autocomplete="current-password" placeholder="Password" required
+               minlength="6" aria-label="Password">
+        <button type="submit" id="auth-signin" class="solid-btn">Sign in</button>
+        <button type="button" id="auth-signup" class="ghost-btn">Create account</button>
       </form>
+      <button type="button" id="auth-forgot" class="auth-link">Forgot password?</button>
       <p id="auth-status" class="auth-status" aria-live="polite"></p>
     </div>
   </div>

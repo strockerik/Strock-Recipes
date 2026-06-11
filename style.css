@@ -154,6 +154,16 @@ button:focus-visible, input:focus-visible {
   color: var(--faint);
   min-height: 1.2em;
 }
+.auth-link {
+  background: none;
+  border: 0;
+  color: var(--faint);
+  font-size: 0.82rem;
+  text-decoration: underline;
+  margin-top: 12px;
+  padding: 4px;
+}
+.auth-link:hover { color: var(--accent); }
 
 /* ---------- Controls ---------- */
 .controls { margin-top: 26px; }
