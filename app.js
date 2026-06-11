@@ -216,6 +216,13 @@
     resultCountEl.textContent =
       `${items.length} ${section === "recipes" ? "recipe" : "cocktail"}${items.length === 1 ? "" : "s"}`;
     emptyEl.hidden = items.length > 0;
+    if (items.length === 0) {
+      const filtered = searchTerm.trim() || activeTags.size;
+      const noun = section === "recipes" ? "recipes" : "cocktails";
+      emptyEl.textContent = filtered
+        ? "Nothing matches that search. Clear a tag or try a different word."
+        : `No ${noun} yet. Add some via the Supabase dashboard.`;
+    }
 
     listEl.innerHTML = items.map((it) => {
       const picked = basket.has(it.id);

@@ -2,8 +2,5 @@
 .env.local
 notes.md
 
-# Migration script (uses service-role key)
-scripts/migrate-to-supabase.js
-
 # OS / editor
 .DS_Store
