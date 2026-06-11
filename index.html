@@ -62,7 +62,10 @@
       <div id="active-filters" class="active-filters" hidden></div>
     </div>
 
-    <p id="result-count" class="result-count" aria-live="polite"></p>
+    <div class="result-row">
+      <p id="result-count" class="result-count" aria-live="polite"></p>
+      <button id="add-recipe" class="ghost-btn small">+ Add recipe</button>
+    </div>
 
     <ul id="item-list" class="item-list"></ul>
 
@@ -97,6 +100,70 @@
       <p class="keep-hint">On your phone, <strong>Send to phone / Keep</strong> opens the share sheet — pick
         Google Keep to drop the list straight into a note. On desktop, use <strong>Copy list</strong> and paste
         into <a href="https://keep.google.com" target="_blank" rel="noopener">keep.google.com</a>.</p>
+    </div>
+  </div>
+
+  <!-- Add / edit recipe panel -->
+  <div id="recipe-form-panel" class="grocery-panel" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 id="recipe-form-title" class="panel-title">Add recipe</h2>
+        <button id="close-recipe-form" class="ghost-btn small" aria-label="Close form">Close</button>
+      </div>
+      <form id="recipe-form" class="recipe-form">
+        <input type="hidden" id="rf-id">
+
+        <label class="rf-field">Name
+          <input id="rf-name" class="search" type="text" required>
+        </label>
+
+        <div class="rf-row-2">
+          <label class="rf-field">Subtitle
+            <input id="rf-subtitle" class="search" type="text">
+          </label>
+          <label class="rf-field">Source
+            <input id="rf-source" class="search" type="text">
+          </label>
+        </div>
+
+        <fieldset class="rf-section">
+          <legend>Section</legend>
+          <label><input type="radio" name="rf-section" value="kitchen" checked> Kitchen</label>
+          <label><input type="radio" name="rf-section" value="bar"> Bar</label>
+        </fieldset>
+
+        <div class="rf-row-2">
+          <label class="rf-field">Servings
+            <input id="rf-servings" class="search" type="number" min="1" step="1" value="4" required>
+          </label>
+          <label class="rf-field">Servings label
+            <input id="rf-servings-label" class="search" type="text" placeholder="servings">
+          </label>
+        </div>
+
+        <label class="rf-field">Tags (comma-separated)
+          <input id="rf-tags" class="search" type="text" placeholder="pizza, oven-baked, vegetarian-adaptable">
+        </label>
+
+        <h3 class="detail-h">Ingredients</h3>
+        <div id="rf-ingredients" class="rf-rows"></div>
+        <button type="button" id="rf-add-ingredient" class="ghost-btn small">+ Add ingredient</button>
+
+        <h3 class="detail-h">Method</h3>
+        <div id="rf-method" class="rf-rows"></div>
+        <button type="button" id="rf-add-step" class="ghost-btn small">+ Add step</button>
+
+        <label class="rf-field">Notes
+          <textarea id="rf-notes" class="search" rows="3"></textarea>
+        </label>
+
+        <p id="recipe-form-status" class="auth-status"></p>
+
+        <div class="grocery-actions">
+          <button type="submit" class="solid-btn">Save recipe</button>
+          <button type="button" id="delete-recipe" class="ghost-btn" hidden>Delete recipe</button>
+        </div>
+      </form>
     </div>
   </div>
 

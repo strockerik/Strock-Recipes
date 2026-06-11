@@ -37,6 +37,25 @@
   const accountArea = $("#account-area");
   const accountEmailEl = $("#account-email");
   const signOutBtn = $("#sign-out");
+  const addRecipeBtn = $("#add-recipe");
+  const recipeFormPanel = $("#recipe-form-panel");
+  const recipeForm = $("#recipe-form");
+  const recipeFormTitle = $("#recipe-form-title");
+  const recipeFormStatus = $("#recipe-form-status");
+  const closeRecipeFormBtn = $("#close-recipe-form");
+  const deleteRecipeBtn = $("#delete-recipe");
+  const rfId = $("#rf-id");
+  const rfName = $("#rf-name");
+  const rfSubtitle = $("#rf-subtitle");
+  const rfSource = $("#rf-source");
+  const rfServings = $("#rf-servings");
+  const rfServingsLabel = $("#rf-servings-label");
+  const rfTags = $("#rf-tags");
+  const rfNotes = $("#rf-notes");
+  const rfIngredients = $("#rf-ingredients");
+  const rfMethod = $("#rf-method");
+  const rfAddIngredientBtn = $("#rf-add-ingredient");
+  const rfAddStepBtn = $("#rf-add-step");
 
   // ---------- Helpers ----------
   function esc(s) {
@@ -281,6 +300,10 @@
           ${it.notes ? `<p class="detail-notes">${esc(it.notes)}</p>` : ""}
         </div>
       </div>
+      <div class="detail-actions">
+        <button class="ghost-btn small edit-recipe" data-id="${esc(it.id)}">Edit</button>
+        <button class="ghost-btn small delete-recipe-btn" data-id="${esc(it.id)}">Delete</button>
+      </div>
     </div>`;
   }
 
@@ -338,6 +361,142 @@
     t.classList.add("show");
     clearTimeout(t._timer);
     t._timer = setTimeout(() => t.classList.remove("show"), 2200);
+  }
+
+  // ---------- Recipe form (add / edit / delete) ----------
+  function ingredientRow(ing) {
+    const amount = ing && ing.amount != null ? ing.amount : "";
+    const unit = ing && ing.unit != null ? ing.unit : "";
+    const item = ing ? ing.item : "";
+    return `
+      <div class="rf-ing-row">
+        <input type="number" step="any" class="rf-ing-amount" placeholder="amt" value="${esc(amount)}">
+        <input type="text" class="rf-ing-unit" placeholder="unit" value="${esc(unit)}">
+        <input type="text" class="rf-ing-item" placeholder="ingredient" value="${esc(item)}" required>
+        <button type="button" class="rf-row-remove" aria-label="Remove ingredient">×</button>
+      </div>`;
+  }
+
+  function stepRow(text) {
+    return `
+      <div class="rf-step-row">
+        <textarea class="rf-step-text" rows="2" placeholder="Step…">${esc(text || "")}</textarea>
+        <button type="button" class="rf-row-remove" aria-label="Remove step">×</button>
+      </div>`;
+  }
+
+  function openRecipeForm(item) {
+    recipeFormStatus.textContent = "";
+    if (item) {
+      recipeFormTitle.textContent = "Edit recipe";
+      rfId.value = item.id;
+      rfName.value = item.name;
+      rfSubtitle.value = item.subtitle || "";
+      rfSource.value = item.source || "";
+      rfServings.value = item.baseServings;
+      rfServingsLabel.value = item.servingsLabel || "";
+      rfTags.value = item.tags.join(", ");
+      rfNotes.value = item.notes || "";
+      const radio = recipeForm.querySelector(`input[name="rf-section"][value="${item.section}"]`);
+      if (radio) radio.checked = true;
+      rfIngredients.innerHTML = item.ingredients.map(ingredientRow).join("");
+      rfMethod.innerHTML = item.method.map(stepRow).join("");
+      deleteRecipeBtn.hidden = false;
+    } else {
+      recipeFormTitle.textContent = "Add recipe";
+      recipeForm.reset();
+      rfId.value = "";
+      const radio = recipeForm.querySelector(
+        `input[name="rf-section"][value="${section === "recipes" ? "kitchen" : "bar"}"]`
+      );
+      if (radio) radio.checked = true;
+      rfIngredients.innerHTML = ingredientRow(null);
+      rfMethod.innerHTML = stepRow("");
+      deleteRecipeBtn.hidden = true;
+    }
+    recipeFormPanel.hidden = false;
+  }
+
+  function closeRecipeForm() {
+    recipeFormPanel.hidden = true;
+  }
+
+  rfAddIngredientBtn.addEventListener("click", () => {
+    rfIngredients.insertAdjacentHTML("beforeend", ingredientRow(null));
+  });
+  rfAddStepBtn.addEventListener("click", () => {
+    rfMethod.insertAdjacentHTML("beforeend", stepRow(""));
+  });
+  rfIngredients.addEventListener("click", (e) => {
+    if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-ing-row").remove();
+  });
+  rfMethod.addEventListener("click", (e) => {
+    if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-step-row").remove();
+  });
+
+  addRecipeBtn.addEventListener("click", () => openRecipeForm(null));
+  closeRecipeFormBtn.addEventListener("click", closeRecipeForm);
+  recipeFormPanel.addEventListener("click", (e) => {
+    if (e.target === recipeFormPanel) closeRecipeForm();
+  });
+
+  recipeForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const ingredients = [...rfIngredients.querySelectorAll(".rf-ing-row")].map((row) => {
+      const amount = row.querySelector(".rf-ing-amount").value;
+      const unit = row.querySelector(".rf-ing-unit").value.trim();
+      const itemName = row.querySelector(".rf-ing-item").value.trim();
+      return { amount: amount === "" ? null : Number(amount), unit: unit || null, item: itemName };
+    }).filter((ing) => ing.item);
+
+    const method = [...rfMethod.querySelectorAll(".rf-step-text")]
+      .map((t) => t.value.trim())
+      .filter(Boolean);
+
+    const id = rfId.value;
+    const existing = id ? byId[id] : null;
+    const row = {
+      user_id: session.user.id,
+      section: recipeForm.querySelector('input[name="rf-section"]:checked').value,
+      name: rfName.value.trim(),
+      subtitle: rfSubtitle.value.trim() || null,
+      source: rfSource.value.trim() || null,
+      tags: rfTags.value.split(",").map((t) => t.trim()).filter(Boolean),
+      base_servings: Number(rfServings.value),
+      servings_label: rfServingsLabel.value.trim() || "servings",
+      ingredients,
+      method,
+      specs: existing ? existing.specs : null,
+      notes: rfNotes.value.trim() || null
+    };
+
+    recipeFormStatus.textContent = "Saving…";
+    const { error } = id
+      ? await supabaseClient.from("recipes").update(row).eq("id", id)
+      : await supabaseClient.from("recipes").insert(row);
+
+    if (error) {
+      recipeFormStatus.textContent = `Error: ${error.message}`;
+      return;
+    }
+
+    closeRecipeForm();
+    toast(id ? "Recipe updated" : "Recipe added");
+    await loadData();
+  });
+
+  async function deleteRecipe(item) {
+    if (!confirm(`Delete "${item.name}"? This can't be undone.`)) return;
+    const { error } = await supabaseClient.from("recipes").delete().eq("id", item.id);
+    if (error) {
+      toast(`Error: ${error.message}`);
+      return;
+    }
+    openItems.delete(item.id);
+    basket.delete(item.id);
+    toast("Recipe deleted");
+    await loadData();
   }
 
   // ---------- Events ----------
@@ -417,6 +576,16 @@
       return;
     }
 
+    if (e.target.closest(".edit-recipe")) {
+      openRecipeForm(byId[id]);
+      return;
+    }
+
+    if (e.target.closest(".delete-recipe-btn")) {
+      deleteRecipe(byId[id]);
+      return;
+    }
+
     if (e.target.closest(".item-head") || e.target.classList.contains("chevron")) {
       openItems.has(id) ? openItems.delete(id) : openItems.add(id);
       renderList();
@@ -473,9 +642,11 @@
     }
   });
 
-  // Escape closes the grocery panel
+  // Escape closes the grocery panel / recipe form
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !groceryPanel.hidden) groceryPanel.hidden = true;
+    if (e.key !== "Escape") return;
+    if (!groceryPanel.hidden) groceryPanel.hidden = true;
+    if (!recipeFormPanel.hidden) closeRecipeForm();
   });
 
   // ---------- Init ----------
