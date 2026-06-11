@@ -69,7 +69,10 @@
 
     <div class="result-row">
       <p id="result-count" class="result-count" aria-live="polite"></p>
-      <button id="add-recipe" class="ghost-btn small">+ Add recipe</button>
+      <div class="result-row-actions">
+        <button id="add-recipe-ai" class="ghost-btn small">✨ Add with AI</button>
+        <button id="add-recipe" class="ghost-btn small">+ Add recipe</button>
+      </div>
     </div>
 
     <ul id="item-list" class="item-list"></ul>
@@ -169,6 +172,39 @@
           <button type="button" id="delete-recipe" class="ghost-btn" hidden>Delete recipe</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- AI recipe import panel -->
+  <div id="ai-import-panel" class="grocery-panel" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Add with AI</h2>
+        <button id="close-ai-import" class="ghost-btn small" aria-label="Close AI import">Close</button>
+      </div>
+
+      <div id="ai-import-picker" class="ai-import-picker">
+        <p class="ai-import-hint">Snap a photo of a recipe, or paste in text (e.g. an Instagram caption), and AI will fill in the form for you to review before saving.</p>
+        <label class="ghost-btn ai-import-option">
+          📷 Take / choose photo
+          <input type="file" id="ai-photo-input" accept="image/*" capture="environment" hidden>
+        </label>
+        <button type="button" id="ai-paste-text-btn" class="ghost-btn ai-import-option">✍️ Paste recipe text</button>
+        <div id="ai-text-area" class="ai-text-area" hidden>
+          <textarea id="ai-text-input" class="search" rows="6" placeholder="Paste a recipe, ingredient list, or caption text…"></textarea>
+          <button type="button" id="ai-text-submit" class="solid-btn">Extract recipe</button>
+        </div>
+        <p class="ai-import-tip">Tip: links from Instagram or TikTok usually won't import directly — paste the caption text instead.</p>
+      </div>
+
+      <div id="ai-import-loading" class="ai-import-loading" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Reading your recipe…</p>
+        <p class="ai-import-hint">Pulling out ingredients and steps with AI.</p>
+        <button type="button" id="ai-import-cancel" class="ghost-btn small">Cancel</button>
+      </div>
+
+      <p id="ai-import-status" class="auth-status"></p>
     </div>
   </div>
 

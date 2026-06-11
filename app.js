@@ -65,6 +65,19 @@
   const rfAddIngredientBtn = $("#rf-add-ingredient");
   const rfAddStepBtn = $("#rf-add-step");
 
+  const addRecipeAiBtn = $("#add-recipe-ai");
+  const aiImportPanel = $("#ai-import-panel");
+  const closeAiImportBtn = $("#close-ai-import");
+  const aiImportPicker = $("#ai-import-picker");
+  const aiImportLoading = $("#ai-import-loading");
+  const aiImportStatus = $("#ai-import-status");
+  const aiImportCancelBtn = $("#ai-import-cancel");
+  const aiPhotoInput = $("#ai-photo-input");
+  const aiPasteTextBtn = $("#ai-paste-text-btn");
+  const aiTextArea = $("#ai-text-area");
+  const aiTextInput = $("#ai-text-input");
+  const aiTextSubmitBtn = $("#ai-text-submit");
+
   // ---------- Helpers ----------
   function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
@@ -489,6 +502,24 @@
     recipeFormPanel.hidden = true;
   }
 
+  // Populate the (already-open, blank) add-recipe form with AI-extracted fields.
+  function fillRecipeFormFromExtraction(recipe) {
+    rfName.value = recipe.name || "";
+    rfSubtitle.value = recipe.subtitle || "";
+    rfSource.value = recipe.source || "";
+    rfServings.value = recipe.base_servings || 4;
+    rfServingsLabel.value = recipe.servings_label || "servings";
+    rfTags.value = (recipe.tags || []).join(", ");
+    rfNotes.value = recipe.notes || "";
+    const section = recipe.section === "bar" ? "bar" : "kitchen";
+    const radio = recipeForm.querySelector(`input[name="rf-section"][value="${section}"]`);
+    if (radio) radio.checked = true;
+    const ingredients = recipe.ingredients && recipe.ingredients.length ? recipe.ingredients : [null];
+    rfIngredients.innerHTML = ingredients.map(ingredientRow).join("");
+    const method = recipe.method && recipe.method.length ? recipe.method : [""];
+    rfMethod.innerHTML = method.map(stepRow).join("");
+  }
+
   rfAddIngredientBtn.addEventListener("click", () => {
     rfIngredients.insertAdjacentHTML("beforeend", ingredientRow(null));
   });
@@ -566,6 +597,83 @@
     toast("Recipe deleted");
     await loadData();
   }
+
+  // ---------- AI recipe import ----------
+  function openAiImport() {
+    aiImportStatus.textContent = "";
+    aiTextInput.value = "";
+    aiTextArea.hidden = true;
+    aiPhotoInput.value = "";
+    aiImportPicker.hidden = false;
+    aiImportLoading.hidden = true;
+    aiImportPanel.hidden = false;
+  }
+
+  function closeAiImport() {
+    aiImportPanel.hidden = true;
+  }
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result;
+        const comma = result.indexOf(",");
+        resolve(result.slice(comma + 1));
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function runExtraction(payload) {
+    aiImportPicker.hidden = true;
+    aiImportLoading.hidden = false;
+    aiImportStatus.textContent = "";
+
+    const { data, error } = await supabaseClient.functions.invoke("extract-recipe", {
+      body: payload
+    });
+
+    if (aiImportPanel.hidden) return; // user cancelled / closed
+
+    if (error || data?.error) {
+      aiImportPicker.hidden = false;
+      aiImportLoading.hidden = true;
+      aiImportStatus.textContent = `Error: ${data?.error || error.message}`;
+      return;
+    }
+
+    closeAiImport();
+    openRecipeForm(null);
+    fillRecipeFormFromExtraction(data.recipe);
+    recipeFormStatus.textContent = "AI extracted this recipe — please review before saving.";
+  }
+
+  addRecipeAiBtn.addEventListener("click", openAiImport);
+  closeAiImportBtn.addEventListener("click", closeAiImport);
+  aiImportCancelBtn.addEventListener("click", closeAiImport);
+  aiImportPanel.addEventListener("click", (e) => {
+    if (e.target === aiImportPanel) closeAiImport();
+  });
+
+  aiPasteTextBtn.addEventListener("click", () => {
+    aiTextArea.hidden = false;
+    aiTextInput.focus();
+  });
+
+  aiTextSubmitBtn.addEventListener("click", () => {
+    const text = aiTextInput.value.trim();
+    if (!text) return;
+    runExtraction({ type: "text", text });
+  });
+
+  aiPhotoInput.addEventListener("change", async () => {
+    const file = aiPhotoInput.files?.[0];
+    if (!file) return;
+    const data = await fileToBase64(file);
+    runExtraction({ type: "image", mediaType: file.type || "image/jpeg", data });
+  });
 
   // ---------- Events ----------
   // Tabs
@@ -704,11 +812,12 @@
     }
   });
 
-  // Escape closes the grocery panel / recipe form
+  // Escape closes the grocery panel / recipe form / AI import panel
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (!groceryPanel.hidden) groceryPanel.hidden = true;
     if (!recipeFormPanel.hidden) closeRecipeForm();
+    if (!aiImportPanel.hidden) closeAiImport();
   });
 
   // ---------- Init ----------
