@@ -1,55 +1,90 @@
 # The House Index — Recipes & Cocktails
 
-A clean, single-page site for your personal recipe and cocktail databases. No build step, no dependencies — just static files that GitHub Pages can host for free.
+A personal, multi-user recipe and cocktail app. The frontend is plain
+HTML/CSS/JS (no build step) hosted on GitHub Pages; accounts and data live in
+Supabase. Each signed-in user sees only their own recipes.
+
+## Architecture
+
+```
+Browser (GitHub Pages)                 Supabase
+┌──────────────────────┐               ┌─────────────────────────────┐
+│ index.html / style.css│  auth ──────▶ │ Auth (email + password)     │
+│ app.js                │  read/write ▶ │ Postgres `recipes` + RLS    │
+│ config.js (URL + anon)│               │   (auth.uid() = user_id)    │
+└──────────────────────┘               └─────────────────────────────┘
+```
+
+- **Auth:** email + password. Sessions persist in the browser, so you stay
+  signed in across visits. "Forgot password?" emails a reset link.
+- **Privacy:** every recipe row has a `user_id`; a Row Level Security policy
+  (`auth.uid() = user_id`) means Postgres itself refuses to return other users'
+  rows, even if the frontend had a bug.
 
 ## Files
 
 ```
-index.html          the page
-style.css           styling (light theme)
-app.js              search, filters, grocery list logic
-data/recipes.js     ← your kitchen recipes (edit this to add recipes)
-data/cocktails.js   ← your cocktails (edit this to add cocktails)
+index.html                          the page (auth gate, list, recipe form, grocery panel)
+style.css                           styling (light theme)
+app.js                              all client logic
+config.js                           Supabase project URL + anon key (safe to commit)
+manifest.json / icons/              iPhone home-screen PWA support
+data/recipes.js, data/cocktails.js  pre-migration backup of the original static data (unused)
 ```
 
-## Put it on GitHub Pages (one-time, ~5 minutes)
+`config.js` exposes the Supabase URL and **anon** key. That is intentional and
+safe — the anon key only permits what RLS allows. The **service-role** key
+(which bypasses RLS) must never be committed; it stays in the gitignored
+`notes.md` / `.env.local` for one-off local admin tasks only.
 
-1. Go to github.com → **New repository**. Name it anything (e.g. `house-index`). Set it **Public**. Create it.
-2. On the new repo page, click **uploading an existing file**, drag in `index.html`, `style.css`, `app.js`, and the `data` folder (upload `recipes.js` and `cocktails.js` into a folder named `data` — you can drag the whole folder in at once). Commit.
-3. Go to the repo's **Settings → Pages**. Under "Build and deployment," set Source to **Deploy from a branch**, branch **main**, folder **/ (root)**. Save.
-4. Wait a minute or two. Your site will be live at `https://YOUR-USERNAME.github.io/house-index/`.
+## Accounts
 
-Any time you change a file, the site updates automatically within a minute or so of committing.
+- **Sign in** with your email + password.
+- **Create account** makes a new private recipe book for a new email.
+- **Forgot password?** emails a link that returns to the app and prompts you to
+  set a new password (also how you set a password the first time on an account
+  that was originally created via magic link).
 
-## Adding a recipe or cocktail
+New-account behavior depends on the Supabase **Authentication → Providers →
+Email → "Confirm email"** setting: ON sends one confirmation email at signup;
+OFF signs the new account in immediately. The app handles both.
 
-1. Open `data/recipes.js` (or `data/cocktails.js`) — on GitHub you can click the file and hit the pencil icon to edit right in the browser, no download needed.
-2. Scroll to the **TEMPLATE** comment at the bottom of the file. Copy the template block, paste it just **above** the template comment, and fill it in.
-3. Commit. Done — new tags you use will automatically show up in the filter list.
+## Adding recipes
 
-Tips:
-- `id` must be unique within the file (lowercase, dashes, no spaces).
-- `amount: null` is for things that don't scale ("salt, to taste", "olive oil — a generous amount").
-- Decimal amounts display as fractions on the site (0.5 → ½, 0.25 → ¼).
-- Watch the commas: every entry except the last needs a comma after its closing `}` — the template includes a leading comma for this reason.
+Use the app — no editing JS files:
+
+- **+ Add recipe** — fill in the form (name, section, servings, tags,
+  ingredient rows, method steps, notes).
+- Open any recipe to **Edit** or **Delete** it.
+
+Amounts entered as decimals display as fractions (0.5 → ½). Leave an ingredient
+amount blank for "to taste"–style items that shouldn't scale.
 
 ## Grocery list → Google Keep
 
-Google doesn't offer a public "add to Keep" link, so the site uses the next best things:
+- **On your phone:** check the recipes you want, set servings, open the grocery
+  list, and tap **Send to phone / Keep** — the share sheet opens; choose Google
+  Keep and the list lands in a new note.
+- **On desktop:** tap **Copy list** and paste into keep.google.com.
+- **Download .txt** saves a plain file.
 
-- **On your phone:** check the recipes you want, set servings, open the grocery list, and tap **Send to phone / Keep**. Your phone's share sheet opens — choose **Google Keep** and the list lands in a new note (each line has a ☐ checkbox character).
-- **On desktop:** tap **Copy list**, then paste into a note at keep.google.com (turn on "Show checkboxes" in the note's menu and Keep converts the lines into real checkboxes).
-- There's also a **Download .txt** option if you just want a file.
+The grocery selection lives in the current session, so fully closing the app
+resets the checked recipes — build the list and send it to Keep.
+
+## Add to your iPhone home screen
+
+1. Open the live URL in **Safari**.
+2. **Share → Add to Home Screen → Add**.
+3. Launching from the home screen opens it full-screen and behaves like a native
+   app. Sign in once and your recipes sync to any device you sign in on with the
+   same email + password.
 
 ## Local preview
 
-Just double-click `index.html` — it works straight from your computer, no server needed.
+```bash
+python3 -m http.server 8765
+# then open http://localhost:8765
+```
 
-## Add it to your iPhone home screen (works like an app)
-
-1. Open your live GitHub Pages URL in **Safari** (this has to be Safari, not Chrome).
-2. Tap the **Share** button (square with the up arrow), then **Add to Home Screen**, then **Add**.
-3. You'll get a "Hi" icon on your home screen. Launching from there opens the site full-screen — no Safari address bar — and it behaves like a native app: the Kitchen/Bar tabs, search, filters, servings steppers, and the grocery list all work the same.
-4. **Send to phone / Keep** works especially well here: it opens the iOS share sheet directly, and Google Keep appears as a target if you have the Keep app installed.
-
-One thing to know: the grocery list selection lives in the current session, so if you fully close the app, the checked recipes reset. Build your list, send it to Keep, and Keep holds onto it from there.
+Use a local server (rather than opening the file directly) so Supabase auth and
+its redirects work correctly.

@@ -14,6 +14,11 @@
   let byId = {};
 
   // ---------- Supabase ----------
+  if (!window.supabase) {
+    const s = document.getElementById("auth-status");
+    if (s) s.textContent = "Couldn’t load the app — check your connection and refresh.";
+    return;
+  }
   const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   let session = null;
 
@@ -117,6 +122,25 @@
     };
   }
 
+  // Re-render every view that depends on data / filters / basket state.
+  function refreshViews() {
+    renderTagFilters();
+    renderActiveFilters();
+    renderList();
+    renderGroceryBar();
+  }
+
+  // Drop basket / open-row / active-tag references to recipes or tags that no
+  // longer exist (e.g. a recipe deleted on another device). This lets us reload
+  // data without nuking the user's whole grocery list, filters, and open rows.
+  function pruneStaleState() {
+    for (const id of [...basket.keys()]) if (!byId[id]) basket.delete(id);
+    for (const id of [...openItems]) if (!byId[id]) openItems.delete(id);
+    const allTags = new Set();
+    Object.values(byId).forEach((it) => it.tags.forEach((t) => allTags.add(t)));
+    for (const t of [...activeTags]) if (!allTags.has(t)) activeTags.delete(t);
+  }
+
   async function loadData() {
     const { data, error } = await supabaseClient
       .from("recipes")
@@ -134,13 +158,11 @@
     byId = {};
     items.forEach((it) => (byId[it.id] = it));
 
-    activeTags.clear();
-    openItems.clear();
-    basket.clear();
-    renderTagFilters();
-    renderActiveFilters();
-    renderList();
-    renderGroceryBar();
+    // Note: we deliberately do NOT blanket-clear basket / activeTags / openItems
+    // here, so adding/editing/deleting a recipe doesn't wipe the user's grocery
+    // list, filters, or expanded rows. We only prune references that went stale.
+    pruneStaleState();
+    refreshViews();
   }
 
   function clearData() {
@@ -150,10 +172,7 @@
     activeTags.clear();
     openItems.clear();
     basket.clear();
-    renderTagFilters();
-    renderActiveFilters();
-    renderList();
-    renderGroceryBar();
+    refreshViews();
   }
 
   // ---------- Auth ----------
@@ -163,12 +182,10 @@
     if (session) accountEmailEl.textContent = session.user.email;
   }
 
-  async function initAuth() {
-    const { data } = await supabaseClient.auth.getSession();
-    session = data.session;
-    updateAuthUI();
-    if (session) await loadData();
-
+  function initAuth() {
+    // onAuthStateChange fires an INITIAL_SESSION event on subscribe, so it
+    // handles the initial load too — no separate getSession() call is needed
+    // (which would otherwise double-fetch the data on every page load).
     supabaseClient.auth.onAuthStateChange((event, newSession) => {
       const wasSignedIn = !!session;
       session = newSession;
@@ -365,15 +382,17 @@
   }
 
   function groceryGroups() {
-    return [...basket.entries()].map(([id, { servings }]) => {
-      const it = byId[id];
-      return {
-        name: it.name,
-        servings,
-        label: it.servingsLabel,
-        lines: scaledIngredients(it, servings).map((ing) => ingLine(ing, true))
-      };
-    });
+    return [...basket.entries()]
+      .filter(([id]) => byId[id])
+      .map(([id, { servings }]) => {
+        const it = byId[id];
+        return {
+          name: it.name,
+          servings,
+          label: it.servingsLabel,
+          lines: scaledIngredients(it, servings).map((ing) => ingLine(ing, true))
+        };
+      });
   }
 
   function renderGroceryPanel() {
@@ -560,9 +579,7 @@
       });
       document.body.classList.toggle("section-cocktails", section === "cocktails");
       activeTags.clear();
-      renderTagFilters();
-      renderActiveFilters();
-      renderList();
+      refreshViews();
     });
   });
 
@@ -585,16 +602,12 @@
     if (chip) {
       const t = chip.dataset.tag;
       activeTags.has(t) ? activeTags.delete(t) : activeTags.add(t);
-      renderTagFilters();
-      renderActiveFilters();
-      renderList();
+      refreshViews();
       return;
     }
     if (e.target.id === "clear-tags") {
       activeTags.clear();
-      renderTagFilters();
-      renderActiveFilters();
-      renderList();
+      refreshViews();
     }
   }
   tagFiltersEl.addEventListener("click", handleTagClick);
