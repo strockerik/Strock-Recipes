@@ -19,7 +19,14 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
+// Text and URL extraction is easy — Haiku handles it cheaply (~half a cent).
+// Photos, especially messy handwritten recipe cards, need the stronger vision
+// model to read reliably; the extra cost (~1-2 cents) is worth it there.
+const MODEL_TEXT = "claude-haiku-4-5-20251001";
+const MODEL_VISION = "claude-sonnet-4-6";
+function pickModel(type: string) {
+  return type === "image" ? MODEL_VISION : MODEL_TEXT;
+}
 const ANTHROPIC_VERSION = "2023-06-01";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -68,18 +75,28 @@ const RECIPE_SCHEMA = {
   required: ["name", "subtitle", "source", "section", "tags", "base_servings", "servings_label", "ingredients", "method", "notes"]
 };
 
-const SYSTEM_PROMPT = `You extract recipes from photos or text into a structured format by calling the save_recipe tool.
+const SYSTEM_PROMPT = `You extract recipes into a structured format by calling the save_recipe tool. The source may be a clean printed recipe, a sloppy handwritten card, a screenshot of a text message, or a casual narrative. Your goal is always a complete, cookable recipe.
 
-Rules:
-- Output amounts as numbers, splitting unit from item (e.g. "2 cups flour" -> amount: 2, unit: "cups", item: "flour").
-- Normalize fractions and ranges to decimals (e.g. "1/2" -> 0.5, "1-2 tsp" -> 1.5).
-- If an ingredient has no measured amount (e.g. "salt to taste"), set amount and unit to null and put the full description in item.
-- Preserve the order of method steps exactly as given.
-- Use null for any field that isn't present in the source — never invent information.
-- Infer 3-6 sensible lowercase, hyphenated tags (cuisine, course, diet, cooking method, etc.).
-- Set section to "bar" only if this is clearly a cocktail or mixed drink; otherwise "kitchen".
-- base_servings should be the number the ingredient list is written for (default 4 for food, 1 for a single cocktail).
-- servings_label describes the unit, e.g. "servings", "pizzas", "glasses", "loaves" — default "servings".`;
+READING THE SOURCE
+- Read handwriting carefully, including messy cursive. Use cooking knowledge to resolve ambiguous words from context: in a batter recipe "1 c. ___" after eggs and flour is almost certainly a cup of a dry good or milk; units and ingredients that fit the dish are the likely reading.
+- Ignore anything that is not part of the recipe: card labels ("Recipe for", "From the kitchen of"), people's names and attributions ("one of Bets' favorite recipes"), decorative or religious captions ("Give us this day our daily bread…"), illustrations and clip-art, copyright or publisher lines (e.g. "© 1984 Michael Hague"), card/page numbers and product codes, and — in screenshots — phone UI such as the status bar, clock, contact name, and messaging-app chrome.
+- Keep genuine cooking annotations (e.g. a scribbled "add cheese!") as a note or ingredient, not noise.
+
+FILLING GAPS — this is wanted, do not refuse
+- If the method is cut off or missing, complete it with the standard steps for this dish so it can be cooked start to finish.
+- If ingredients are listed with no amounts (common on cocktail cards and casual notes), supply sensible amounts for one standard batch (or one drink for a single cocktail).
+- If a narrative describes the process loosely, rewrite it as clean ordered steps and a proper ingredient list, normalizing vague amounts ("about 2 tbsp" -> 2 tbsp, "a couple cloves" -> 2).
+- Whenever you infer, complete, or guess amounts or steps that were NOT in the source, add ONE short line at the very end of \`notes\` beginning with "AI added: " naming what you filled in, so the cook knows to double-check (e.g. "AI added: estimated cocktail proportions and the final baking step.").
+- Invent only what's needed to make the recipe complete. Do not fabricate a specific source, author, or backstory — leave source null if unknown.
+
+FORMATTING
+- Split amount, unit, and item: "2 cups flour" -> amount 2, unit "cups", item "flour".
+- Normalize fractions and ranges to decimals ("1/2" -> 0.5, "1-2 tsp" -> 1.5). Keep oven temperatures (e.g. "415°") in the relevant method step, never as an ingredient.
+- If an ingredient has no measurable amount even after inference (e.g. "salt to taste"), set amount and unit to null and put the full description in item.
+- Preserve the given order of steps; slot any completed steps into their natural position.
+- section: "bar" only for a cocktail or mixed drink, otherwise "kitchen".
+- base_servings: the number the amounts are written for (default 4 for food, 1 for a single cocktail). servings_label: the unit, e.g. "servings", "pizzas", "glasses", "loaves".
+- tags: 3-6 lowercase, hyphenated (cuisine, course, diet, method, etc.).`;
 
 // ---------- URL import helpers ----------
 
@@ -235,7 +252,7 @@ Deno.serve(async (req) => {
         "anthropic-version": ANTHROPIC_VERSION
       },
       body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
+        model: pickModel(body.type),
         max_tokens: 4096,
         system: SYSTEM_PROMPT,
         tools: [{ name: "save_recipe", description: "Save the extracted recipe.", input_schema: RECIPE_SCHEMA }],

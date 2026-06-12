@@ -13,7 +13,7 @@ Browser (GitHub Pages)                 Supabase
 │ app.js                │  read/write ▶ │ Postgres `recipes` + RLS    │
 │ config.js (URL + anon)│               │   (auth.uid() = user_id)    │
 └──────────────────────┘  AI extract ▶ │ Edge Function extract-recipe│
-                                        │   └▶ Anthropic Claude Haiku │
+                                        │   └▶ Claude (Haiku / Sonnet)│
                                         └─────────────────────────────┘
 ```
 
@@ -22,11 +22,18 @@ Browser (GitHub Pages)                 Supabase
 - **Privacy:** every recipe row has a `user_id`; a Row Level Security policy
   (`auth.uid() = user_id`) means Postgres itself refuses to return other users'
   rows, even if the frontend had a bug.
-- **AI extraction:** "✨ Add with AI" sends a photo or pasted text to the
+- **AI extraction:** "✨ Add with AI" sends a photo, pasted text, or a link to the
   `extract-recipe` Edge Function, which verifies the caller is signed in, calls
-  Claude Haiku 4.5 (structured output via forced tool-use), and returns a recipe
-  that pre-fills the form for review — nothing is saved without your approval.
-  The Anthropic API key lives only as a server-side secret, never in the browser.
+  Claude (structured output via forced tool-use), and returns a recipe that
+  pre-fills the form for review — nothing is saved without your approval. Text
+  and links use Haiku 4.5 (cheap); photos use the stronger Sonnet vision model,
+  since handwritten recipe cards need it to read reliably. The model is told to
+  ignore non-recipe clutter (card labels, names, decorations, copyright lines,
+  phone UI in screenshots), and to intelligently fill gaps — completing a recipe
+  that's cut off, inferring proportions when only ingredients are listed, and
+  turning a loose narrative into clean steps. Anything it guesses is flagged in
+  the recipe's Notes with an "AI added:" line so you can double-check it. The
+  Anthropic API key lives only as a server-side secret, never in the browser.
 
 ## Files
 
@@ -69,7 +76,11 @@ Use the app — no editing JS files:
   fetches the page server-side and prefers the site's embedded schema.org
   Recipe data (JSON-LD) over raw page text — most recipe blogs have it.
   Login-walled or heavily scripted pages (Instagram, TikTok) won't fetch;
-  paste the caption text for those. Each extraction costs roughly half a cent.
+  paste the caption text for those. Text and link extractions cost roughly half
+  a cent (Haiku); photo extractions a couple of cents (Sonnet, needed to read
+  messy handwriting). The AI completes cut-off recipes, infers proportions when
+  only ingredients are given, and ignores non-recipe clutter on the card or
+  screenshot — anything it guesses shows up as an "AI added:" line in Notes.
 - **+ Add recipe** — fill in the form manually (name, section, servings, tags,
   ingredient rows, method steps, notes).
 - Open any recipe to **Edit** or **Delete** it.

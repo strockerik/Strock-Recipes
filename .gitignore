@@ -2,5 +2,8 @@
 .env.local
 notes.md
 
+# Personal recipe test photos — local calibration set, not for the public site
+data/Recipe Photos/
+
 # OS / editor
 .DS_Store
