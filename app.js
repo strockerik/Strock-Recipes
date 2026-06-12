@@ -202,7 +202,7 @@
   }
 
   async function promptForNewPassword() {
-    const password = prompt("Set a new password (at least 6 characters):");
+    const password = prompt("Set a new password (at least 8 characters):");
     if (!password) return;
     const { error } = await supabaseClient.auth.updateUser({ password });
     toast(error ? `Error: ${error.message}` : "Password updated.");
@@ -228,8 +228,8 @@
       authStatusEl.textContent = "Enter an email and password first.";
       return;
     }
-    if (password.length < 6) {
-      authStatusEl.textContent = "Password must be at least 6 characters.";
+    if (password.length < 8) {
+      authStatusEl.textContent = "Password must be at least 8 characters.";
       return;
     }
     authStatusEl.textContent = "Creating account…";
