@@ -595,7 +595,7 @@ button:focus-visible, input:focus-visible {
   font-size: 0.85rem;
   padding: 9px 18px;
   border-radius: 999px;
-  z-index: 50;
+  z-index: 70; /* above cook mode (60) so toasts stay visible everywhere */
   opacity: 0;
   transition: opacity 0.2s;
   pointer-events: none;

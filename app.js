@@ -530,12 +530,15 @@
     recipeFormPanel.hidden = true;
   }
 
-  // Coerce a model-extracted amount to a number or null ("1/2" → 0.5, "2" → 2).
+  // Coerce a model-extracted amount to a number or null
+  // ("1/2" → 0.5, "1 1/2" → 1.5, "2" → 2).
   function extractedAmount(value) {
     if (typeof value === "number" && isFinite(value)) return value;
     if (typeof value === "string") {
-      const frac = value.trim().match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
-      if (frac && Number(frac[2]) !== 0) return Number(frac[1]) / Number(frac[2]);
+      const frac = value.trim().match(/^(?:(\d+)\s+)?(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+      if (frac && Number(frac[3]) !== 0) {
+        return Number(frac[1] || 0) + Number(frac[2]) / Number(frac[3]);
+      }
       const n = parseFloat(value);
       if (isFinite(n)) return n;
     }
@@ -890,6 +893,7 @@
   let wakeLock = null;
 
   async function requestWakeLock() {
+    releaseWakeLock(); // drop any stale lock before acquiring a fresh one
     try {
       if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
     } catch {
@@ -981,7 +985,13 @@
     if (cookPanel.hidden) return;
     if (e.key === "ArrowRight") { e.preventDefault(); cookNext(); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); cookPrev(); }
-    else if (e.key === "Escape") closeCookMode();
+    else if (e.key === "Escape") {
+      // Consume the keypress: this handler hides the panel synchronously, so
+      // the later panel-Escape listener would otherwise see it as closed and
+      // also close whatever is underneath on the same keypress.
+      e.stopImmediatePropagation();
+      closeCookMode();
+    }
   });
 
   // Grocery bar / panel
@@ -1034,9 +1044,11 @@
     }
   });
 
-  // Escape closes the grocery panel / recipe form / AI import panel
+  // Escape closes the grocery panel / recipe form / AI import panel.
+  // Cook mode sits on top of everything and has its own Escape handler —
+  // don't also close the panels underneath it on the same keypress.
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
+    if (e.key !== "Escape" || !cookPanel.hidden) return;
     if (!groceryPanel.hidden) groceryPanel.hidden = true;
     if (!recipeFormPanel.hidden) closeRecipeForm();
     if (!aiImportPanel.hidden) closeAiImport();

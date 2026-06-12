@@ -94,7 +94,7 @@
   </div>
 
   <!-- Grocery list panel -->
-  <div id="grocery-panel" class="grocery-panel" hidden>
+  <div id="grocery-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Grocery list" hidden>
     <div class="grocery-panel-inner wrap">
       <div class="grocery-panel-head">
         <h2 class="panel-title">Grocery list</h2>
@@ -113,7 +113,7 @@
   </div>
 
   <!-- Add / edit recipe panel -->
-  <div id="recipe-form-panel" class="grocery-panel" hidden>
+  <div id="recipe-form-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-labelledby="recipe-form-title" hidden>
     <div class="grocery-panel-inner wrap">
       <div class="grocery-panel-head">
         <h2 id="recipe-form-title" class="panel-title">Add recipe</h2>
@@ -177,7 +177,7 @@
   </div>
 
   <!-- AI recipe import panel -->
-  <div id="ai-import-panel" class="grocery-panel" hidden>
+  <div id="ai-import-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Add with AI" hidden>
     <div class="grocery-panel-inner wrap">
       <div class="grocery-panel-head">
         <h2 class="panel-title">Add with AI</h2>
@@ -218,7 +218,7 @@
   </div>
 
   <!-- Cook mode (full-screen, one step at a time, keeps the screen awake) -->
-  <div id="cook-panel" class="cook-panel" hidden>
+  <div id="cook-panel" class="cook-panel" role="dialog" aria-modal="true" aria-labelledby="cook-title" hidden>
     <div class="cook-head wrap">
       <span id="cook-title" class="cook-title"></span>
       <button id="cook-close" class="ghost-btn small" aria-label="Exit cook mode">Done</button>

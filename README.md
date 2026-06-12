@@ -83,7 +83,9 @@ Use the app — no editing JS files:
   screenshot — anything it guesses shows up as an "AI added:" line in Notes.
 - **+ Add recipe** — fill in the form manually (name, section, servings, tags,
   ingredient rows, method steps, notes).
-- Open any recipe to **Edit** or **Delete** it.
+- Open any recipe to **Edit** or **Delete** it — or tap **▶ Cook** for a
+  full-screen guided mode: one step at a time, tap to advance, an ingredients
+  toggle scaled to your servings, and the screen stays awake while you cook.
 
 Amounts entered as decimals display as fractions (0.5 → ½). Leave an ingredient
 amount blank for "to taste"–style items that shouldn't scale.
