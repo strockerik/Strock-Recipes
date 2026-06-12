@@ -77,6 +77,10 @@
   const aiTextArea = $("#ai-text-area");
   const aiTextInput = $("#ai-text-input");
   const aiTextSubmitBtn = $("#ai-text-submit");
+  const aiLinkBtn = $("#ai-link-btn");
+  const aiLinkArea = $("#ai-link-area");
+  const aiLinkInput = $("#ai-link-input");
+  const aiLinkSubmitBtn = $("#ai-link-submit");
 
   // ---------- Helpers ----------
   function esc(s) {
@@ -514,22 +518,46 @@
     recipeFormPanel.hidden = true;
   }
 
+  // Coerce a model-extracted amount to a number or null ("1/2" → 0.5, "2" → 2).
+  function extractedAmount(value) {
+    if (typeof value === "number" && isFinite(value)) return value;
+    if (typeof value === "string") {
+      const frac = value.trim().match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+      if (frac && Number(frac[2]) !== 0) return Number(frac[1]) / Number(frac[2]);
+      const n = parseFloat(value);
+      if (isFinite(n)) return n;
+    }
+    return null;
+  }
+
   // Populate the (already-open, blank) add-recipe form with AI-extracted fields.
+  // The model's tool output *usually* matches the schema, but the API doesn't
+  // enforce it — tags have arrived as one comma-joined string, which used to
+  // throw mid-fill and leave ingredients/method blank. Normalize every field so
+  // one odd value can't abort the rest.
   function fillRecipeFormFromExtraction(recipe) {
     rfName.value = recipe.name || "";
     rfSubtitle.value = recipe.subtitle || "";
     rfSource.value = recipe.source || "";
-    rfServings.value = recipe.base_servings || 4;
+    rfServings.value = Math.max(1, Math.round(extractedAmount(recipe.base_servings) || 4));
     rfServingsLabel.value = recipe.servings_label || "servings";
-    rfTags.value = (recipe.tags || []).join(", ");
+    const tags = Array.isArray(recipe.tags) ? recipe.tags
+      : typeof recipe.tags === "string" ? recipe.tags.split(",") : [];
+    rfTags.value = tags.map((t) => String(t).trim()).filter(Boolean).join(", ");
     rfNotes.value = recipe.notes || "";
     const targetSection = recipe.section === "bar" ? "bar" : "kitchen";
     const radio = recipeForm.querySelector(`input[name="rf-section"][value="${targetSection}"]`);
     if (radio) radio.checked = true;
-    const ingredients = recipe.ingredients && recipe.ingredients.length ? recipe.ingredients : [null];
-    rfIngredients.innerHTML = ingredients.map(ingredientRow).join("");
-    const method = recipe.method && recipe.method.length ? recipe.method : [""];
-    rfMethod.innerHTML = method.map(stepRow).join("");
+    const ingredients = (Array.isArray(recipe.ingredients) ? recipe.ingredients : [])
+      .map((ing) => typeof ing === "string"
+        ? { amount: null, unit: null, item: ing.trim() }
+        : { amount: extractedAmount(ing?.amount), unit: ing?.unit || null, item: String(ing?.item ?? "").trim() })
+      .filter((ing) => ing.item);
+    rfIngredients.innerHTML = (ingredients.length ? ingredients : [null]).map(ingredientRow).join("");
+    const method = (Array.isArray(recipe.method) ? recipe.method
+      : typeof recipe.method === "string" ? recipe.method.split(/\n+/) : [])
+      .map((s) => String(s).trim()).filter(Boolean);
+    rfMethod.innerHTML = (method.length ? method : [""]).map(stepRow).join("");
   }
 
   rfAddIngredientBtn.addEventListener("click", () => {
@@ -621,6 +649,8 @@
     aiImportStatus.textContent = "";
     aiTextInput.value = "";
     aiTextArea.hidden = true;
+    aiLinkInput.value = "";
+    aiLinkArea.hidden = true;
     aiPhotoInput.value = "";
     aiImportPicker.hidden = false;
     aiImportLoading.hidden = true;
@@ -701,6 +731,7 @@
 
   aiPasteTextBtn.addEventListener("click", () => {
     aiTextArea.hidden = false;
+    aiLinkArea.hidden = true;
     aiTextInput.focus();
   });
 
@@ -708,6 +739,26 @@
     const text = aiTextInput.value.trim();
     if (!text) return;
     runExtraction({ type: "text", text });
+  });
+
+  aiLinkBtn.addEventListener("click", () => {
+    aiLinkArea.hidden = false;
+    aiTextArea.hidden = true;
+    aiLinkInput.focus();
+  });
+
+  aiLinkSubmitBtn.addEventListener("click", () => {
+    let url = aiLinkInput.value.trim();
+    if (!url) return;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `https://${url}`; // pasted without scheme
+    runExtraction({ type: "url", url });
+  });
+
+  aiLinkInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      aiLinkSubmitBtn.click();
+    }
   });
 
   aiPhotoInput.addEventListener("change", async () => {

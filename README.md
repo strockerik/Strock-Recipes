@@ -62,10 +62,14 @@ OFF signs the new account in immediately. The app handles both.
 Use the app — no editing JS files:
 
 - **✨ Add with AI** — snap or choose a photo of a recipe (cookbook page,
-  handwritten card, screenshot) or paste text (e.g. an Instagram caption); AI
-  fills in the whole form for you to review, edit, and save. Photos are
-  downscaled and converted to JPEG in the browser before upload, so iPhone HEIC
-  photos work. Each extraction costs roughly half a cent.
+  handwritten card, screenshot), paste a link to a recipe page, or paste text
+  (e.g. an Instagram caption); AI fills in the whole form for you to review,
+  edit, and save. Photos are downscaled and converted to JPEG in the browser
+  before upload, so iPhone HEIC photos work. For links, the Edge Function
+  fetches the page server-side and prefers the site's embedded schema.org
+  Recipe data (JSON-LD) over raw page text — most recipe blogs have it.
+  Login-walled or heavily scripted pages (Instagram, TikTok) won't fetch;
+  paste the caption text for those. Each extraction costs roughly half a cent.
 - **+ Add recipe** — fill in the form manually (name, section, servings, tags,
   ingredient rows, method steps, notes).
 - Open any recipe to **Edit** or **Delete** it.
@@ -83,6 +87,14 @@ sync when editing. Requirements:
 - **Verify JWT: OFF** for this function (it does its own auth check and handles
   the CORS preflight; leaving it on breaks browser calls).
 - Set a monthly spend limit on the Anthropic account as a runaway-cost guard.
+- After editing the repo's `index.ts`, paste the new contents into the
+  dashboard editor and hit Deploy — pushing to GitHub does **not** redeploy it.
+
+VSCode shows errors in `index.ts` ("Cannot find name 'Deno'", "Cannot find
+module 'jsr:…'") because its TypeScript server type-checks the file as Node
+code. They're cosmetic — the function runs on Supabase's Deno runtime, where
+both resolve fine. Installing the official Deno VSCode extension (with
+`deno.enablePaths: ["supabase/functions"]`) silences them.
 
 ## Grocery list → Google Keep
 

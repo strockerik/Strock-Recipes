@@ -11,6 +11,7 @@
 // Request body (JSON):
 //   { type: "image", mediaType: "image/jpeg" | "image/png" | "image/webp", data: "<base64>" }
 //   { type: "text", text: "<pasted recipe text>" }
+//   { type: "url", url: "<public recipe page>" }
 //
 // Response: always HTTP 200 with either { recipe: {...} } or { error: "..." },
 // so the browser's functions.invoke() can read our message directly.
@@ -80,6 +81,84 @@ Rules:
 - base_servings should be the number the ingredient list is written for (default 4 for food, 1 for a single cocktail).
 - servings_label describes the unit, e.g. "servings", "pizzas", "glasses", "loaves" — default "servings".`;
 
+// ---------- URL import helpers ----------
+
+const MAX_PAGE_CHARS = 50_000; // keep model input (and cost) bounded
+
+// Only plain public http(s) URLs; refuse localhost / private-network targets so
+// the function can't be used to probe internal addresses.
+function parseAllowedUrl(raw: string): URL | null {
+  let url: URL;
+  try {
+    // Prepend https:// only when there's no scheme at all — a foreign scheme
+    // (ftp:, file:, …) must reach the protocol check below and be rejected,
+    // not get wrapped into a parseable https URL.
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const host = url.hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") || host.includes("[")) return null;
+  const ip = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (ip) {
+    const [a, b] = [Number(ip[1]), Number(ip[2])];
+    if (a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) {
+      return null;
+    }
+  }
+  return url;
+}
+
+// Recipe sites almost always embed schema.org/Recipe JSON-LD; when present it
+// is far cleaner model input than the page text.
+function findJsonLdRecipe(html: string): unknown {
+  for (const m of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const recipe = findRecipeNode(JSON.parse(m[1].trim()));
+      if (recipe) return recipe;
+    } catch {
+      // malformed JSON-LD block — keep looking
+    }
+  }
+  return null;
+}
+
+function findRecipeNode(node: unknown): unknown {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findRecipeNode(child);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (node && typeof node === "object") {
+    const obj = node as Record<string, unknown>;
+    const types = Array.isArray(obj["@type"]) ? obj["@type"] : [obj["@type"]];
+    if (types.some((t) => typeof t === "string" && t.toLowerCase() === "recipe")) return node;
+    if (obj["@graph"]) return findRecipeNode(obj["@graph"]);
+  }
+  return null;
+}
+
+// Crude but dependency-free HTML → text, for pages without Recipe JSON-LD.
+function htmlToText(html: string): string {
+  return html
+    .replace(/<(script|style|noscript|svg|iframe|header|footer|nav)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6]|tr|section|article)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;|&apos;/gi, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
+    .trim();
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -112,6 +191,37 @@ Deno.serve(async (req) => {
       if (!body.text || !body.text.trim()) return json({ error: "No text was received." });
       userContent = [
         { type: "text", text: `Extract the recipe from the following text by calling save_recipe:\n\n${body.text}` }
+      ];
+    } else if (body.type === "url") {
+      const url = typeof body.url === "string" ? parseAllowedUrl(body.url.trim()) : null;
+      if (!url) return json({ error: "That doesn’t look like a valid link." });
+      let html: string;
+      try {
+        const pageRes = await fetch(url, {
+          redirect: "follow",
+          signal: AbortSignal.timeout(15_000),
+          headers: {
+            // A browser-ish UA — many recipe sites refuse obvious bots outright.
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml"
+          }
+        });
+        if (!pageRes.ok) throw new Error(`status ${pageRes.status}`);
+        html = await pageRes.text();
+      } catch (fetchErr) {
+        console.error("URL fetch failed:", url.href, fetchErr);
+        return json({ error: "Couldn’t load that page — the site may block robots. Copy the recipe text and paste it instead." });
+      }
+      const jsonLd = findJsonLdRecipe(html);
+      const content = (jsonLd ? JSON.stringify(jsonLd) : htmlToText(html)).slice(0, MAX_PAGE_CHARS);
+      if (content.length < 80) {
+        return json({ error: "Couldn’t find readable recipe text on that page — paste the text instead." });
+      }
+      userContent = [
+        {
+          type: "text",
+          text: `Extract the recipe from this content from ${url.hostname} by calling save_recipe. If the content names no clearer attribution, use "${url.hostname}" as the source.\n\n${content}`
+        }
       ];
     } else {
       return json({ error: "Invalid request." });
