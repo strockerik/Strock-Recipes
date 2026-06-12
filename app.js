@@ -684,7 +684,9 @@
         canvas.width = width;
         canvas.height = height;
         canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        // Higher quality (0.92) preserves fine pen strokes on handwritten cards;
+        // the size cost is small and recipe cards are the priority use case.
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
         resolve(dataUrl.slice(dataUrl.indexOf(",") + 1));
       };
       img.onerror = () => {
