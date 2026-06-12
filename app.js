@@ -613,16 +613,32 @@
     aiImportPanel.hidden = true;
   }
 
-  function fileToBase64(file) {
+  const MAX_IMAGE_DIM = 1600; // Claude caps vision input near 1568px; no point sending more.
+
+  // Downscale and re-encode as JPEG. This shrinks multi-MB phone photos before
+  // upload and converts iPhone HEIC images (which Claude's vision API rejects)
+  // into a supported format. Returns base64 (no data: prefix).
+  function processImage(file) {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result;
-        const comma = result.indexOf(",");
-        resolve(result.slice(comma + 1));
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const scale = Math.min(1, MAX_IMAGE_DIM / Math.max(img.width, img.height));
+        const width = Math.round(img.width * scale);
+        const height = Math.round(img.height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        resolve(dataUrl.slice(dataUrl.indexOf(",") + 1));
       };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Couldn’t read that image."));
+      };
+      img.src = url;
     });
   }
 
@@ -671,8 +687,14 @@
   aiPhotoInput.addEventListener("change", async () => {
     const file = aiPhotoInput.files?.[0];
     if (!file) return;
-    const data = await fileToBase64(file);
-    runExtraction({ type: "image", mediaType: file.type || "image/jpeg", data });
+    let data;
+    try {
+      data = await processImage(file);
+    } catch {
+      aiImportStatus.textContent = "Couldn’t read that image — try another photo.";
+      return;
+    }
+    runExtraction({ type: "image", mediaType: "image/jpeg", data });
   });
 
   // ---------- Events ----------
