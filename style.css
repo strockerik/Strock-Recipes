@@ -654,3 +654,110 @@ button:focus-visible, input:focus-visible {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ===== Cook mode — full-screen guided cooking ===== */
+.cook-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+}
+.cook-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+.cook-title {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cook-progress {
+  height: 4px;
+  background: var(--line);
+}
+#cook-progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+.cook-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.cook-step {
+  width: 100%;
+  text-align: center;
+  padding-top: 24px;
+  padding-bottom: 24px;
+}
+.cook-step-num {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 18px;
+}
+.cook-step-text {
+  font-size: clamp(1.5rem, 4.5vw, 2.1rem);
+  line-height: 1.45;
+  color: var(--ink);
+  margin: 0;
+  max-width: 22em;
+  margin-left: auto;
+  margin-right: auto;
+}
+.cook-tap-hint {
+  margin: 28px 0 0;
+  font-size: 0.78rem;
+  color: var(--faint);
+  opacity: 0.7;
+}
+.cook-ingredients {
+  border-top: 1px solid var(--line);
+  background: var(--accent-soft);
+  max-height: 38vh;
+  overflow-y: auto;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+.cook-ing-note {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--faint);
+  margin: 0 0 8px;
+}
+.cook-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+}
+.cook-nav .ghost-btn { white-space: nowrap; }
+.cook-nav #cook-next {
+  flex: 1;
+  padding: 14px;
+  font-size: 1.05rem;
+}
+.cook-nav #cook-prev:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

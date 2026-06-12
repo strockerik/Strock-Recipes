@@ -81,6 +81,17 @@
   const aiLinkArea = $("#ai-link-area");
   const aiLinkInput = $("#ai-link-input");
   const aiLinkSubmitBtn = $("#ai-link-submit");
+  const cookPanel = $("#cook-panel");
+  const cookTitle = $("#cook-title");
+  const cookCloseBtn = $("#cook-close");
+  const cookProgressBar = $("#cook-progress-bar");
+  const cookBody = $("#cook-body");
+  const cookStepNum = $("#cook-step-num");
+  const cookStepText = $("#cook-step-text");
+  const cookIngredients = $("#cook-ingredients");
+  const cookPrevBtn = $("#cook-prev");
+  const cookNextBtn = $("#cook-next");
+  const cookIngToggle = $("#cook-ing-toggle");
 
   // ---------- Helpers ----------
   function esc(s) {
@@ -396,6 +407,7 @@
         </div>
       </div>
       <div class="detail-actions">
+        ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
         <button class="ghost-btn small edit-recipe" data-id="${esc(it.id)}">Edit</button>
         <button class="ghost-btn small delete-recipe-btn" data-id="${esc(it.id)}">Delete</button>
       </div>
@@ -848,6 +860,12 @@
       return;
     }
 
+    if (e.target.closest(".cook-btn")) {
+      const servings = basket.has(id) ? basket.get(id).servings : byId[id].baseServings;
+      openCookMode(byId[id], servings);
+      return;
+    }
+
     if (e.target.closest(".edit-recipe")) {
       openRecipeForm(byId[id]);
       return;
@@ -862,6 +880,108 @@
       openItems.has(id) ? openItems.delete(id) : openItems.add(id);
       renderList();
     }
+  });
+
+  // ---------- Cook mode (guided, full-screen, screen stays awake) ----------
+  let cookItem = null;
+  let cookServings = 0;
+  let cookIdx = 0;
+  let cookSteps = [];
+  let wakeLock = null;
+
+  async function requestWakeLock() {
+    try {
+      if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
+    } catch {
+      // Denied, low battery, or unsupported — cooking still works, screen may dim.
+      wakeLock = null;
+    }
+  }
+  function releaseWakeLock() {
+    if (wakeLock) {
+      wakeLock.release().catch(() => {});
+      wakeLock = null;
+    }
+  }
+  // Browsers drop the lock when the tab is backgrounded; re-take it on return.
+  document.addEventListener("visibilitychange", () => {
+    if (!cookPanel.hidden && document.visibilityState === "visible") requestWakeLock();
+  });
+
+  function openCookMode(item, servings) {
+    cookSteps = item.method || [];
+    if (!cookSteps.length) {
+      toast("No method steps to cook from");
+      return;
+    }
+    cookItem = item;
+    cookServings = servings;
+    cookIdx = 0;
+    cookTitle.textContent = item.name;
+    renderCookIngredients();
+    cookIngredients.hidden = true;
+    cookIngToggle.setAttribute("aria-expanded", "false");
+    cookPanel.hidden = false;
+    renderCookStep();
+    requestWakeLock();
+  }
+
+  function renderCookStep() {
+    const total = cookSteps.length;
+    cookStepNum.textContent = `Step ${cookIdx + 1} of ${total}`;
+    cookStepText.textContent = cookSteps[cookIdx];
+    cookProgressBar.style.width = `${((cookIdx + 1) / total) * 100}%`;
+    cookPrevBtn.disabled = cookIdx === 0;
+    cookNextBtn.textContent = cookIdx === total - 1 ? "Done ✓" : "Next →";
+    cookBody.scrollTop = 0;
+  }
+
+  function renderCookIngredients() {
+    const ings = scaledIngredients(cookItem, cookServings);
+    const note = cookServings !== cookItem.baseServings
+      ? `scaled to ${cookServings} ${cookItem.servingsLabel}`
+      : `makes ${cookItem.baseServings} ${cookItem.servingsLabel}`;
+    cookIngredients.innerHTML = `
+      <p class="cook-ing-note">${esc(note)}</p>
+      <ul class="ing-list">
+        ${ings.map((ing) => {
+          const l = ingLine(ing, true);
+          return `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
+        }).join("")}
+      </ul>`;
+  }
+
+  function cookNext() {
+    if (cookIdx >= cookSteps.length - 1) {
+      closeCookMode();
+      return;
+    }
+    cookIdx++;
+    renderCookStep();
+  }
+  function cookPrev() {
+    if (cookIdx === 0) return;
+    cookIdx--;
+    renderCookStep();
+  }
+  function closeCookMode() {
+    cookPanel.hidden = true;
+    releaseWakeLock();
+  }
+
+  cookBody.addEventListener("click", cookNext); // tap the step to advance, one-handed
+  cookNextBtn.addEventListener("click", cookNext);
+  cookPrevBtn.addEventListener("click", cookPrev);
+  cookCloseBtn.addEventListener("click", closeCookMode);
+  cookIngToggle.addEventListener("click", () => {
+    cookIngredients.hidden = !cookIngredients.hidden;
+    cookIngToggle.setAttribute("aria-expanded", String(!cookIngredients.hidden));
+  });
+  document.addEventListener("keydown", (e) => {
+    if (cookPanel.hidden) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); cookNext(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); cookPrev(); }
+    else if (e.key === "Escape") closeCookMode();
   });
 
   // Grocery bar / panel

@@ -217,6 +217,28 @@
     </div>
   </div>
 
+  <!-- Cook mode (full-screen, one step at a time, keeps the screen awake) -->
+  <div id="cook-panel" class="cook-panel" hidden>
+    <div class="cook-head wrap">
+      <span id="cook-title" class="cook-title"></span>
+      <button id="cook-close" class="ghost-btn small" aria-label="Exit cook mode">Done</button>
+    </div>
+    <div class="cook-progress" aria-hidden="true"><div id="cook-progress-bar"></div></div>
+    <div id="cook-body" class="cook-body">
+      <div class="cook-step wrap">
+        <p id="cook-step-num" class="cook-step-num" aria-live="polite"></p>
+        <p id="cook-step-text" class="cook-step-text"></p>
+        <p class="cook-tap-hint">tap to advance</p>
+      </div>
+    </div>
+    <div id="cook-ingredients" class="cook-ingredients wrap" hidden></div>
+    <div class="cook-nav wrap">
+      <button id="cook-prev" class="ghost-btn">← Back</button>
+      <button id="cook-ing-toggle" class="ghost-btn" aria-expanded="false">Ingredients</button>
+      <button id="cook-next" class="solid-btn">Next →</button>
+    </div>
+  </div>
+
   <footer class="site-footer wrap">
     <p>Recipes are stored in your account. Sign in with the same email on any device to see them.</p>
   </footer>
