@@ -165,7 +165,7 @@
           <textarea id="rf-notes" class="search" rows="3"></textarea>
         </label>
 
-        <p id="recipe-form-status" class="auth-status"></p>
+        <p id="recipe-form-status" class="auth-status" aria-live="polite"></p>
 
         <div class="grocery-actions">
           <button type="submit" class="solid-btn">Save recipe</button>
@@ -187,11 +187,13 @@
         <p class="ai-import-hint">Snap a photo of a recipe, or paste in text (e.g. an Instagram caption), and AI will fill in the form for you to review before saving.</p>
         <label class="ghost-btn ai-import-option">
           📷 Take / choose photo
-          <input type="file" id="ai-photo-input" accept="image/*" capture="environment" hidden>
+          <!-- No `capture` attribute: with it, iOS jumps straight to the camera
+               and never offers the photo library / screenshots. -->
+          <input type="file" id="ai-photo-input" accept="image/*" hidden>
         </label>
         <button type="button" id="ai-paste-text-btn" class="ghost-btn ai-import-option">✍️ Paste recipe text</button>
         <div id="ai-text-area" class="ai-text-area" hidden>
-          <textarea id="ai-text-input" class="search" rows="6" placeholder="Paste a recipe, ingredient list, or caption text…"></textarea>
+          <textarea id="ai-text-input" class="search" rows="6" maxlength="50000" placeholder="Paste a recipe, ingredient list, or caption text…"></textarea>
           <button type="button" id="ai-text-submit" class="solid-btn">Extract recipe</button>
         </div>
         <p class="ai-import-tip">Tip: links from Instagram or TikTok usually won't import directly — paste the caption text instead.</p>
@@ -204,7 +206,7 @@
         <button type="button" id="ai-import-cancel" class="ghost-btn small">Cancel</button>
       </div>
 
-      <p id="ai-import-status" class="auth-status"></p>
+      <p id="ai-import-status" class="auth-status" aria-live="polite"></p>
     </div>
   </div>
 

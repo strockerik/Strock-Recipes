@@ -12,7 +12,9 @@ Browser (GitHub Pages)                 Supabase
 │ index.html / style.css│  auth ──────▶ │ Auth (email + password)     │
 │ app.js                │  read/write ▶ │ Postgres `recipes` + RLS    │
 │ config.js (URL + anon)│               │   (auth.uid() = user_id)    │
-└──────────────────────┘               └─────────────────────────────┘
+└──────────────────────┘  AI extract ▶ │ Edge Function extract-recipe│
+                                        │   └▶ Anthropic Claude Haiku │
+                                        └─────────────────────────────┘
 ```
 
 - **Auth:** email + password. Sessions persist in the browser, so you stay
@@ -20,16 +22,22 @@ Browser (GitHub Pages)                 Supabase
 - **Privacy:** every recipe row has a `user_id`; a Row Level Security policy
   (`auth.uid() = user_id`) means Postgres itself refuses to return other users'
   rows, even if the frontend had a bug.
+- **AI extraction:** "✨ Add with AI" sends a photo or pasted text to the
+  `extract-recipe` Edge Function, which verifies the caller is signed in, calls
+  Claude Haiku 4.5 (structured output via forced tool-use), and returns a recipe
+  that pre-fills the form for review — nothing is saved without your approval.
+  The Anthropic API key lives only as a server-side secret, never in the browser.
 
 ## Files
 
 ```
-index.html                          the page (auth gate, list, recipe form, grocery panel)
-style.css                           styling (light theme)
-app.js                              all client logic
-config.js                           Supabase project URL + anon key (safe to commit)
-manifest.json / icons/              iPhone home-screen PWA support
-data/recipes.js, data/cocktails.js  pre-migration backup of the original static data (unused)
+index.html                              the page (auth gate, list, recipe form, AI import, grocery panel)
+style.css                               styling (light theme)
+app.js                                  all client logic
+config.js                               Supabase project URL + anon key (safe to commit)
+manifest.json / icons/                  iPhone home-screen PWA support
+supabase/functions/extract-recipe/      Edge Function source (Deno/TS) for AI extraction
+data/recipes.js, data/cocktails.js      pre-migration backup of the original static data (unused)
 ```
 
 `config.js` exposes the Supabase URL and **anon** key. That is intentional and
@@ -53,12 +61,28 @@ OFF signs the new account in immediately. The app handles both.
 
 Use the app — no editing JS files:
 
-- **+ Add recipe** — fill in the form (name, section, servings, tags,
+- **✨ Add with AI** — snap or choose a photo of a recipe (cookbook page,
+  handwritten card, screenshot) or paste text (e.g. an Instagram caption); AI
+  fills in the whole form for you to review, edit, and save. Photos are
+  downscaled and converted to JPEG in the browser before upload, so iPhone HEIC
+  photos work. Each extraction costs roughly half a cent.
+- **+ Add recipe** — fill in the form manually (name, section, servings, tags,
   ingredient rows, method steps, notes).
 - Open any recipe to **Edit** or **Delete** it.
 
 Amounts entered as decimals display as fractions (0.5 → ½). Leave an ingredient
 amount blank for "to taste"–style items that shouldn't scale.
+
+## Edge Function deployment (AI)
+
+`extract-recipe` is deployed via the Supabase dashboard (Edge Functions → the
+in-browser editor), with the repo file as the source of truth — keep them in
+sync when editing. Requirements:
+
+- Secret `ANTHROPIC_API_KEY` set under Edge Functions → Secrets.
+- **Verify JWT: OFF** for this function (it does its own auth check and handles
+  the CORS preflight; leaving it on breaks browser calls).
+- Set a monthly spend limit on the Anthropic account as a runaway-cost guard.
 
 ## Grocery list → Google Keep
 

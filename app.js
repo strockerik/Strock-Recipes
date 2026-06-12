@@ -195,22 +195,34 @@
     if (session) accountEmailEl.textContent = session.user.email;
   }
 
+  let loadedUserId = null; // whose data is currently loaded
+
   function initAuth() {
     // onAuthStateChange fires an INITIAL_SESSION event on subscribe, so it
     // handles the initial load too — no separate getSession() call is needed
     // (which would otherwise double-fetch the data on every page load).
+    //
+    // Data calls are deferred with setTimeout: supabase-js holds an internal
+    // auth lock while this callback runs, and queries issued inside it (which
+    // call getSession() under the hood) can deadlock — especially when a PWA
+    // resumes after sitting in the background.
     supabaseClient.auth.onAuthStateChange((event, newSession) => {
       const wasSignedIn = !!session;
       session = newSession;
       updateAuthUI();
       if (session) {
         if (window.location.hash) history.replaceState(null, "", window.location.pathname + window.location.search);
-        loadData();
+        // TOKEN_REFRESHED fires roughly hourly — no need to refetch and
+        // re-render everything when the same user's token rotates.
+        const userChanged = session.user.id !== loadedUserId;
+        loadedUserId = session.user.id;
+        if (userChanged || event !== "TOKEN_REFRESHED") setTimeout(loadData, 0);
       } else if (wasSignedIn) {
-        clearData();
+        loadedUserId = null;
+        setTimeout(clearData, 0);
       }
       // Arrived via a "Forgot password?" reset link — let them set a new one.
-      if (event === "PASSWORD_RECOVERY") promptForNewPassword();
+      if (event === "PASSWORD_RECOVERY") setTimeout(promptForNewPassword, 0);
     });
   }
 
@@ -319,7 +331,7 @@
       const noun = section === "recipes" ? "recipes" : "cocktails";
       emptyEl.textContent = filtered
         ? "Nothing matches that search. Clear a tag or try a different word."
-        : `No ${noun} yet. Add some via the Supabase dashboard.`;
+        : `No ${noun} yet — tap “+ Add recipe” or “✨ Add with AI” to get started.`;
     }
 
     listEl.innerHTML = items.map((it) => {
@@ -511,8 +523,8 @@
     rfServingsLabel.value = recipe.servings_label || "servings";
     rfTags.value = (recipe.tags || []).join(", ");
     rfNotes.value = recipe.notes || "";
-    const section = recipe.section === "bar" ? "bar" : "kitchen";
-    const radio = recipeForm.querySelector(`input[name="rf-section"][value="${section}"]`);
+    const targetSection = recipe.section === "bar" ? "bar" : "kitchen";
+    const radio = recipeForm.querySelector(`input[name="rf-section"][value="${targetSection}"]`);
     if (radio) radio.checked = true;
     const ingredients = recipe.ingredients && recipe.ingredients.length ? recipe.ingredients : [null];
     rfIngredients.innerHTML = ingredients.map(ingredientRow).join("");
@@ -541,6 +553,12 @@
 
   recipeForm.addEventListener("submit", async (e) => {
     e.preventDefault();
+
+    // A PWA left in the background for days can lose its session.
+    if (!session) {
+      recipeFormStatus.textContent = "You’ve been signed out — sign in again, your edits are still here.";
+      return;
+    }
 
     const ingredients = [...rfIngredients.querySelectorAll(".rf-ing-row")].map((row) => {
       const amount = row.querySelector(".rf-ing-amount").value;
@@ -609,7 +627,12 @@
     aiImportPanel.hidden = false;
   }
 
+  // Increments on every new extraction AND on cancel/close, so a slow response
+  // from an abandoned request can never populate the form later.
+  let extractionToken = 0;
+
   function closeAiImport() {
+    extractionToken++;
     aiImportPanel.hidden = true;
   }
 
@@ -643,6 +666,7 @@
   }
 
   async function runExtraction(payload) {
+    const token = ++extractionToken;
     aiImportPicker.hidden = true;
     aiImportLoading.hidden = false;
     aiImportStatus.textContent = "";
@@ -651,7 +675,9 @@
       body: payload
     });
 
-    if (aiImportPanel.hidden) return; // user cancelled / closed
+    // Stale response: the user cancelled, closed the panel, or started a newer
+    // extraction while this one was in flight.
+    if (token !== extractionToken || aiImportPanel.hidden) return;
 
     if (error || data?.error) {
       aiImportPicker.hidden = false;
@@ -686,6 +712,7 @@
 
   aiPhotoInput.addEventListener("change", async () => {
     const file = aiPhotoInput.files?.[0];
+    aiPhotoInput.value = ""; // reset so picking the same file again re-fires change
     if (!file) return;
     let data;
     try {

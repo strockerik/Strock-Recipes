@@ -247,7 +247,8 @@ button:focus-visible, input:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 0 12px;
 }
 .result-row .result-count { margin: 18px 0 8px; }
 .result-row-actions {
