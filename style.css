@@ -160,7 +160,13 @@ button:focus-visible, input:focus-visible {
 
 /* ---------- Controls ---------- */
 .controls { margin-top: 26px; }
-.search-row { display: flex; gap: 10px; }
+/* wrap so the filter buttons drop to the next line instead of pushing the
+   page wider than a phone screen */
+.search-row { display: flex; flex-wrap: wrap; gap: 10px; }
+/* on phones, give the search its own row; the filter buttons stack below it */
+@media (max-width: 560px) {
+  .search-row .search { flex-basis: 100%; }
+}
 .search {
   flex: 1;
   border: 1px solid var(--line);
