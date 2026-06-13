@@ -6,6 +6,7 @@
   let section = "recipes"; // "recipes" | "cocktails"
   let searchTerm = "";
   let activeTags = new Set();
+  let favoritesOnly = false;
   const openItems = new Set(); // ids of expanded items
   // grocery: id -> { servings }
   const basket = new Map();
@@ -30,6 +31,7 @@
   const searchEl = $("#search");
   const tagFiltersEl = $("#tag-filters");
   const toggleFiltersBtn = $("#toggle-filters");
+  const toggleFavoritesBtn = $("#toggle-favorites");
   const activeFiltersEl = $("#active-filters");
   const resultCountEl = $("#result-count");
   const emptyEl = $("#empty-state");
@@ -219,7 +221,8 @@
       ingredients: row.ingredients || [],
       method: row.method || [],
       specs: row.specs,
-      notes: row.notes
+      notes: row.notes,
+      isFavorite: !!row.is_favorite
     };
   }
 
@@ -273,6 +276,8 @@
     activeTags.clear();
     openItems.clear();
     basket.clear();
+    favoritesOnly = false;
+    toggleFavoritesBtn.setAttribute("aria-pressed", "false");
     refreshViews();
   }
 
@@ -379,6 +384,7 @@
     const items = DATA[section];
     const q = searchTerm.trim().toLowerCase();
     return items.filter((it) => {
+      if (favoritesOnly && !it.isFavorite) return false;
       if (activeTags.size && ![...activeTags].every((t) => it.tags.includes(t))) return false;
       if (!q) return true;
       const hay = [
@@ -415,11 +421,12 @@
       `${items.length} ${section === "recipes" ? "recipe" : "cocktail"}${items.length === 1 ? "" : "s"}`;
     emptyEl.hidden = items.length > 0;
     if (items.length === 0) {
-      const filtered = searchTerm.trim() || activeTags.size;
       const noun = section === "recipes" ? "recipes" : "cocktails";
-      emptyEl.textContent = filtered
-        ? "Nothing matches that search. Clear a tag or try a different word."
-        : `No ${noun} yet — tap “+ Add recipe” or “✨ Add with AI” to get started.`;
+      emptyEl.textContent = favoritesOnly && !(searchTerm.trim() || activeTags.size)
+        ? `No favorite ${noun} yet — tap the ☆ on a recipe to star it.`
+        : (searchTerm.trim() || activeTags.size || favoritesOnly)
+          ? "Nothing matches that search. Clear a tag or try a different word."
+          : `No ${noun} yet — tap “+ Add recipe” or “✨ Add with AI” to get started.`;
     }
 
     listEl.innerHTML = items.map((it) => {
@@ -443,6 +450,7 @@
             <button class="serv-btn" data-step="1" aria-label="Increase servings">+</button>
             <span class="serv-label">${esc(it.servingsLabel)}</span>
           </span>` : ""}
+          <button class="star-btn${it.isFavorite ? " is-on" : ""}" aria-label="${it.isFavorite ? "Remove from favorites" : "Add to favorites"}" aria-pressed="${it.isFavorite}">${it.isFavorite ? "\u2605" : "\u2606"}</button>
           <span class="chevron" aria-hidden="true">\u25B6</span>
         </div>
         ${open ? renderDetail(it, servings) : ""}
@@ -775,10 +783,19 @@
 
     const id = rfId.value;
     const existing = id ? byId[id] : null;
+
+    const name = rfName.value.trim();
+    const dupe = Object.values(byId).find(
+      (it) => it.id !== id && it.name.trim().toLowerCase() === name.toLowerCase()
+    );
+    if (dupe && !confirm(`A recipe named "${dupe.name}" already exists. Save this one too?`)) {
+      return;
+    }
+
     const row = {
       user_id: session.user.id,
       section: recipeForm.querySelector('input[name="rf-section"]:checked').value,
-      name: rfName.value.trim(),
+      name,
       subtitle: rfSubtitle.value.trim() || null,
       source: rfSource.value.trim() || null,
       tags: checkedTags(),
@@ -804,6 +821,18 @@
     toast(id ? "Recipe updated" : "Recipe added");
     await loadData();
   });
+
+  async function toggleFavorite(item) {
+    const next = !item.isFavorite;
+    item.isFavorite = next; // optimistic
+    renderList();
+    const { error } = await supabaseClient.from("recipes").update({ is_favorite: next }).eq("id", item.id);
+    if (error) {
+      item.isFavorite = !next;
+      renderList();
+      toast(`Error: ${error.message}`);
+    }
+  }
 
   async function deleteRecipe(item) {
     if (!confirm(`Delete "${item.name}"? This can't be undone.`)) return;
@@ -999,6 +1028,13 @@
     toggleFiltersBtn.setAttribute("aria-expanded", open);
   });
 
+  // Favorites-only toggle
+  toggleFavoritesBtn.addEventListener("click", () => {
+    favoritesOnly = !favoritesOnly;
+    toggleFavoritesBtn.setAttribute("aria-pressed", String(favoritesOnly));
+    renderList();
+  });
+
   // Tag chips (filter panel + active-filter row)
   function handleTagClick(e) {
     const chip = e.target.closest(".tag-chip");
@@ -1021,6 +1057,11 @@
     const li = e.target.closest(".item");
     if (!li) return;
     const id = li.dataset.id;
+
+    if (e.target.closest(".star-btn")) {
+      toggleFavorite(byId[id]);
+      return;
+    }
 
     if (e.target.classList.contains("pick")) {
       if (e.target.checked) basket.set(id, { servings: byId[id].baseServings });
