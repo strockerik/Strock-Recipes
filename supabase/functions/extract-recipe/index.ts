@@ -74,7 +74,7 @@ const RECIPE_SCHEMA = {
         properties: {
           amount: { type: ["number", "null"], description: "Numeric quantity, fractions as decimals (1/2 -> 0.5). Null if not a measured amount (e.g. 'to taste')." },
           unit: { type: ["string", "null"], description: "Unit of measure (g, cup, tbsp, etc.), or null if countable / no unit" },
-          item: { type: "string", description: "The ingredient name, including any prep notes" }
+          item: { type: "string", description: "The ingredient's common name in full, consistent words (no abbreviations or brand names), followed by any prep notes" }
         },
         required: ["amount", "unit", "item"]
       }
@@ -107,6 +107,7 @@ FILLING GAPS — this is wanted, do not refuse
 
 FORMATTING
 - Split amount, unit, and item: "2 cups flour" -> amount 2, unit "cups", item "flour".
+- Item names: write the ingredient's common name in full words, not the card's shorthand — expand abbreviations ("grnd beef" -> "ground beef", "GR PEPPER" -> "green pepper"), drop brand names (use "ketchup" not "Heinz ketchup"), and use the same name every time the same ingredient appears (don't call it "cheddar" in one recipe and "shredded cheese" in another unless the card is genuinely specific). Prep notes ("diced", "room temperature", "for garnish") stay, after the ingredient name. This is spelling/phrasing normalization only — never change what the ingredient actually is.
 - Normalize fractions and ranges to decimals ("1/2" -> 0.5, "1-2 tsp" -> 1.5). Keep oven temperatures (e.g. "415°") in the relevant method step, never as an ingredient.
 - If an ingredient has no measurable amount even after inference (e.g. "salt to taste"), set amount and unit to null and put the full description in item.
 - Preserve the given order of steps; slot any completed steps into their natural position.
