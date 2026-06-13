@@ -74,15 +74,23 @@ const RECIPE_SCHEMA = {
         properties: {
           amount: { type: ["number", "null"], description: "Numeric quantity, fractions as decimals (1/2 -> 0.5). Null if not a measured amount (e.g. 'to taste')." },
           unit: { type: ["string", "null"], description: "Unit of measure (g, cup, tbsp, etc.), or null if countable / no unit" },
-          item: { type: "string", description: "The ingredient's common name in full, consistent words (no abbreviations or brand names), followed by any prep notes" }
+          item: { type: "string", description: "The ingredient's common name in full, consistent words (no abbreviations or brand names), followed by any prep notes" },
+          group: { type: ["string", "null"], description: "Short Title-Case label of the sub-recipe / component this belongs to (e.g. 'Dough', 'Sauce', 'Syrup'), or null if the recipe is one straightforward preparation. See SUB-RECIPES." }
         },
-        required: ["amount", "unit", "item"]
+        required: ["amount", "unit", "item", "group"]
       }
     },
     method: {
       type: "array",
-      items: { type: "string" },
-      description: "Ordered list of method/instruction steps, each a complete sentence or short paragraph"
+      items: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "One method/instruction step, a complete sentence or short paragraph" },
+          group: { type: ["string", "null"], description: "Same sub-recipe label as the matching ingredients (e.g. 'Dough'), or null. See SUB-RECIPES." }
+        },
+        required: ["text", "group"]
+      },
+      description: "Ordered list of method/instruction steps"
     },
     notes: { type: ["string", "null"], description: "Any additional notes, tips, or variations, or null" }
   },
@@ -111,6 +119,11 @@ FORMATTING
 - Normalize fractions and ranges to decimals ("1/2" -> 0.5, "1-2 tsp" -> 1.5). Keep oven temperatures (e.g. "415°") in the relevant method step, never as an ingredient.
 - If an ingredient has no measurable amount even after inference (e.g. "salt to taste"), set amount and unit to null and put the full description in item.
 - Preserve the given order of steps; slot any completed steps into their natural position.
+
+SUB-RECIPES (sections)
+- If the recipe is made of distinct components prepared separately — e.g. a dough and a sauce, a cake and a frosting, a cocktail and its own syrup or infusion — label every ingredient AND every step of each component with a short Title-Case \`group\` (e.g. "Dough", "Sauce", "Syrup"). Use the EXACT same label across an ingredient and the steps that make it, so they line up.
+- Keep each component's ingredients together and its steps together, in the order you'd make them. A final "assemble/bake/build" stage that combines the components can be its own group (e.g. "Assembly", "Bake") or null.
+- If the recipe is a single straightforward preparation with no separable sub-recipe, set \`group\` to null on every ingredient and step — do NOT invent sections.
 - section: "bar" only for a cocktail or mixed drink, otherwise "kitchen".
 - base_servings: the number the amounts are written for (default 4 for food, 1 for a single cocktail). servings_label: the unit, e.g. "servings", "pizzas", "glasses", "loaves".
 - tags: 0-3 tags, ONLY from the fixed list in the schema. For kitchen: at most one cuisine (${KITCHEN_CUISINE_TAGS.join(", ")}), one protein/diet (${KITCHEN_PROTEIN_TAGS.join(", ")}), and one dish type (${KITCHEN_DISH_TAGS.join(", ")}). For bar: at most one spirit (${BAR_SPIRIT_TAGS.join(", ")}) and one style (${BAR_STYLE_TAGS.join(", ")}). Skip any category that doesn't clearly apply — do not force a tag, and never use a word outside these lists.`;

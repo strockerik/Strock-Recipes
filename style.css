@@ -382,6 +382,20 @@ button:focus-visible, input:focus-visible {
 .step-list li { margin-bottom: 8px; }
 .step-list li::marker { font-family: var(--font-mono); color: var(--accent); font-size: 0.85em; }
 
+/* Sub-recipe section heading (e.g. "Dough", "Sauce") inside a recipe's
+   ingredients or method. Second+ headings get a little breathing room above. */
+.sub-group {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  margin: 0 0 4px;
+}
+.sub-group ~ .sub-group,
+.ing-list + .sub-group,
+.step-list + .sub-group { margin-top: 12px; }
+
 .spec-table {
   margin-top: 14px;
   font-size: 0.85rem;
@@ -687,6 +701,28 @@ button:focus-visible, input:focus-visible {
   color: var(--faint);
 }
 .rf-row-remove:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Section divider row in the recipe form — rows below it belong to this
+   section. Visually distinct from ingredient/step rows so the grouping reads. */
+.rf-section-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-top: 4px;
+}
+.rf-section-input {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  padding: 8px 10px;
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+.rf-row-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 
 /* ---------- Footer ---------- */
 .site-footer {

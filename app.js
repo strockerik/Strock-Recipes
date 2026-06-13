@@ -142,6 +142,21 @@
     return { amtStr, item: ing.item };
   }
 
+  // Split a list of ingredients or steps into consecutive runs sharing the same
+  // `group` label, so each sub-recipe section ("Dough", "Sauce") can render
+  // under its own heading. Ungrouped items (group null) form their own run with
+  // no heading \u2014 a recipe with no groups yields a single run, identical to before.
+  function groupRuns(items) {
+    const runs = [];
+    items.forEach((it) => {
+      const g = it.group || null;
+      const last = runs[runs.length - 1];
+      if (last && last.group === g) last.items.push(it);
+      else runs.push({ group: g, items: [it] });
+    });
+    return runs;
+  }
+
   // ---------- Grocery unit normalization ----------
   // Recipes keep whatever units they were written in (a baking recipe might
   // weigh 3.5g of yeast; a frosting might use cups). For shopping, every
@@ -224,7 +239,14 @@
       baseServings: row.base_servings,
       servingsLabel: row.servings_label,
       ingredients: row.ingredients || [],
-      method: row.method || [],
+      // Steps used to be plain strings; they're now {text, group} objects so a
+      // step can belong to a sub-recipe section. Normalize legacy strings here
+      // so the rest of the app always sees the object shape.
+      method: (row.method || []).map((s) =>
+        typeof s === "string"
+          ? { text: s, group: null }
+          : { text: s.text ?? "", group: s.group ?? null }
+      ),
       specs: row.specs,
       notes: row.notes,
       isFavorite: !!row.is_favorite,
@@ -523,17 +545,21 @@
       <div class="detail-grid">
         <div>
           <h3 class="detail-h">Ingredients</h3>
-          <ul class="ing-list">
-            ${ings.map((ing) => {
-              const l = ingLine(ing, true);
-              return `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
-            }).join("")}
-          </ul>
+          ${groupRuns(ings).map((run) => `
+            ${run.group ? `<h4 class="sub-group">${esc(run.group)}</h4>` : ""}
+            <ul class="ing-list">
+              ${run.items.map((ing) => {
+                const l = ingLine(ing, true);
+                return `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
+              }).join("")}
+            </ul>`).join("")}
           ${specRows ? `<div class="spec-table">${specRows}</div>` : ""}
         </div>
         <div>
           <h3 class="detail-h">Method</h3>
-          <ol class="step-list">${it.method.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
+          ${groupRuns(it.method).map((run) => `
+            ${run.group ? `<h4 class="sub-group">${esc(run.group)}</h4>` : ""}
+            <ol class="step-list">${run.items.map((s) => `<li>${esc(s.text)}</li>`).join("")}</ol>`).join("")}
           ${it.notes ? `<p class="detail-notes">${esc(it.notes)}</p>` : ""}
         </div>
       </div>
@@ -684,6 +710,24 @@
       </div>`;
   }
 
+  // A section divider in the form: every ingredient/step row below it belongs to
+  // this section until the next divider. Leaving the field blank = ungrouped.
+  function sectionHeadingRow(label) {
+    return `
+      <div class="rf-section-row">
+        <input type="text" class="rf-section-input" placeholder="Section (e.g. Dough)" value="${esc(label || "")}">
+        <button type="button" class="rf-row-remove" aria-label="Remove section">×</button>
+      </div>`;
+  }
+
+  // Build the form rows for a list of grouped ingredients/steps: emit a section
+  // divider before each non-null group, then that group's item rows.
+  function buildRows(items, rowFn) {
+    return groupRuns(items)
+      .map((run) => (run.group ? sectionHeadingRow(run.group) : "") + run.items.map(rowFn).join(""))
+      .join("");
+  }
+
   // Show the kitchen (cuisine/protein/dish) or bar (spirit/style) tag groups
   // depending on the currently-selected section radio.
   function updateTagGroupsVisibility() {
@@ -726,8 +770,8 @@
       rfNotes.value = item.notes || "";
       const radio = recipeForm.querySelector(`input[name="rf-section"][value="${item.section}"]`);
       if (radio) radio.checked = true;
-      rfIngredients.innerHTML = item.ingredients.map(ingredientRow).join("");
-      rfMethod.innerHTML = item.method.map(stepRow).join("");
+      rfIngredients.innerHTML = buildRows(item.ingredients, ingredientRow);
+      rfMethod.innerHTML = buildRows(item.method, (s) => stepRow(s.text));
       deleteRecipeBtn.hidden = false;
     } else {
       recipeFormTitle.textContent = "Add recipe";
@@ -785,14 +829,17 @@
     updateTagGroupsVisibility();
     const ingredients = (Array.isArray(recipe.ingredients) ? recipe.ingredients : [])
       .map((ing) => typeof ing === "string"
-        ? { amount: null, unit: null, item: ing.trim() }
-        : { amount: extractedAmount(ing?.amount), unit: ing?.unit || null, item: String(ing?.item ?? "").trim() })
+        ? { amount: null, unit: null, item: ing.trim(), group: null }
+        : { amount: extractedAmount(ing?.amount), unit: ing?.unit || null, item: String(ing?.item ?? "").trim(), group: ing?.group || null })
       .filter((ing) => ing.item);
-    rfIngredients.innerHTML = (ingredients.length ? ingredients : [null]).map(ingredientRow).join("");
+    rfIngredients.innerHTML = ingredients.length ? buildRows(ingredients, ingredientRow) : ingredientRow(null);
     const method = (Array.isArray(recipe.method) ? recipe.method
       : typeof recipe.method === "string" ? recipe.method.split(/\n+/) : [])
-      .map((s) => String(s).trim()).filter(Boolean);
-    rfMethod.innerHTML = (method.length ? method : [""]).map(stepRow).join("");
+      .map((s) => typeof s === "string"
+        ? { text: s.trim(), group: null }
+        : { text: String(s?.text ?? "").trim(), group: s?.group || null })
+      .filter((s) => s.text);
+    rfMethod.innerHTML = method.length ? buildRows(method, (s) => stepRow(s.text)) : stepRow("");
   }
 
   rfAddIngredientBtn.addEventListener("click", () => {
@@ -801,11 +848,17 @@
   rfAddStepBtn.addEventListener("click", () => {
     rfMethod.insertAdjacentHTML("beforeend", stepRow(""));
   });
+  $("#rf-add-ingredient-section").addEventListener("click", () => {
+    rfIngredients.insertAdjacentHTML("beforeend", sectionHeadingRow(""));
+  });
+  $("#rf-add-step-section").addEventListener("click", () => {
+    rfMethod.insertAdjacentHTML("beforeend", sectionHeadingRow(""));
+  });
   rfIngredients.addEventListener("click", (e) => {
-    if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-ing-row").remove();
+    if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-ing-row, .rf-section-row").remove();
   });
   rfMethod.addEventListener("click", (e) => {
-    if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-step-row").remove();
+    if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-step-row, .rf-section-row").remove();
   });
 
   addRecipeBtn.addEventListener("click", () => openRecipeForm(null));
@@ -823,16 +876,31 @@
       return;
     }
 
-    const ingredients = [...rfIngredients.querySelectorAll(".rf-ing-row")].map((row) => {
-      const amount = row.querySelector(".rf-ing-amount").value;
-      const unit = row.querySelector(".rf-ing-unit").value.trim();
-      const itemName = row.querySelector(".rf-ing-item").value.trim();
-      return { amount: amount === "" ? null : Number(amount), unit: unit || null, item: itemName };
-    }).filter((ing) => ing.item);
+    // Walk rows top-to-bottom; a section divider sets the group for every
+    // ingredient/step row beneath it until the next divider.
+    const ingredients = [];
+    let ingGroup = null;
+    [...rfIngredients.children].forEach((row) => {
+      if (row.classList.contains("rf-section-row")) {
+        ingGroup = row.querySelector(".rf-section-input").value.trim() || null;
+      } else if (row.classList.contains("rf-ing-row")) {
+        const amount = row.querySelector(".rf-ing-amount").value;
+        const unit = row.querySelector(".rf-ing-unit").value.trim();
+        const itemName = row.querySelector(".rf-ing-item").value.trim();
+        if (itemName) ingredients.push({ amount: amount === "" ? null : Number(amount), unit: unit || null, item: itemName, group: ingGroup });
+      }
+    });
 
-    const method = [...rfMethod.querySelectorAll(".rf-step-text")]
-      .map((t) => t.value.trim())
-      .filter(Boolean);
+    const method = [];
+    let stepGroup = null;
+    [...rfMethod.children].forEach((row) => {
+      if (row.classList.contains("rf-section-row")) {
+        stepGroup = row.querySelector(".rf-section-input").value.trim() || null;
+      } else if (row.classList.contains("rf-step-row")) {
+        const text = row.querySelector(".rf-step-text").value.trim();
+        if (text) method.push({ text, group: stepGroup });
+      }
+    });
 
     const id = rfId.value;
     const existing = id ? byId[id] : null;
@@ -1274,8 +1342,10 @@
 
   function renderCookStep() {
     const total = cookSteps.length;
-    cookStepNum.textContent = `Step ${cookIdx + 1} of ${total}`;
-    cookStepText.textContent = cookSteps[cookIdx];
+    const step = cookSteps[cookIdx];
+    const prefix = step.group ? `${step.group} · ` : "";
+    cookStepNum.textContent = `${prefix}Step ${cookIdx + 1} of ${total}`;
+    cookStepText.textContent = step.text;
     cookProgressBar.style.width = `${((cookIdx + 1) / total) * 100}%`;
     cookPrevBtn.disabled = cookIdx === 0;
     cookNextBtn.textContent = cookIdx === total - 1 ? "Done ✓" : "Next →";
@@ -1289,12 +1359,14 @@
       : `makes ${cookItem.baseServings} ${cookItem.servingsLabel}`;
     cookIngredients.innerHTML = `
       <p class="cook-ing-note">${esc(note)}</p>
-      <ul class="ing-list">
-        ${ings.map((ing) => {
-          const l = ingLine(ing, true);
-          return `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
-        }).join("")}
-      </ul>`;
+      ${groupRuns(ings).map((run) => `
+        ${run.group ? `<h4 class="sub-group">${esc(run.group)}</h4>` : ""}
+        <ul class="ing-list">
+          ${run.items.map((ing) => {
+            const l = ingLine(ing, true);
+            return `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
+          }).join("")}
+        </ul>`).join("")}`;
   }
 
   function cookNext() {

@@ -98,6 +98,20 @@ the same list.
 Amounts entered as decimals display as fractions (0.5 → ½). Leave an ingredient
 amount blank for "to taste"–style items that shouldn't scale.
 
+### Recipe sections (sub-recipes)
+
+A recipe that's really two preparations — a dough and a sauce, a cocktail and
+its syrup — can split its ingredients and steps into labeled sections. In the
+form, hit **+ Add section** under Ingredients or Method and type a label (e.g.
+"Dough"); every row below it belongs to that section until the next heading.
+Leave out all headings for a plain single-list recipe (the default). The recipe
+detail and Cook mode then show each section under its own subheading, and AI
+extraction auto-detects sections (e.g. it splits a pizza into Dough/Sauce on its
+own). Sections are display-only — the grocery list still combines ingredients
+across sections and recipes by name. Internally each ingredient and step carries
+an optional `group` label; **method steps are stored as `{text, group}` objects**
+(older recipes' plain-string steps are read transparently and upgraded on edit).
+
 ## Recipe sharing
 
 Everyone signed in to this app is treated as one trusted household — there are
@@ -158,6 +172,11 @@ module 'jsr:…'") because its TypeScript server type-checks the file as Node
 code. They're cosmetic — the function runs on Supabase's Deno runtime, where
 both resolve fine. Installing the official Deno VSCode extension (with
 `deno.enablePaths: ["supabase/functions"]`) silences them.
+
+> **Pending redeploy:** the recipe-sections change added a `group` field to the
+> extraction schema/prompt so the AI can split sub-recipes. The frontend works
+> without it, but AI extractions won't return sections until you paste the
+> current `index.ts` into the dashboard editor and hit **Deploy**.
 
 ## Grocery list → Google Keep
 
