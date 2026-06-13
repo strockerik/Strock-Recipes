@@ -123,8 +123,17 @@ both resolve fine. Installing the official Deno VSCode extension (with
 - **On desktop:** tap **Copy list** and paste into keep.google.com.
 - **Download .txt** saves a plain file.
 
+The grocery list combines matching ingredients across every checked recipe
+into a single shopping list — e.g. ground beef needed by two recipes becomes
+one line. Weights and volumes are converted to what a US grocery store sells
+(grams/kg → oz/lb, ml/l → cups/tbsp/tsp); small gram amounts like yeast or
+spices are left as-is. Tap an item to check it off as you shop, or use **Skip
+pantry staples** to hide salt, pepper, oil, water, sugar, and butter from the
+list. The **By recipe** section below the list still shows each recipe's full
+ingredients at your chosen servings, unaffected by the staples toggle.
+
 The grocery selection lives in the current session, so fully closing the app
-resets the checked recipes — build the list and send it to Keep.
+resets the checked recipes and check-offs — build the list and send it to Keep.
 
 ## Add to your iPhone home screen
 

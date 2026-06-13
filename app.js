@@ -9,6 +9,8 @@
   const openItems = new Set(); // ids of expanded items
   // grocery: id -> { servings }
   const basket = new Map();
+  let skipPantryStaples = false;
+  const checkedGroceryItems = new Set(); // grocery: combined-item keys checked off
 
   const DATA = { recipes: [], cocktails: [] };
   let byId = {};
@@ -131,6 +133,76 @@
     const amt = useScaled ? ing.scaled : ing.amount;
     const amtStr = amt == null ? "\u2014" : fmtAmount(amt) + (ing.unit ? " " + ing.unit : "");
     return { amtStr, item: ing.item };
+  }
+
+  // ---------- Grocery unit normalization ----------
+  // Recipes keep whatever units they were written in (a baking recipe might
+  // weigh 3.5g of yeast; a frosting might use cups). For shopping, every
+  // weight is combined in grams and every volume in milliliters, then the
+  // combined total is converted to what a US grocery store sells (oz/lb,
+  // cups/tbsp/tsp). Small gram amounts (spices, yeast, leavening) are left
+  // as-is \u2014 "0.12 oz yeast" isn't more useful than "3.5 g yeast" at the store.
+  const G_PER_OZ = 28.3495;
+  const G_PER_LB = 453.592;
+  const ML_PER_CUP = 236.588;
+  const ML_PER_TBSP = 14.7868;
+  const ML_PER_TSP = 4.92892;
+  const MIN_SHOPPABLE_GRAMS = 50;
+
+  const WEIGHT_TO_G = {
+    g: 1, gram: 1, grams: 1, kg: 1000, kilogram: 1000, kilograms: 1000,
+    oz: G_PER_OZ, ounce: G_PER_OZ, ounces: G_PER_OZ,
+    lb: G_PER_LB, lbs: G_PER_LB, pound: G_PER_LB, pounds: G_PER_LB
+  };
+  const VOLUME_TO_ML = {
+    ml: 1, milliliter: 1, milliliters: 1, millilitre: 1, millilitres: 1,
+    l: 1000, liter: 1000, liters: 1000, litre: 1000, litres: 1000,
+    tsp: ML_PER_TSP, teaspoon: ML_PER_TSP, teaspoons: ML_PER_TSP,
+    tbsp: ML_PER_TBSP, tablespoon: ML_PER_TBSP, tablespoons: ML_PER_TBSP,
+    cup: ML_PER_CUP, cups: ML_PER_CUP
+  };
+  const UNIT_SYNONYMS = {
+    clove: "clove", cloves: "clove",
+    can: "can", cans: "can",
+    slice: "slice", slices: "slice"
+  };
+
+  // Convert (amount, unit) to a canonical form for combining across recipes:
+  // weights -> grams, volumes -> milliliters, everything else is just
+  // spelling-normalized (e.g. "cloves" -> "clove").
+  function canonicalQuantity(amount, unit) {
+    if (!unit) return { amount, family: null, unit: null };
+    const u = unit.trim().toLowerCase();
+    if (WEIGHT_TO_G[u] != null) {
+      return { amount: amount == null ? null : amount * WEIGHT_TO_G[u], family: "weight", unit: null };
+    }
+    if (VOLUME_TO_ML[u] != null) {
+      return { amount: amount == null ? null : amount * VOLUME_TO_ML[u], family: "volume", unit: null };
+    }
+    return { amount, family: null, unit: UNIT_SYNONYMS[u] || u };
+  }
+
+  // Convert a combined canonical quantity to what's sold at a US grocery store.
+  function shoppableQuantity(amount, family, unit) {
+    if (amount == null) return { amount: null, unit };
+    if (family === "weight") {
+      if (amount < MIN_SHOPPABLE_GRAMS) return { amount, unit: "g" };
+      const oz = amount / G_PER_OZ;
+      return oz >= 16 ? { amount: oz / 16, unit: "lb" } : { amount: oz, unit: "oz" };
+    }
+    if (family === "volume") {
+      const cups = amount / ML_PER_CUP;
+      if (cups >= 0.2) return { amount: cups, unit: "cup" };
+      const tbsp = amount / ML_PER_TBSP;
+      return tbsp >= 1 ? { amount: tbsp, unit: "tbsp" } : { amount: amount / ML_PER_TSP, unit: "tsp" };
+    }
+    return { amount, unit };
+  }
+
+  // Always-on-hand items that don't belong on a shopping list.
+  const PANTRY_STAPLE_TERMS = ["salt", "pepper", "oil", "water", "sugar", "butter"];
+  function isPantryStaple(nameLower) {
+    return PANTRY_STAPLE_TERMS.some((term) => new RegExp(`\\b${term}\\b`, "i").test(nameLower));
   }
 
   // ---------- Data loading (Supabase) ----------
@@ -437,25 +509,81 @@
       });
   }
 
+  // Merge ingredients across every recipe in the basket into one shopping
+  // list: matching item + unit gets summed, units are converted to what a US
+  // grocery store sells, and pantry staples can be hidden.
+  function combinedGroceryItems() {
+    const map = new Map();
+    for (const [id, { servings }] of basket) {
+      const it = byId[id];
+      if (!it) continue;
+      scaledIngredients(it, servings).forEach((ing) => {
+        if (!ing.item) return;
+        const nameKey = ing.item.trim().toLowerCase();
+        if (skipPantryStaples && isPantryStaple(nameKey)) return;
+        const { amount, family, unit } = canonicalQuantity(ing.scaled, ing.unit);
+        const key = `${nameKey}__${family || unit || ""}`;
+        const existing = map.get(key);
+        if (existing) {
+          if (amount != null) existing.amount = (existing.amount || 0) + amount;
+        } else {
+          map.set(key, { key, item: ing.item.trim(), family, unit, amount });
+        }
+      });
+    }
+    return [...map.values()]
+      .map((entry) => {
+        const { amount, unit } = shoppableQuantity(entry.amount, entry.family, entry.unit);
+        return { key: entry.key, item: entry.item, amount, unit };
+      })
+      .sort((a, b) => a.item.localeCompare(b.item));
+  }
+
   function renderGroceryPanel() {
-    groceryContent.innerHTML = groceryGroups().map((g) => `
-      <div class="g-recipe">
-        <p class="g-recipe-name">${esc(g.name)}</p>
-        <p class="g-recipe-serv">${g.servings} ${esc(g.label)}</p>
-        <ul class="g-items">
-          ${g.lines.map((l) => `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`).join("")}
-        </ul>
-      </div>`).join("");
+    const items = combinedGroceryItems();
+    const itemsHtml = items.length
+      ? items.map((it) => {
+          const checked = checkedGroceryItems.has(it.key);
+          const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + it.unit : "");
+          return `<li class="${checked ? "is-checked" : ""}">
+            <label class="g-item">
+              <input type="checkbox" class="g-item-check" data-key="${esc(it.key)}" ${checked ? "checked" : ""}>
+              <span class="ing-amt">${esc(amtStr)}</span><span>${esc(it.item)}</span>
+            </label>
+          </li>`;
+        }).join("")
+      : `<p class="g-empty">Nothing to buy \u2014 try turning off "Skip pantry staples".</p>`;
+
+    groceryContent.innerHTML = `
+      <label class="g-staples-toggle">
+        <input type="checkbox" id="grocery-skip-staples" ${skipPantryStaples ? "checked" : ""}>
+        Skip pantry staples (salt, pepper, oil, water, sugar, butter)
+      </label>
+      <ul class="g-combined">${itemsHtml}</ul>
+      <details class="g-by-recipe">
+        <summary>By recipe</summary>
+        ${groceryGroups().map((g) => `
+          <div class="g-recipe">
+            <p class="g-recipe-name">${esc(g.name)}</p>
+            <p class="g-recipe-serv">${g.servings} ${esc(g.label)}</p>
+            <ul class="g-items">
+              ${g.lines.map((l) => `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`).join("")}
+            </ul>
+          </div>`).join("")}
+      </details>`;
   }
 
   function groceryText() {
     const date = new Date().toLocaleDateString();
-    let out = `Grocery list \u2014 ${date}\n`;
+    let out = `Grocery list \u2014 ${date}\n\n`;
+    combinedGroceryItems().forEach((it) => {
+      const box = checkedGroceryItems.has(it.key) ? "\u2611" : "\u2610";
+      const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + it.unit : "") + " ";
+      out += `${box} ${amtStr}${it.item}\n`;
+    });
+    out += `\nRecipes:\n`;
     groceryGroups().forEach((g) => {
-      out += `\n${g.name} (${g.servings} ${g.label})\n`;
-      g.lines.forEach((l) => {
-        out += `\u2610 ${l.amtStr === "\u2014" ? "" : l.amtStr + " "}${l.item}\n`;
-      });
+      out += `\u2022 ${g.name} (${g.servings} ${g.label})\n`;
     });
     return out;
   }
@@ -1055,8 +1183,25 @@
   });
   $("#clear-grocery").addEventListener("click", () => {
     basket.clear();
+    checkedGroceryItems.clear();
     renderList();
     renderGroceryBar();
+  });
+
+  // Grocery panel: pantry-staples toggle + per-item check-off
+  groceryContent.addEventListener("change", (e) => {
+    if (e.target.id === "grocery-skip-staples") {
+      skipPantryStaples = e.target.checked;
+      renderGroceryPanel();
+      return;
+    }
+    if (e.target.classList.contains("g-item-check")) {
+      const key = e.target.dataset.key;
+      if (e.target.checked) checkedGroceryItems.add(key);
+      else checkedGroceryItems.delete(key);
+      const li = e.target.closest("li");
+      if (li) li.classList.toggle("is-checked", e.target.checked);
+    }
   });
 
   // Export actions
