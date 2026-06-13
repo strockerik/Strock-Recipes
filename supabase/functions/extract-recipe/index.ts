@@ -38,6 +38,19 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
 
+// Curated tag taxonomy. Kitchen recipes pick from cuisine/protein/dish (one
+// per category that applies); bar recipes pick from spirit/style. 0-3 tags
+// total, only what genuinely applies — never invent a tag outside this list.
+const KITCHEN_CUISINE_TAGS = ["italian", "american", "mexican", "mediterranean", "british", "finnish", "asian", "french"];
+const KITCHEN_PROTEIN_TAGS = ["chicken", "beef", "pork", "seafood", "vegetarian", "vegan"];
+const KITCHEN_DISH_TAGS = ["pizza", "pasta", "burger", "taco", "casserole", "soup", "salad", "sandwich", "bread", "breakfast", "dessert", "main-dish", "side-dish", "sauce"];
+const BAR_SPIRIT_TAGS = ["rum", "gin", "whiskey", "tequila", "vodka", "brandy", "amaro", "non-alcoholic"];
+const BAR_STYLE_TAGS = ["sour", "collins", "highball", "tiki", "frozen", "stirred", "classic", "low-abv"];
+const ALL_TAGS = [
+  ...KITCHEN_CUISINE_TAGS, ...KITCHEN_PROTEIN_TAGS, ...KITCHEN_DISH_TAGS,
+  ...BAR_SPIRIT_TAGS, ...BAR_STYLE_TAGS
+];
+
 // JSON schema for the recipe, used as the tool's input_schema.
 const RECIPE_SCHEMA = {
   type: "object",
@@ -48,8 +61,9 @@ const RECIPE_SCHEMA = {
     section: { type: "string", enum: ["kitchen", "bar"], description: "'bar' for cocktails/drinks, 'kitchen' for everything else" },
     tags: {
       type: "array",
-      items: { type: "string" },
-      description: "3-6 lowercase, hyphenated tags describing cuisine, course, diet, method, etc."
+      items: { type: "string", enum: ALL_TAGS },
+      maxItems: 3,
+      description: "0-3 tags from this fixed list ONLY, whichever genuinely apply: for a kitchen recipe, at most one cuisine tag, one protein/diet tag, and one dish-type tag; for a bar recipe, at most one spirit tag and one style tag. Omit any category that doesn't clearly fit — never invent a tag outside this list."
     },
     base_servings: { type: "integer", description: "The number of servings/portions the ingredient amounts are written for" },
     servings_label: { type: "string", description: "Unit for servings, e.g. 'servings', 'pizzas', 'glasses', 'loaves'" },
@@ -98,7 +112,7 @@ FORMATTING
 - Preserve the given order of steps; slot any completed steps into their natural position.
 - section: "bar" only for a cocktail or mixed drink, otherwise "kitchen".
 - base_servings: the number the amounts are written for (default 4 for food, 1 for a single cocktail). servings_label: the unit, e.g. "servings", "pizzas", "glasses", "loaves".
-- tags: 3-6 lowercase, hyphenated (cuisine, course, diet, method, etc.).`;
+- tags: 0-3 tags, ONLY from the fixed list in the schema. For kitchen: at most one cuisine (${KITCHEN_CUISINE_TAGS.join(", ")}), one protein/diet (${KITCHEN_PROTEIN_TAGS.join(", ")}), and one dish type (${KITCHEN_DISH_TAGS.join(", ")}). For bar: at most one spirit (${BAR_SPIRIT_TAGS.join(", ")}) and one style (${BAR_STYLE_TAGS.join(", ")}). Skip any category that doesn't clearly apply — do not force a tag, and never use a word outside these lists.`;
 
 // ---------- URL import helpers ----------
 

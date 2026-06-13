@@ -87,6 +87,12 @@ Use the app — no editing JS files:
   full-screen guided mode: one step at a time, tap to advance, an ingredients
   toggle scaled to your servings, and the screen stays awake while you cook.
 
+Tags are picked from a fixed list, not typed — kitchen recipes get at most one
+cuisine, one protein/diet, and one dish-type tag (e.g. italian + chicken +
+casserole); bar recipes get at most one spirit and one style tag (e.g. rum +
+sour). This keeps the tag filter bar small and useful. AI extraction follows
+the same list.
+
 Amounts entered as decimals display as fractions (0.5 → ½). Leave an ingredient
 amount blank for "to taste"–style items that shouldn't scale.
 

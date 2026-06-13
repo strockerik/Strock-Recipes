@@ -150,9 +150,72 @@
           </label>
         </div>
 
-        <label class="rf-field">Tags (comma-separated)
-          <input id="rf-tags" class="search" type="text" placeholder="pizza, oven-baked, vegetarian-adaptable">
-        </label>
+        <div class="rf-field">
+          <span class="rf-field-label">Tags</span>
+          <div id="rf-tags-kitchen" class="tag-picker">
+          <div class="tag-picker-group">
+            <span class="tag-picker-label">Cuisine</span>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="italian"><span>italian</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="american"><span>american</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="mexican"><span>mexican</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="mediterranean"><span>mediterranean</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="british"><span>british</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="finnish"><span>finnish</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="asian"><span>asian</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="french"><span>french</span></label>
+          </div>
+          <div class="tag-picker-group">
+            <span class="tag-picker-label">Protein</span>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="chicken"><span>chicken</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="beef"><span>beef</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="pork"><span>pork</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="seafood"><span>seafood</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="vegetarian"><span>vegetarian</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="vegan"><span>vegan</span></label>
+          </div>
+          <div class="tag-picker-group">
+            <span class="tag-picker-label">Dish type</span>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="pizza"><span>pizza</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="pasta"><span>pasta</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="burger"><span>burger</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="taco"><span>taco</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="casserole"><span>casserole</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="soup"><span>soup</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="salad"><span>salad</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="sandwich"><span>sandwich</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="bread"><span>bread</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="breakfast"><span>breakfast</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="dessert"><span>dessert</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="main-dish"><span>main-dish</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="side-dish"><span>side-dish</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="sauce"><span>sauce</span></label>
+          </div>
+          </div>
+          <div id="rf-tags-bar" class="tag-picker" hidden>
+          <div class="tag-picker-group">
+            <span class="tag-picker-label">Spirit</span>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="rum"><span>rum</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="gin"><span>gin</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="whiskey"><span>whiskey</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="tequila"><span>tequila</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="vodka"><span>vodka</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="brandy"><span>brandy</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="amaro"><span>amaro</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="non-alcoholic"><span>non-alcoholic</span></label>
+          </div>
+          <div class="tag-picker-group">
+            <span class="tag-picker-label">Style</span>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="sour"><span>sour</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="collins"><span>collins</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="highball"><span>highball</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="tiki"><span>tiki</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="frozen"><span>frozen</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="stirred"><span>stirred</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="classic"><span>classic</span></label>
+            <label class="tag-pick"><input type="checkbox" name="rf-tag" value="low-abv"><span>low-abv</span></label>
+          </div>
+          </div>
+        </div>
 
         <h3 class="detail-h">Ingredients</h3>
         <div id="rf-ingredients" class="rf-rows"></div>

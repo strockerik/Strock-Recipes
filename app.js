@@ -58,7 +58,8 @@
   const rfSource = $("#rf-source");
   const rfServings = $("#rf-servings");
   const rfServingsLabel = $("#rf-servings-label");
-  const rfTags = $("#rf-tags");
+  const rfTagsKitchen = $("#rf-tags-kitchen");
+  const rfTagsBar = $("#rf-tags-bar");
   const rfNotes = $("#rf-notes");
   const rfIngredients = $("#rf-ingredients");
   const rfMethod = $("#rf-method");
@@ -494,6 +495,34 @@
       </div>`;
   }
 
+  // Show the kitchen (cuisine/protein/dish) or bar (spirit/style) tag groups
+  // depending on the currently-selected section radio.
+  function updateTagGroupsVisibility() {
+    const isBar = recipeForm.querySelector('input[name="rf-section"]:checked').value === "bar";
+    rfTagsKitchen.hidden = isBar;
+    rfTagsBar.hidden = !isBar;
+  }
+
+  // Check the tag-picker boxes matching the given tags (case-insensitive);
+  // tags not in our taxonomy are silently ignored.
+  function setCheckedTags(tags) {
+    const set = new Set((tags || []).map((t) => String(t).trim().toLowerCase()));
+    recipeForm.querySelectorAll('input[name="rf-tag"]').forEach((cb) => {
+      cb.checked = set.has(cb.value);
+    });
+  }
+
+  // Only the visible (kitchen or bar) group's checked boxes count — the
+  // hidden group may retain stale checks from before a section switch.
+  function checkedTags() {
+    const group = rfTagsBar.hidden ? rfTagsKitchen : rfTagsBar;
+    return [...group.querySelectorAll('input[name="rf-tag"]:checked')].map((cb) => cb.value);
+  }
+
+  recipeForm.querySelectorAll('input[name="rf-section"]').forEach((radio) => {
+    radio.addEventListener("change", updateTagGroupsVisibility);
+  });
+
   function openRecipeForm(item) {
     recipeFormStatus.textContent = "";
     if (item) {
@@ -504,7 +533,7 @@
       rfSource.value = item.source || "";
       rfServings.value = item.baseServings;
       rfServingsLabel.value = item.servingsLabel || "";
-      rfTags.value = item.tags.join(", ");
+      setCheckedTags(item.tags);
       rfNotes.value = item.notes || "";
       const radio = recipeForm.querySelector(`input[name="rf-section"][value="${item.section}"]`);
       if (radio) radio.checked = true;
@@ -523,6 +552,7 @@
       rfMethod.innerHTML = stepRow("");
       deleteRecipeBtn.hidden = true;
     }
+    updateTagGroupsVisibility();
     recipeFormPanel.hidden = false;
   }
 
@@ -558,11 +588,12 @@
     rfServingsLabel.value = recipe.servings_label || "servings";
     const tags = Array.isArray(recipe.tags) ? recipe.tags
       : typeof recipe.tags === "string" ? recipe.tags.split(",") : [];
-    rfTags.value = tags.map((t) => String(t).trim()).filter(Boolean).join(", ");
+    setCheckedTags(tags);
     rfNotes.value = recipe.notes || "";
     const targetSection = recipe.section === "bar" ? "bar" : "kitchen";
     const radio = recipeForm.querySelector(`input[name="rf-section"][value="${targetSection}"]`);
     if (radio) radio.checked = true;
+    updateTagGroupsVisibility();
     const ingredients = (Array.isArray(recipe.ingredients) ? recipe.ingredients : [])
       .map((ing) => typeof ing === "string"
         ? { amount: null, unit: null, item: ing.trim() }
@@ -622,7 +653,7 @@
       name: rfName.value.trim(),
       subtitle: rfSubtitle.value.trim() || null,
       source: rfSource.value.trim() || null,
-      tags: rfTags.value.split(",").map((t) => t.trim()).filter(Boolean),
+      tags: checkedTags(),
       base_servings: Number(rfServings.value),
       servings_label: rfServingsLabel.value.trim() || "servings",
       ingredients,
@@ -712,19 +743,38 @@
     });
   }
 
+  const EXTRACTION_TIMEOUT_MS = 75_000;
+  const EXTRACTION_TIMEOUT = Symbol("extraction-timeout");
+
   async function runExtraction(payload) {
     const token = ++extractionToken;
     aiImportPicker.hidden = true;
     aiImportLoading.hidden = false;
     aiImportStatus.textContent = "";
 
-    const { data, error } = await supabaseClient.functions.invoke("extract-recipe", {
+    // Catch errors here (rather than at the await below) so a slow response that
+    // arrives after the timeout below doesn't produce an unhandled rejection.
+    const invokePromise = supabaseClient.functions.invoke("extract-recipe", {
       body: payload
-    });
+    }).catch((error) => ({ error }));
+    const timeoutPromise = new Promise((resolve) =>
+      setTimeout(() => resolve(EXTRACTION_TIMEOUT), EXTRACTION_TIMEOUT_MS)
+    );
+
+    const result = await Promise.race([invokePromise, timeoutPromise]);
 
     // Stale response: the user cancelled, closed the panel, or started a newer
     // extraction while this one was in flight.
     if (token !== extractionToken || aiImportPanel.hidden) return;
+
+    if (result === EXTRACTION_TIMEOUT) {
+      aiImportPicker.hidden = false;
+      aiImportLoading.hidden = true;
+      aiImportStatus.textContent = "That's taking too long — check your connection and try again.";
+      return;
+    }
+
+    const { data, error } = result;
 
     if (error || data?.error) {
       aiImportPicker.hidden = false;
