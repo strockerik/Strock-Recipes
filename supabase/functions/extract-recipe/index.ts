@@ -119,14 +119,14 @@ FORMATTING
 - Normalize fractions and ranges to decimals ("1/2" -> 0.5, "1-2 tsp" -> 1.5). Keep oven temperatures (e.g. "415°") in the relevant method step, never as an ingredient.
 - If an ingredient has no measurable amount even after inference (e.g. "salt to taste"), set amount and unit to null and put the full description in item.
 - Preserve the given order of steps; slot any completed steps into their natural position.
+- section: "bar" only for a cocktail or mixed drink, otherwise "kitchen".
+- base_servings: the number the amounts are written for (default 4 for food, 1 for a single cocktail). servings_label: the unit, e.g. "servings", "pizzas", "glasses", "loaves".
+- tags: 0-3 tags, ONLY from the fixed list in the schema. For kitchen: at most one cuisine (${KITCHEN_CUISINE_TAGS.join(", ")}), one protein/diet (${KITCHEN_PROTEIN_TAGS.join(", ")}), and one dish type (${KITCHEN_DISH_TAGS.join(", ")}). For bar: at most one spirit (${BAR_SPIRIT_TAGS.join(", ")}) and one style (${BAR_STYLE_TAGS.join(", ")}). Skip any category that doesn't clearly apply — do not force a tag, and never use a word outside these lists.
 
 SUB-RECIPES (sections)
 - If the recipe is made of distinct components prepared separately — e.g. a dough and a sauce, a cake and a frosting, a cocktail and its own syrup or infusion — label every ingredient AND every step of each component with a short Title-Case \`group\` (e.g. "Dough", "Sauce", "Syrup"). Use the EXACT same label across an ingredient and the steps that make it, so they line up.
 - Keep each component's ingredients together and its steps together, in the order you'd make them. A final "assemble/bake/build" stage that combines the components can be its own group (e.g. "Assembly", "Bake") or null.
-- If the recipe is a single straightforward preparation with no separable sub-recipe, set \`group\` to null on every ingredient and step — do NOT invent sections.
-- section: "bar" only for a cocktail or mixed drink, otherwise "kitchen".
-- base_servings: the number the amounts are written for (default 4 for food, 1 for a single cocktail). servings_label: the unit, e.g. "servings", "pizzas", "glasses", "loaves".
-- tags: 0-3 tags, ONLY from the fixed list in the schema. For kitchen: at most one cuisine (${KITCHEN_CUISINE_TAGS.join(", ")}), one protein/diet (${KITCHEN_PROTEIN_TAGS.join(", ")}), and one dish type (${KITCHEN_DISH_TAGS.join(", ")}). For bar: at most one spirit (${BAR_SPIRIT_TAGS.join(", ")}) and one style (${BAR_STYLE_TAGS.join(", ")}). Skip any category that doesn't clearly apply — do not force a tag, and never use a word outside these lists.`;
+- If the recipe is a single straightforward preparation with no separable sub-recipe, set \`group\` to null on every ingredient and step — do NOT invent sections.`;
 
 // ---------- URL import helpers ----------
 
