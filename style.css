@@ -305,6 +305,13 @@ button:focus-visible, input:focus-visible {
   color: var(--faint);
   margin-top: 1px;
 }
+.item-owner {
+  font-size: 0.78rem;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  display: block;
+  margin-top: 2px;
+}
 .item-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; }
 .mini-tag {
   font-family: var(--font-mono);
@@ -399,6 +406,11 @@ button:focus-visible, input:focus-visible {
   margin-top: 18px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+.share-toggle-btn.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 /* per-item servings stepper (shown when picked) */

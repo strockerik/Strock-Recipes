@@ -21,7 +21,9 @@ Browser (GitHub Pages)                 Supabase
   signed in across visits. "Forgot password?" emails a reset link.
 - **Privacy:** every recipe row has a `user_id`; a Row Level Security policy
   (`auth.uid() = user_id`) means Postgres itself refuses to return other users'
-  rows, even if the frontend had a bug.
+  rows, even if the frontend had a bug. The only exception is recipes an owner
+  explicitly marks "shared" (`is_shared = true`), which become readable — but
+  not writable — by every other signed-in user. See **Recipe sharing** below.
 - **AI extraction:** "✨ Add with AI" sends a photo, pasted text, or a link to the
   `extract-recipe` Edge Function, which verifies the caller is signed in, calls
   Claude (structured output via forced tool-use), and returns a recipe that
@@ -95,6 +97,48 @@ the same list.
 
 Amounts entered as decimals display as fractions (0.5 → ½). Leave an ingredient
 amount blank for "to taste"–style items that shouldn't scale.
+
+## Recipe sharing
+
+Everyone signed in to this app is treated as one trusted household — there are
+no invites or per-user permissions, just a simple opt-in per recipe:
+
+- Open any of **your** recipes and tap **Share with household**. It now shows
+  up for everyone else under the **👥 Shared** view (next to ★ Favorites),
+  with a "Shared by \<you\>" attribution. Tap the same button (now "Shared ✓ —
+  tap to unshare") to make it private again.
+- Browsing someone else's shared recipe, tap **📋 Copy to my book** to clone it
+  into your own recipe book as an independent copy — editing your copy never
+  affects their original, and unsharing/deleting their original doesn't touch
+  your copy.
+- You can't edit, delete, favorite, or un-share another person's recipe — only
+  the owner can, and Postgres enforces this via RLS regardless of the UI.
+
+**One-time setup (Supabase SQL editor)** — run once, in order:
+
+```sql
+-- 1. profiles already exists with its own RLS policies (view/insert/update
+--    own row only). Add one more SELECT policy so every signed-in user can
+--    read display names for "Shared by <name>" attribution — this OR's with
+--    the existing "view own profile" policy, it doesn't replace it.
+create policy "shared profiles are viewable by authenticated users"
+  on public.profiles for select
+  to authenticated
+  using (true);
+
+-- 2. is_shared column + additive read policy on recipes
+alter table public.recipes
+  add column if not exists is_shared boolean not null default false;
+
+create policy "shared recipes are viewable by authenticated users"
+  on public.recipes for select
+  to authenticated
+  using (is_shared = true);
+```
+
+This is purely additive — the existing owner-only policy for insert/update/
+delete is untouched, so "Copy to my book" is the only way another user gets a
+writable row from someone else's shared recipe.
 
 ## Edge Function deployment (AI)
 

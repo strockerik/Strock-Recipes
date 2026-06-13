@@ -7,13 +7,17 @@
   let searchTerm = "";
   let activeTags = new Set();
   let favoritesOnly = false;
+  let sharedOnly = false;     // mirrors favoritesOnly — alternate "view mode"
+  let profileNames = {};      // user_id -> display_name, for attribution
   const openItems = new Set(); // ids of expanded items
   // grocery: id -> { servings }
   const basket = new Map();
   let skipPantryStaples = false;
   const checkedGroceryItems = new Set(); // grocery: combined-item keys checked off
 
-  const DATA = { recipes: [], cocktails: [] };
+  const DATA = { recipes: [], cocktails: [], sharedRecipes: [], sharedCocktails: [] };
+  const POOL_KEY = { recipes: "recipes", cocktails: "cocktails" };
+  const SHARED_POOL_KEY = { recipes: "sharedRecipes", cocktails: "sharedCocktails" };
   let byId = {};
 
   // ---------- Supabase ----------
@@ -32,6 +36,7 @@
   const tagFiltersEl = $("#tag-filters");
   const toggleFiltersBtn = $("#toggle-filters");
   const toggleFavoritesBtn = $("#toggle-favorites");
+  const toggleSharedBtn = $("#toggle-shared");
   const activeFiltersEl = $("#active-filters");
   const resultCountEl = $("#result-count");
   const emptyEl = $("#empty-state");
@@ -222,8 +227,25 @@
       method: row.method || [],
       specs: row.specs,
       notes: row.notes,
-      isFavorite: !!row.is_favorite
+      isFavorite: !!row.is_favorite,
+      userId: row.user_id,
+      isShared: !!row.is_shared
     };
+  }
+
+  async function loadProfiles() {
+    const { data, error } = await supabaseClient.from("profiles").select("id, display_name");
+    if (error) return; // attribution is cosmetic — don't block the rest of loadData
+    profileNames = {};
+    (data || []).forEach((p) => { profileNames[p.id] = p.display_name; });
+  }
+
+  async function ensureProfile() {
+    if (!session || profileNames[session.user.id]) return;
+    const displayName = session.user.email.split("@")[0];
+    const { error } = await supabaseClient.from("profiles")
+      .upsert({ id: session.user.id, display_name: displayName }, { onConflict: "id" });
+    if (!error) profileNames[session.user.id] = displayName;
   }
 
   // Re-render every view that depends on data / filters / basket state.
@@ -246,10 +268,15 @@
   }
 
   async function loadData() {
-    const { data, error } = await supabaseClient
+    // Recipes and profile names are independent reads — fetch them concurrently
+    // rather than waiting for one then the other.
+    const recipesPromise = supabaseClient
       .from("recipes")
       .select("*")
       .order("name");
+    const profilesPromise = loadProfiles();
+
+    const { data, error } = await recipesPromise;
 
     if (error) {
       toast("Couldn’t load your recipes — try refreshing");
@@ -257,10 +284,17 @@
     }
 
     const items = (data || []).map(mapRecipe);
-    DATA.recipes = items.filter((it) => it.section === "kitchen");
-    DATA.cocktails = items.filter((it) => it.section === "bar");
+    const me = session?.user?.id;
+    DATA.recipes         = items.filter((it) => it.section === "kitchen" && it.userId === me);
+    DATA.cocktails       = items.filter((it) => it.section === "bar"     && it.userId === me);
+    DATA.sharedRecipes   = items.filter((it) => it.section === "kitchen" && it.userId !== me && it.isShared);
+    DATA.sharedCocktails = items.filter((it) => it.section === "bar"     && it.userId !== me && it.isShared);
+
     byId = {};
-    items.forEach((it) => (byId[it.id] = it));
+    items.forEach((it) => { if (it.userId === me || it.isShared) byId[it.id] = it; });
+
+    await profilesPromise; // attribution names must be ready before we render
+    await ensureProfile();
 
     // Note: we deliberately do NOT blanket-clear basket / activeTags / openItems
     // here, so adding/editing/deleting a recipe doesn't wipe the user's grocery
@@ -272,12 +306,17 @@
   function clearData() {
     DATA.recipes = [];
     DATA.cocktails = [];
+    DATA.sharedRecipes = [];
+    DATA.sharedCocktails = [];
+    profileNames = {};
     byId = {};
     activeTags.clear();
     openItems.clear();
     basket.clear();
     favoritesOnly = false;
     toggleFavoritesBtn.setAttribute("aria-pressed", "false");
+    sharedOnly = false;
+    toggleSharedBtn.setAttribute("aria-pressed", "false");
     refreshViews();
   }
 
@@ -380,11 +419,15 @@
   signOutBtn.addEventListener("click", () => supabaseClient.auth.signOut());
 
   // ---------- Filtering ----------
+  function activePool() {
+    return sharedOnly ? DATA[SHARED_POOL_KEY[section]] : DATA[POOL_KEY[section]];
+  }
+
   function currentItems() {
-    const items = DATA[section];
+    const items = activePool();
     const q = searchTerm.trim().toLowerCase();
     return items.filter((it) => {
-      if (favoritesOnly && !it.isFavorite) return false;
+      if (!sharedOnly && favoritesOnly && !it.isFavorite) return false;
       if (activeTags.size && ![...activeTags].every((t) => it.tags.includes(t))) return false;
       if (!q) return true;
       const hay = [
@@ -399,7 +442,7 @@
   // ---------- Rendering ----------
   function renderTagFilters() {
     const counts = {};
-    DATA[section].forEach((it) => it.tags.forEach((t) => (counts[t] = (counts[t] || 0) + 1)));
+    activePool().forEach((it) => it.tags.forEach((t) => (counts[t] = (counts[t] || 0) + 1)));
     const tags = Object.keys(counts).sort();
     tagFiltersEl.innerHTML = tags.map((t) =>
       `<button class="tag-chip${activeTags.has(t) ? " is-on" : ""}" data-tag="${esc(t)}">${esc(t)} \u00B7 ${counts[t]}</button>`
@@ -422,17 +465,21 @@
     emptyEl.hidden = items.length > 0;
     if (items.length === 0) {
       const noun = section === "recipes" ? "recipes" : "cocktails";
-      emptyEl.textContent = favoritesOnly && !(searchTerm.trim() || activeTags.size)
-        ? `No favorite ${noun} yet — tap the ☆ on a recipe to star it.`
-        : (searchTerm.trim() || activeTags.size || favoritesOnly)
-          ? "Nothing matches that search. Clear a tag or try a different word."
-          : `No ${noun} yet — tap “+ Add recipe” or “✨ Add with AI” to get started.`;
+      const hasFilter = !!(searchTerm.trim() || activeTags.size);
+      emptyEl.textContent = sharedOnly && !hasFilter
+        ? "Nothing shared yet — when someone marks a recipe as shared, it'll show up here."
+        : favoritesOnly && !hasFilter
+          ? `No favorite ${noun} yet — tap the ☆ on a recipe to star it.`
+          : (hasFilter || favoritesOnly || sharedOnly)
+            ? "Nothing matches that search. Clear a tag or try a different word."
+            : `No ${noun} yet — tap “+ Add recipe” or “✨ Add with AI” to get started.`;
     }
 
     listEl.innerHTML = items.map((it) => {
       const picked = basket.has(it.id);
       const servings = picked ? basket.get(it.id).servings : it.baseServings;
       const open = openItems.has(it.id);
+      const mine = it.userId === session?.user?.id;
       return `
       <li class="item${open ? " is-open" : ""}" data-id="${esc(it.id)}">
         <div class="item-row">
@@ -441,6 +488,7 @@
           <button class="item-head" aria-expanded="${open}">
             <span class="item-name">${esc(it.name)}</span>
             ${it.subtitle ? `<span class="item-sub">${esc(it.subtitle)}</span>` : ""}
+            ${!mine ? `<span class="item-owner">Shared by ${esc(profileNames[it.userId] || "someone")}</span>` : ""}
             <span class="item-tags">${it.tags.map((t) => `<span class="mini-tag">${esc(t)}</span>`).join("")}</span>
           </button>
           ${picked ? `
@@ -450,7 +498,7 @@
             <button class="serv-btn" data-step="1" aria-label="Increase servings">+</button>
             <span class="serv-label">${esc(it.servingsLabel)}</span>
           </span>` : ""}
-          <button class="star-btn${it.isFavorite ? " is-on" : ""}" aria-label="${it.isFavorite ? "Remove from favorites" : "Add to favorites"}" aria-pressed="${it.isFavorite}">${it.isFavorite ? "\u2605" : "\u2606"}</button>
+          ${mine ? `<button class="star-btn${it.isFavorite ? " is-on" : ""}" aria-label="${it.isFavorite ? "Remove from favorites" : "Add to favorites"}" aria-pressed="${it.isFavorite}">${it.isFavorite ? "\u2605" : "\u2606"}</button>` : ""}
           <span class="chevron" aria-hidden="true">\u25B6</span>
         </div>
         ${open ? renderDetail(it, servings) : ""}
@@ -460,6 +508,7 @@
 
   function renderDetail(it, servings) {
     const ings = scaledIngredients(it, servings);
+    const mine = it.userId === session?.user?.id;
     const scaledNote = servings !== it.baseServings
       ? ` \u00B7 scaled to ${servings} ${esc(it.servingsLabel)}`
       : ` \u00B7 makes ${it.baseServings} ${esc(it.servingsLabel)}`;
@@ -467,9 +516,10 @@
       ? Object.entries(it.specs).filter(([, v]) => v)
           .map(([k, v]) => `<span><b>${esc(k[0].toUpperCase() + k.slice(1))}:</b> ${esc(v)}</span>`).join("")
       : "";
+    const ownerNote = !mine ? ` \u00B7 Shared by ${esc(profileNames[it.userId] || "someone")}` : "";
     return `
     <div class="item-detail">
-      <p class="detail-meta">Source: ${esc(it.source || "\u2014")}${scaledNote}</p>
+      <p class="detail-meta">Source: ${esc(it.source || "\u2014")}${scaledNote}${ownerNote}</p>
       <div class="detail-grid">
         <div>
           <h3 class="detail-h">Ingredients</h3>
@@ -489,8 +539,11 @@
       </div>
       <div class="detail-actions">
         ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
+        ${mine ? `
         <button class="ghost-btn small edit-recipe" data-id="${esc(it.id)}">Edit</button>
         <button class="ghost-btn small delete-recipe-btn" data-id="${esc(it.id)}">Delete</button>
+        <button class="ghost-btn small share-toggle-btn${it.isShared ? " is-on" : ""}" data-id="${esc(it.id)}">${it.isShared ? "Shared ✓ — tap to unshare" : "Share with household"}</button>` : `
+        <button class="ghost-btn small copy-to-book-btn" data-id="${esc(it.id)}">📋 Copy to my book</button>`}
       </div>
     </div>`;
   }
@@ -834,6 +887,49 @@
     }
   }
 
+  async function toggleShared(item) {
+    if (!session) { toast("You've been signed out — sign in again."); return; }
+    const next = !item.isShared;
+    item.isShared = next; // optimistic
+    renderList();
+    const { error } = await supabaseClient.from("recipes").update({ is_shared: next }).eq("id", item.id);
+    if (error) {
+      item.isShared = !next;
+      renderList();
+      toast(`Error: ${error.message}`);
+    }
+  }
+
+  async function copyToMyBook(item) {
+    if (!session) { toast("You've been signed out — sign in again."); return; }
+    const name = item.name;
+    const dupe = Object.values(byId).find(
+      (it) => it.userId === session.user.id && it.name.trim().toLowerCase() === name.trim().toLowerCase()
+    );
+    if (dupe && !confirm(`A recipe named "${dupe.name}" already exists in your book. Copy this one too?`)) return;
+
+    const row = {
+      user_id: session.user.id,
+      section: item.section,
+      name: item.name,
+      subtitle: item.subtitle,
+      source: item.source,
+      tags: item.tags,
+      base_servings: item.baseServings,
+      servings_label: item.servingsLabel,
+      ingredients: item.ingredients,
+      method: item.method,
+      specs: item.specs,
+      notes: item.notes,
+      is_favorite: false,
+      is_shared: false
+    };
+    const { error } = await supabaseClient.from("recipes").insert(row);
+    if (error) { toast(`Error: ${error.message}`); return; }
+    toast("Copied to your book");
+    await loadData();
+  }
+
   async function deleteRecipe(item) {
     if (!confirm(`Delete "${item.name}"? This can't be undone.`)) return;
     const { error } = await supabaseClient.from("recipes").delete().eq("id", item.id);
@@ -1032,7 +1128,24 @@
   toggleFavoritesBtn.addEventListener("click", () => {
     favoritesOnly = !favoritesOnly;
     toggleFavoritesBtn.setAttribute("aria-pressed", String(favoritesOnly));
-    renderList();
+    if (favoritesOnly) {
+      sharedOnly = false;
+      toggleSharedBtn.setAttribute("aria-pressed", "false");
+    }
+    // refreshViews (not just renderList): turning this on clears sharedOnly,
+    // which swaps the active pool, so the tag-filter bar must rebuild too.
+    refreshViews();
+  });
+
+  // Shared-with-household toggle
+  toggleSharedBtn.addEventListener("click", () => {
+    sharedOnly = !sharedOnly;
+    toggleSharedBtn.setAttribute("aria-pressed", String(sharedOnly));
+    if (sharedOnly) {
+      favoritesOnly = false;
+      toggleFavoritesBtn.setAttribute("aria-pressed", "false");
+    }
+    refreshViews(); // pool changed — tag filters + active filters need refresh too
   });
 
   // Tag chips (filter panel + active-filter row)
@@ -1095,6 +1208,16 @@
 
     if (e.target.closest(".delete-recipe-btn")) {
       deleteRecipe(byId[id]);
+      return;
+    }
+
+    if (e.target.closest(".share-toggle-btn")) {
+      toggleShared(byId[id]);
+      return;
+    }
+
+    if (e.target.closest(".copy-to-book-btn")) {
+      copyToMyBook(byId[id]);
       return;
     }
 
