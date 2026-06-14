@@ -257,12 +257,20 @@
 
       <div id="ai-import-picker" class="ai-import-picker">
         <p class="ai-import-hint">Snap a photo of a recipe, or paste in text (e.g. an Instagram caption), and AI will fill in the form for you to review before saving.</p>
-        <label class="ghost-btn ai-import-option">
+        <label class="ghost-btn ai-import-option" id="ai-photo-label">
           📷 Take / choose photo
           <!-- No `capture` attribute: with it, iOS jumps straight to the camera
                and never offers the photo library / screenshots. -->
           <input type="file" id="ai-photo-input" accept="image/*" hidden>
         </label>
+        <div id="ai-photo-area" class="ai-photo-area" hidden>
+          <div id="ai-photo-thumbs" class="ai-photo-thumbs"></div>
+          <p class="ai-import-hint">Front and back of a card, or several pages of the same recipe? Add each photo, then extract — they're combined into one recipe.</p>
+          <div class="ai-photo-actions">
+            <button type="button" id="ai-photo-add" class="ghost-btn small">+ Add another photo</button>
+            <button type="button" id="ai-photo-extract" class="solid-btn">Extract recipe</button>
+          </div>
+        </div>
         <button type="button" id="ai-link-btn" class="ghost-btn ai-import-option">🔗 Import from a link</button>
         <div id="ai-link-area" class="ai-text-area" hidden>
           <input id="ai-link-input" class="search" type="url" inputmode="url"

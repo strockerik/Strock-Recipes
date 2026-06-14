@@ -790,6 +790,52 @@ button:focus-visible, input:focus-visible {
   gap: 10px;
 }
 
+/* Staged photos for one recipe (e.g. front/back of a card, or multiple pages)
+   before the user taps Extract. */
+.ai-photo-area {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ai-photo-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ai-photo-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.ai-photo-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ai-photo-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.ai-photo-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .ai-import-loading {
   display: flex;
   flex-direction: column;

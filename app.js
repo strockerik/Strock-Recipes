@@ -83,6 +83,11 @@
   const aiImportStatus = $("#ai-import-status");
   const aiImportCancelBtn = $("#ai-import-cancel");
   const aiPhotoInput = $("#ai-photo-input");
+  const aiPhotoLabel = $("#ai-photo-label");
+  const aiPhotoArea = $("#ai-photo-area");
+  const aiPhotoThumbs = $("#ai-photo-thumbs");
+  const aiPhotoAddBtn = $("#ai-photo-add");
+  const aiPhotoExtractBtn = $("#ai-photo-extract");
   const aiPasteTextBtn = $("#ai-paste-text-btn");
   const aiTextArea = $("#ai-text-area");
   const aiTextInput = $("#ai-text-input");
@@ -1027,6 +1032,25 @@
   }
 
   // ---------- AI recipe import ----------
+  const MAX_AI_PHOTOS = 4; // front/back of a card, or a few pages — one recipe either way
+
+  // Photos staged for the current extraction: multiple pages or sides of ONE
+  // recipe, sent together so the AI can combine them into a single result.
+  let aiPhotoQueue = []; // [{ mediaType, data }]
+
+  function renderAiPhotoQueue() {
+    const n = aiPhotoQueue.length;
+    aiPhotoThumbs.innerHTML = aiPhotoQueue.map((p, i) => `
+      <div class="ai-photo-thumb">
+        <img src="data:${p.mediaType};base64,${p.data}" alt="Photo ${i + 1}">
+        <button type="button" class="ai-photo-remove" data-index="${i}" aria-label="Remove photo ${i + 1}">×</button>
+      </div>`).join("");
+    aiPhotoArea.hidden = n === 0;
+    aiPhotoLabel.hidden = n > 0;
+    aiPhotoAddBtn.hidden = n >= MAX_AI_PHOTOS;
+    aiPhotoExtractBtn.textContent = n > 1 ? `Extract recipe (${n} photos)` : "Extract recipe";
+  }
+
   function openAiImport() {
     aiImportStatus.textContent = "";
     aiTextInput.value = "";
@@ -1034,6 +1058,8 @@
     aiLinkInput.value = "";
     aiLinkArea.hidden = true;
     aiPhotoInput.value = "";
+    aiPhotoQueue = [];
+    renderAiPhotoQueue();
     aiImportPicker.hidden = false;
     aiImportLoading.hidden = true;
     aiImportPanel.hidden = false;
@@ -1045,6 +1071,7 @@
 
   function closeAiImport() {
     extractionToken++;
+    aiPhotoQueue = [];
     aiImportPanel.hidden = true;
   }
 
@@ -1167,7 +1194,7 @@
   aiPhotoInput.addEventListener("change", async () => {
     const file = aiPhotoInput.files?.[0];
     aiPhotoInput.value = ""; // reset so picking the same file again re-fires change
-    if (!file) return;
+    if (!file || aiPhotoQueue.length >= MAX_AI_PHOTOS) return;
     let data;
     try {
       data = await processImage(file);
@@ -1175,7 +1202,23 @@
       aiImportStatus.textContent = "Couldn’t read that image — try another photo.";
       return;
     }
-    runExtraction({ type: "image", mediaType: "image/jpeg", data });
+    aiPhotoQueue.push({ mediaType: "image/jpeg", data });
+    aiImportStatus.textContent = "";
+    renderAiPhotoQueue();
+  });
+
+  aiPhotoAddBtn.addEventListener("click", () => aiPhotoInput.click());
+
+  aiPhotoExtractBtn.addEventListener("click", () => {
+    if (!aiPhotoQueue.length) return;
+    runExtraction({ type: "image", images: aiPhotoQueue.slice() });
+  });
+
+  aiPhotoThumbs.addEventListener("click", (e) => {
+    const btn = e.target.closest(".ai-photo-remove");
+    if (!btn) return;
+    aiPhotoQueue.splice(Number(btn.dataset.index), 1);
+    renderAiPhotoQueue();
   });
 
   // ---------- Events ----------

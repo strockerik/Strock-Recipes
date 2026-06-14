@@ -83,6 +83,12 @@ Use the app — no editing JS files:
   messy handwriting). The AI completes cut-off recipes, infers proportions when
   only ingredients are given, and ignores non-recipe clutter on the card or
   screenshot — anything it guesses shows up as an "AI added:" line in Notes.
+  - **Multiple photos, one recipe:** if a recipe spans the front and back of a
+    card, or several pages, tap "Take / choose photo" for each one (up to 4) —
+    a thumbnail strip with an **+ Add another photo** button appears, and
+    nothing is sent until you tap **Extract recipe**. The AI reads all the
+    photos together as one recipe (not a batch of separate recipes), merging
+    e.g. ingredients from the front with the method from the back.
 - **+ Add recipe** — fill in the form manually (name, section, servings, tags,
   ingredient rows, method steps, notes).
 - Open any recipe to **Edit** or **Delete** it — or tap **▶ Cook** for a
@@ -173,10 +179,11 @@ code. They're cosmetic — the function runs on Supabase's Deno runtime, where
 both resolve fine. Installing the official Deno VSCode extension (with
 `deno.enablePaths: ["supabase/functions"]`) silences them.
 
-> **Pending redeploy:** the recipe-sections change added a `group` field to the
-> extraction schema/prompt so the AI can split sub-recipes. The frontend works
-> without it, but AI extractions won't return sections until you paste the
-> current `index.ts` into the dashboard editor and hit **Deploy**.
+> **Pending redeploy:** photo extraction now sends `{ type: "image", images:
+> [...] }` (one or more photos of the same recipe) instead of a single
+> `data`/`mediaType` pair, so AI photo extraction won't work until you paste
+> the current `index.ts` into the dashboard editor and hit **Deploy**. Text
+> and link extraction are unaffected.
 
 ## Grocery list → Google Keep
 

@@ -9,9 +9,12 @@
 // browser. The caller's Supabase JWT is verified before any paid API call.
 //
 // Request body (JSON):
-//   { type: "image", mediaType: "image/jpeg" | "image/png" | "image/webp", data: "<base64>" }
+//   { type: "image", images: [{ mediaType: "image/jpeg" | "image/png" | "image/webp", data: "<base64>" }, ...] }
 //   { type: "text", text: "<pasted recipe text>" }
 //   { type: "url", url: "<public recipe page>" }
+//
+// Multiple images are treated as different pages or sides of the SAME recipe
+// (e.g. the front and back of a card) and combined into one result.
 //
 // Response: always HTTP 200 with either { recipe: {...} } or { error: "..." },
 // so the browser's functions.invoke() can read our message directly.
@@ -28,6 +31,8 @@ function pickModel(type: string) {
   return type === "image" ? MODEL_VISION : MODEL_TEXT;
 }
 const ANTHROPIC_VERSION = "2023-06-01";
+// Front/back of a card, or a few pages — all treated as one recipe, not a batch.
+const MAX_IMAGES = 4;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -100,6 +105,7 @@ const RECIPE_SCHEMA = {
 const SYSTEM_PROMPT = `You extract recipes into a structured format by calling the save_recipe tool. The source may be a clean printed recipe, a sloppy handwritten card, a screenshot of a text message, or a casual narrative. Your goal is always a complete, cookable recipe.
 
 READING THE SOURCE
+- You may receive multiple images. Treat them as different pages or sides of ONE recipe (e.g. the front and back of a card, or consecutive pages of a cookbook) — read them together as a single continuous source and call save_recipe exactly ONCE with one combined recipe, never one call per image. A back-of-card image often holds the method while the front holds ingredients (or vice versa); merge them in the right order. If the images clearly show more than one distinct, unrelated recipe, extract only the most complete one and ignore the rest — never output more than one recipe.
 - Read handwriting carefully, including messy cursive, and transcribe what is ACTUALLY written. Scan the entire image — including the bottom edge, margins, and cramped corners — for amounts, oven temperatures, and especially bake times, which are often squeezed in at the very end of a card.
 - Transcribe faithfully; do NOT "correct" the card to match a recipe you already know. If you recognize the dish, you must still use the card's own ingredients and amounts: never drop an ingredient that is written (e.g. flour in a pancake batter), and never add an ingredient the card lacks just because the dish usually has it (e.g. baking powder). Cooking knowledge is only for resolving a genuinely illegible word to its most plausible reading — not for substituting your own version of the recipe.
 - Copy amounts exactly as written, including the unit: "3 tsp" is 3 teaspoons, not 3 tablespoons; "1/4 to 1/3 stick" stays in that range, not rounded up to 1/2.
@@ -229,10 +235,21 @@ Deno.serve(async (req) => {
     let userContent;
 
     if (body.type === "image") {
-      if (!body.data || !body.mediaType) return json({ error: "No image was received." });
+      const images = Array.isArray(body.images) ? body.images : [];
+      if (images.length === 0) return json({ error: "No image was received." });
+      if (images.length > MAX_IMAGES) return json({ error: `Please send at most ${MAX_IMAGES} photos at a time.` });
+      for (const img of images) {
+        if (!img?.data || !img?.mediaType) return json({ error: "No image was received." });
+      }
+      const instruction = images.length > 1
+        ? "These images are different pages or sides (e.g. the front and back of a card) of the SAME recipe. Read them together as one source and call save_recipe once with the single combined recipe."
+        : "Extract the recipe from this image by calling save_recipe.";
       userContent = [
-        { type: "image", source: { type: "base64", media_type: body.mediaType, data: body.data } },
-        { type: "text", text: "Extract the recipe from this image by calling save_recipe." }
+        ...images.map((img: { mediaType: string; data: string }) => ({
+          type: "image",
+          source: { type: "base64", media_type: img.mediaType, data: img.data }
+        })),
+        { type: "text", text: instruction }
       ];
     } else if (body.type === "text") {
       if (!body.text || !body.text.trim()) return json({ error: "No text was received." });
