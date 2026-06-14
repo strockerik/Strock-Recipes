@@ -21,9 +21,10 @@ Browser (GitHub Pages)                 Supabase
   signed in across visits. "Forgot password?" emails a reset link.
 - **Privacy:** every recipe row has a `user_id`; a Row Level Security policy
   (`auth.uid() = user_id`) means Postgres itself refuses to return other users'
-  rows, even if the frontend had a bug. The only exception is recipes an owner
-  explicitly marks "shared" (`is_shared = true`), which become readable — but
-  not writable — by every other signed-in user. See **Recipe sharing** below.
+  rows, even if the frontend had a bug. The only exception is a recipe an
+  owner explicitly shares with a specific person's email, which becomes
+  readable — but not writable — by that person only. See **Recipe sharing**
+  below.
 - **AI extraction:** "✨ Add with AI" sends a photo, pasted text, or a link to the
   `extract-recipe` Edge Function, which verifies the caller is signed in, calls
   Claude (structured output via forced tool-use), and returns a recipe that
@@ -120,45 +121,111 @@ an optional `group` label; **method steps are stored as `{text, group}` objects*
 
 ## Recipe sharing
 
-Everyone signed in to this app is treated as one trusted household — there are
-no invites or per-user permissions, just a simple opt-in per recipe:
+Sharing is explicit and per-recipient — a recipe is visible only to its owner
+and whoever the owner has specifically shared it with by email:
 
-- Open any of **your** recipes and tap **Share with household**. It now shows
-  up for everyone else under the **👥 Shared** view (next to ★ Favorites),
-  with a "Shared by \<you\>" attribution. Tap the same button (now "Shared ✓ —
-  tap to unshare") to make it private again.
-- Browsing someone else's shared recipe, tap **📋 Copy to my book** to clone it
+- Open any of **your** recipes and tap **Share**. A panel opens where you can
+  enter the email address of another account and tap **Share** — that person
+  will now see the recipe under their **👥 Shared with me** view, with a
+  "Shared by \<you\>" attribution. The panel lists everyone the recipe is
+  currently shared with as a chip; tap the **×** on a chip to stop sharing
+  with that person. The button label shows the recipient count (e.g. "Shared
+  with 2 people").
+  - The recipient must already have an account in this app — sharing looks up
+    their user id by email and shows "No account found with that email" if
+    they haven't signed up yet.
+- Browsing a recipe shared with you, tap **📋 Copy to my book** to clone it
   into your own recipe book as an independent copy — editing your copy never
-  affects their original, and unsharing/deleting their original doesn't touch
-  your copy.
-- You can't edit, delete, favorite, or un-share another person's recipe — only
-  the owner can, and Postgres enforces this via RLS regardless of the UI.
+  affects the original, and the owner unsharing or deleting their original
+  doesn't touch your copy.
+- You can't edit, delete, favorite, or manage sharing on another person's
+  recipe — only the owner can, and Postgres enforces this via RLS regardless
+  of the UI.
 
-**One-time setup (Supabase SQL editor)** — run once, in order:
+**One-time setup (Supabase SQL editor)** — run once, in order. (This replaces
+an earlier "share with the whole household" design built on a single
+`is_shared` boolean — the steps below retire that column and policy.)
 
 ```sql
 -- 1. profiles already exists with its own RLS policies (view/insert/update
---    own row only). Add one more SELECT policy so every signed-in user can
---    read display names for "Shared by <name>" attribution — this OR's with
---    the existing "view own profile" policy, it doesn't replace it.
+--    own row only). One more SELECT policy lets every signed-in user read
+--    display names for "Shared by <name>" attribution — this OR's with the
+--    existing "view own profile" policy, it doesn't replace it. (Already
+--    applied if you set up the earlier household-sharing design — safe to
+--    skip if so.)
 create policy "shared profiles are viewable by authenticated users"
   on public.profiles for select
   to authenticated
   using (true);
 
--- 2. is_shared column + additive read policy on recipes
-alter table public.recipes
-  add column if not exists is_shared boolean not null default false;
+-- 2. Retire the old "visible to everyone" policy and its column.
+drop policy "shared recipes are viewable by authenticated users" on public.recipes;
+alter table public.recipes drop column is_shared;
 
-create policy "shared recipes are viewable by authenticated users"
+-- 3. Per-recipe, per-recipient shares.
+create table public.recipe_shares (
+  recipe_id uuid not null references public.recipes(id) on delete cascade,
+  shared_with_user_id uuid not null references auth.users(id) on delete cascade,
+  shared_by_user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (recipe_id, shared_with_user_id)
+);
+alter table public.recipe_shares enable row level security;
+
+-- Owners can create/view/delete shares for recipes they own. The `with check`
+-- subquery stops anyone from "sharing" a recipe_id they don't actually own.
+create policy "owners manage shares on their recipes"
+  on public.recipe_shares for all
+  to authenticated
+  using (shared_by_user_id = auth.uid())
+  with check (
+    shared_by_user_id = auth.uid()
+    and exists (
+      select 1 from public.recipes r
+      where r.id = recipe_id and r.user_id = auth.uid()
+    )
+  );
+
+-- Recipients can see shares directed at them (drives "Shared by X" lookups).
+create policy "recipients view shares directed at them"
+  on public.recipe_shares for select
+  to authenticated
+  using (shared_with_user_id = auth.uid());
+
+-- 4. A recipe is visible if you own it (existing policy, unchanged) or it has
+-- been explicitly shared with you.
+create policy "recipes shared with you are viewable"
   on public.recipes for select
   to authenticated
-  using (is_shared = true);
+  using (
+    exists (
+      select 1 from public.recipe_shares rs
+      where rs.recipe_id = recipes.id and rs.shared_with_user_id = auth.uid()
+    )
+  );
+
+-- 5. Email -> user id lookup for the "share with..." flow. SECURITY DEFINER +
+-- empty search_path so it can read auth.users without granting broad access;
+-- returns only the id (or null), never other account details.
+create or replace function public.lookup_user_id_by_email(lookup_email text)
+returns uuid
+language sql
+security definer
+set search_path = ''
+as $$
+  select id from auth.users where lower(email) = lower(lookup_email) limit 1;
+$$;
+
+grant execute on function public.lookup_user_id_by_email(text) to authenticated;
 ```
 
-This is purely additive — the existing owner-only policy for insert/update/
-delete is untouched, so "Copy to my book" is the only way another user gets a
-writable row from someone else's shared recipe.
+The existing owner-only policy for insert/update/delete on `recipes` is
+untouched, so "Copy to my book" is still the only way another user gets a
+writable row from a recipe shared with them.
+
+> **Note:** recipes previously shared via the old "share with household"
+> toggle stop being shared with anyone once this SQL runs (`recipe_shares`
+> starts empty) — re-share them with specific people's emails afterward.
 
 ## Edge Function deployment (AI)
 

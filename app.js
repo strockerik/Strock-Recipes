@@ -10,6 +10,8 @@
   let sharedOnly = false;     // mirrors favoritesOnly — alternate "view mode"
   let profileNames = {};      // user_id -> display_name, for attribution
   const openItems = new Set(); // ids of expanded items
+  const openShareIds = new Set(); // ids of items with their share panel expanded
+  let sharesByRecipe = {};    // recipe_id -> [shared_with_user_id, ...], for recipes I own
   // grocery: id -> { servings }
   const basket = new Map();
   let skipPantryStaples = false;
@@ -257,8 +259,7 @@
       specs: row.specs,
       notes: row.notes,
       isFavorite: !!row.is_favorite,
-      userId: row.user_id,
-      isShared: !!row.is_shared
+      userId: row.user_id
     };
   }
 
@@ -291,19 +292,25 @@
   function pruneStaleState() {
     for (const id of [...basket.keys()]) if (!byId[id]) basket.delete(id);
     for (const id of [...openItems]) if (!byId[id]) openItems.delete(id);
+    for (const id of [...openShareIds]) if (!byId[id]) openShareIds.delete(id);
     const allTags = new Set();
     Object.values(byId).forEach((it) => it.tags.forEach((t) => allTags.add(t)));
     for (const t of [...activeTags]) if (!allTags.has(t)) activeTags.delete(t);
   }
 
   async function loadData() {
-    // Recipes and profile names are independent reads — fetch them concurrently
-    // rather than waiting for one then the other.
+    // Recipes, profile names, and my outgoing shares are independent reads —
+    // fetch them concurrently rather than waiting on each other in turn.
     const recipesPromise = supabaseClient
       .from("recipes")
       .select("*")
       .order("name");
     const profilesPromise = loadProfiles();
+    const me = session?.user?.id;
+    const sharesPromise = supabaseClient
+      .from("recipe_shares")
+      .select("recipe_id, shared_with_user_id")
+      .eq("shared_by_user_id", me);
 
     const { data, error } = await recipesPromise;
 
@@ -313,14 +320,23 @@
     }
 
     const items = (data || []).map(mapRecipe);
-    const me = session?.user?.id;
+    // RLS only ever returns rows you own or rows explicitly shared with you,
+    // so every "not mine" row here is something someone shared with me.
     DATA.recipes         = items.filter((it) => it.section === "kitchen" && it.userId === me);
     DATA.cocktails       = items.filter((it) => it.section === "bar"     && it.userId === me);
-    DATA.sharedRecipes   = items.filter((it) => it.section === "kitchen" && it.userId !== me && it.isShared);
-    DATA.sharedCocktails = items.filter((it) => it.section === "bar"     && it.userId !== me && it.isShared);
+    DATA.sharedRecipes   = items.filter((it) => it.section === "kitchen" && it.userId !== me);
+    DATA.sharedCocktails = items.filter((it) => it.section === "bar"     && it.userId !== me);
 
     byId = {};
-    items.forEach((it) => { if (it.userId === me || it.isShared) byId[it.id] = it; });
+    items.forEach((it) => { byId[it.id] = it; });
+
+    const { data: shares, error: sharesError } = await sharesPromise;
+    sharesByRecipe = {};
+    if (!sharesError) {
+      (shares || []).forEach((s) => {
+        (sharesByRecipe[s.recipe_id] || (sharesByRecipe[s.recipe_id] = [])).push(s.shared_with_user_id);
+      });
+    }
 
     await profilesPromise; // attribution names must be ready before we render
     await ensureProfile();
@@ -338,9 +354,11 @@
     DATA.sharedRecipes = [];
     DATA.sharedCocktails = [];
     profileNames = {};
+    sharesByRecipe = {};
     byId = {};
     activeTags.clear();
     openItems.clear();
+    openShareIds.clear();
     basket.clear();
     favoritesOnly = false;
     toggleFavoritesBtn.setAttribute("aria-pressed", "false");
@@ -496,7 +514,7 @@
       const noun = section === "recipes" ? "recipes" : "cocktails";
       const hasFilter = !!(searchTerm.trim() || activeTags.size);
       emptyEl.textContent = sharedOnly && !hasFilter
-        ? "Nothing shared yet — when someone marks a recipe as shared, it'll show up here."
+        ? "Nothing's been shared with you yet — when someone shares a recipe with you, it'll show up here."
         : favoritesOnly && !hasFilter
           ? `No favorite ${noun} yet — tap the ☆ on a recipe to star it.`
           : (hasFilter || favoritesOnly || sharedOnly)
@@ -575,9 +593,38 @@
         ${mine ? `
         <button class="ghost-btn small edit-recipe" data-id="${esc(it.id)}">Edit</button>
         <button class="ghost-btn small delete-recipe-btn" data-id="${esc(it.id)}">Delete</button>
-        <button class="ghost-btn small share-toggle-btn${it.isShared ? " is-on" : ""}" data-id="${esc(it.id)}">${it.isShared ? "Shared ✓ — tap to unshare" : "Share with household"}</button>` : `
+        <button class="ghost-btn small share-toggle-btn${openShareIds.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${shareButtonLabel(it)}</button>` : `
         <button class="ghost-btn small copy-to-book-btn" data-id="${esc(it.id)}">📋 Copy to my book</button>`}
       </div>
+      ${mine && openShareIds.has(it.id) ? renderSharePanel(it) : ""}
+    </div>`;
+  }
+
+  // Recipients a recipe is currently shared with, by user id.
+  function shareRecipients(it) {
+    return sharesByRecipe[it.id] || [];
+  }
+
+  function shareButtonLabel(it) {
+    const n = shareRecipients(it).length;
+    return n ? `Shared with ${n} ${n === 1 ? "person" : "people"}` : "Share";
+  }
+
+  function renderSharePanel(it) {
+    const recipients = shareRecipients(it);
+    return `
+    <div class="share-panel">
+      ${recipients.length ? `
+      <div class="share-recipients">
+        ${recipients.map((uid) => `
+          <span class="share-chip">${esc(profileNames[uid] || "that user")}<button type="button" class="share-remove-btn" data-id="${esc(it.id)}" data-user-id="${esc(uid)}" aria-label="Stop sharing with ${esc(profileNames[uid] || "that user")}">×</button></span>
+        `).join("")}
+      </div>` : `<p class="share-empty">Not shared with anyone yet.</p>`}
+      <form class="share-add-row" data-id="${esc(it.id)}">
+        <input type="email" class="share-email-input" placeholder="Their email address" required>
+        <button type="submit" class="solid-btn small share-add-btn">Share</button>
+      </form>
+      <p class="share-status" aria-live="polite"></p>
     </div>`;
   }
 
@@ -981,17 +1028,43 @@
     }
   }
 
-  async function toggleShared(item) {
+  // Share `item` with the account registered to `email`. Status messages
+  // (not-found, already-shared, etc.) are written into the panel's own
+  // `.share-status` line rather than a toast, so they don't get lost.
+  async function shareRecipe(item, email, formEl) {
     if (!session) { toast("You've been signed out — sign in again."); return; }
-    const next = !item.isShared;
-    item.isShared = next; // optimistic
+    const statusEl = formEl.parentElement.querySelector(".share-status");
+    const trimmed = email.trim();
+    if (!trimmed) return;
+
+    const { data: foundId, error: lookupError } = await supabaseClient
+      .rpc("lookup_user_id_by_email", { lookup_email: trimmed });
+    if (lookupError) { statusEl.textContent = `Error: ${lookupError.message}`; return; }
+    if (!foundId) { statusEl.textContent = "No account found with that email."; return; }
+    if (foundId === session.user.id) { statusEl.textContent = "That's your own account."; return; }
+    if ((sharesByRecipe[item.id] || []).includes(foundId)) { statusEl.textContent = "Already shared with them."; return; }
+
+    const { error } = await supabaseClient.from("recipe_shares").insert({
+      recipe_id: item.id,
+      shared_with_user_id: foundId,
+      shared_by_user_id: session.user.id
+    });
+    if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+
+    (sharesByRecipe[item.id] || (sharesByRecipe[item.id] = [])).push(foundId);
+    if (!profileNames[foundId]) await loadProfiles(); // pick up the new recipient's display name
     renderList();
-    const { error } = await supabaseClient.from("recipes").update({ is_shared: next }).eq("id", item.id);
-    if (error) {
-      item.isShared = !next;
-      renderList();
-      toast(`Error: ${error.message}`);
-    }
+  }
+
+  async function unshareRecipe(item, userId) {
+    if (!session) { toast("You've been signed out — sign in again."); return; }
+    const { error } = await supabaseClient.from("recipe_shares")
+      .delete()
+      .eq("recipe_id", item.id)
+      .eq("shared_with_user_id", userId);
+    if (error) { toast(`Error: ${error.message}`); return; }
+    sharesByRecipe[item.id] = (sharesByRecipe[item.id] || []).filter((id) => id !== userId);
+    renderList();
   }
 
   async function copyToMyBook(item) {
@@ -1015,8 +1088,7 @@
       method: item.method,
       specs: item.specs,
       notes: item.notes,
-      is_favorite: false,
-      is_shared: false
+      is_favorite: false
     };
     const { error } = await supabaseClient.from("recipes").insert(row);
     if (error) { toast(`Error: ${error.message}`); return; }
@@ -1344,7 +1416,14 @@
     }
 
     if (e.target.closest(".share-toggle-btn")) {
-      toggleShared(byId[id]);
+      openShareIds.has(id) ? openShareIds.delete(id) : openShareIds.add(id);
+      renderList();
+      return;
+    }
+
+    const removeBtn = e.target.closest(".share-remove-btn");
+    if (removeBtn) {
+      unshareRecipe(byId[id], removeBtn.dataset.userId);
       return;
     }
 
@@ -1357,6 +1436,16 @@
       openItems.has(id) ? openItems.delete(id) : openItems.add(id);
       renderList();
     }
+  });
+
+  // Submitting the "share with..." form inside an open share panel.
+  listEl.addEventListener("submit", (e) => {
+    const form = e.target.closest(".share-add-row");
+    if (!form) return;
+    e.preventDefault();
+    const li = form.closest(".item");
+    const input = form.querySelector(".share-email-input");
+    shareRecipe(byId[li.dataset.id], input.value, form);
   });
 
   // ---------- Cook mode (guided, full-screen, screen stays awake) ----------
