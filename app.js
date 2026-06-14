@@ -226,10 +226,12 @@
     return { amount, unit };
   }
 
-  // Always-on-hand items that don't belong on a shopping list.
+  // Always-on-hand items that don't belong on a shopping list. One precompiled
+  // alternation (rather than building 6 RegExps per ingredient per render).
   const PANTRY_STAPLE_TERMS = ["salt", "pepper", "oil", "water", "sugar", "butter"];
+  const PANTRY_STAPLE_RE = new RegExp(`\\b(?:${PANTRY_STAPLE_TERMS.join("|")})\\b`, "i");
   function isPantryStaple(nameLower) {
-    return PANTRY_STAPLE_TERMS.some((term) => new RegExp(`\\b${term}\\b`, "i").test(nameLower));
+    return PANTRY_STAPLE_RE.test(nameLower);
   }
 
   // ---------- Data loading (Supabase) ----------
@@ -926,8 +928,12 @@
     const existing = id ? byId[id] : null;
 
     const name = rfName.value.trim();
+    // Only warn about a clash with one of YOUR OWN recipes — byId also holds
+    // other household members' shared recipes, and a name match there isn't a
+    // duplicate in your book (copyToMyBook filters the same way).
+    const myId = session.user.id;
     const dupe = Object.values(byId).find(
-      (it) => it.id !== id && it.name.trim().toLowerCase() === name.toLowerCase()
+      (it) => it.userId === myId && it.id !== id && it.name.trim().toLowerCase() === name.toLowerCase()
     );
     if (dupe && !confirm(`A recipe named "${dupe.name}" already exists. Save this one too?`)) {
       return;
