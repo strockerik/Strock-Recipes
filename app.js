@@ -793,6 +793,21 @@
     recipeFormPanel.hidden = true;
   }
 
+  // The model occasionally double-nests a step, e.g. {text: {text: "...", group: null}, group: null}
+  // instead of {text: "...", group: null}. Drill into `.text` until we hit a
+  // string, so a stray nested object can't end up stringified as "[object Object]".
+  function flattenText(value, depth) {
+    if (typeof value === "string") return value;
+    if (value && typeof value === "object" && (depth || 0) < 5) return flattenText(value.text, (depth || 0) + 1);
+    return "";
+  }
+
+  // Only accept a real string group label — guards against the same
+  // double-nesting putting an object where a label belongs.
+  function extractedGroup(value) {
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+
   // Coerce a model-extracted amount to a number or null
   // ("1/2" → 0.5, "1 1/2" → 1.5, "2" → 2).
   function extractedAmount(value) {
@@ -830,14 +845,14 @@
     const ingredients = (Array.isArray(recipe.ingredients) ? recipe.ingredients : [])
       .map((ing) => typeof ing === "string"
         ? { amount: null, unit: null, item: ing.trim(), group: null }
-        : { amount: extractedAmount(ing?.amount), unit: ing?.unit || null, item: String(ing?.item ?? "").trim(), group: ing?.group || null })
+        : { amount: extractedAmount(ing?.amount), unit: ing?.unit || null, item: flattenText(ing?.item).trim(), group: extractedGroup(ing?.group) })
       .filter((ing) => ing.item);
     rfIngredients.innerHTML = ingredients.length ? buildRows(ingredients, ingredientRow) : ingredientRow(null);
     const method = (Array.isArray(recipe.method) ? recipe.method
       : typeof recipe.method === "string" ? recipe.method.split(/\n+/) : [])
       .map((s) => typeof s === "string"
         ? { text: s.trim(), group: null }
-        : { text: String(s?.text ?? "").trim(), group: s?.group || null })
+        : { text: flattenText(s?.text).trim(), group: extractedGroup(s?.group) })
       .filter((s) => s.text);
     rfMethod.innerHTML = method.length ? buildRows(method, (s) => stepRow(s.text)) : stepRow("");
   }
