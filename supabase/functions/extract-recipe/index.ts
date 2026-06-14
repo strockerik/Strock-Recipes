@@ -33,6 +33,9 @@ function pickModel(type: string) {
 const ANTHROPIC_VERSION = "2023-06-01";
 // Front/back of a card, or a few pages — all treated as one recipe, not a batch.
 const MAX_IMAGES = 4;
+// What Claude's vision API accepts. The browser always uploads JPEG, but this
+// endpoint takes client input, so reject anything else before paying for a call.
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -240,17 +243,24 @@ Deno.serve(async (req) => {
       if (images.length > MAX_IMAGES) return json({ error: `Please send at most ${MAX_IMAGES} photos at a time.` });
       for (const img of images) {
         if (!img?.data || !img?.mediaType) return json({ error: "No image was received." });
+        if (!ALLOWED_IMAGE_TYPES.includes(img.mediaType)) {
+          return json({ error: "Unsupported image format — use a JPEG, PNG, GIF, or WebP photo." });
+        }
       }
-      const instruction = images.length > 1
-        ? "These images are different pages or sides (e.g. the front and back of a card) of the SAME recipe. Read them together as one source and call save_recipe once with the single combined recipe."
-        : "Extract the recipe from this image by calling save_recipe.";
-      userContent = [
-        ...images.map((img: { mediaType: string; data: string }) => ({
-          type: "image",
-          source: { type: "base64", media_type: img.mediaType, data: img.data }
-        })),
-        { type: "text", text: instruction }
-      ];
+      const multi = images.length > 1;
+      // Label each image so the model can keep multi-page sources in order
+      // (front then back); a single image needs no label.
+      userContent = [];
+      images.forEach((img: { mediaType: string; data: string }, i: number) => {
+        if (multi) userContent.push({ type: "text", text: `Image ${i + 1} of ${images.length}:` });
+        userContent.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+      });
+      userContent.push({
+        type: "text",
+        text: multi
+          ? "The images above are different pages or sides (e.g. the front and back of a card) of the SAME recipe, in order. Read them together as one source and call save_recipe once with the single combined recipe."
+          : "Extract the recipe from this image by calling save_recipe."
+      });
     } else if (body.type === "text") {
       if (!body.text || !body.text.trim()) return json({ error: "No text was received." });
       userContent = [
@@ -299,8 +309,11 @@ Deno.serve(async (req) => {
         "anthropic-version": ANTHROPIC_VERSION
       },
       body: JSON.stringify({
+        // Billed on actual output, so a generous ceiling costs nothing but
+        // headroom — it stops a long multi-page recipe from truncating the
+        // tool JSON mid-generation (which would arrive as an unparseable input).
         model: pickModel(body.type),
-        max_tokens: 4096,
+        max_tokens: 8192,
         system: SYSTEM_PROMPT,
         tools: [{ name: "save_recipe", description: "Save the extracted recipe.", input_schema: RECIPE_SCHEMA }],
         tool_choice: { type: "tool", name: "save_recipe" },
@@ -320,6 +333,13 @@ Deno.serve(async (req) => {
     const anthropicData = await anthropicRes.json();
     const toolBlock = anthropicData.content?.find((c: { type: string }) => c.type === "tool_use");
     const recipe = toolBlock?.input;
+
+    // If generation hit the token ceiling the tool input is cut off — better to
+    // ask for a retry than hand the form a half-parsed recipe.
+    if (anthropicData.stop_reason === "max_tokens") {
+      console.error("extract-recipe: response truncated at max_tokens");
+      return json({ error: "That recipe was too long to read in one go — try fewer photos or split it." });
+    }
 
     if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
       return json({ error: "AI couldn’t find a recipe in that input. Try a clearer photo or paste the text." });
