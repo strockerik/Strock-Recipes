@@ -55,6 +55,7 @@
   const authStatusEl = $("#auth-status");
   const accountArea = $("#account-area");
   const accountEmailEl = $("#account-email");
+  const accountBtn = $("#account-btn");
   const signOutBtn = $("#sign-out");
   const addRecipeBtn = $("#add-recipe");
   const recipeFormPanel = $("#recipe-form-panel");
@@ -462,6 +463,8 @@
       ? `Error: ${error.message}`
       : `Check ${email} for a link to set your password.`;
   });
+
+  accountBtn.addEventListener("click", promptForNewPassword);
 
   signOutBtn.addEventListener("click", () => supabaseClient.auth.signOut());
 
@@ -976,7 +979,7 @@
 
     const name = rfName.value.trim();
     // Only warn about a clash with one of YOUR OWN recipes — byId also holds
-    // other household members' shared recipes, and a name match there isn't a
+    // recipes others have shared with you, and a name match there isn't a
     // duplicate in your book (copyToMyBook filters the same way).
     const myId = session.user.id;
     const dupe = Object.values(byId).find(
@@ -1341,7 +1344,7 @@
     refreshViews();
   });
 
-  // Shared-with-household toggle
+  // Shared-with-me toggle
   toggleSharedBtn.addEventListener("click", () => {
     sharedOnly = !sharedOnly;
     toggleSharedBtn.setAttribute("aria-pressed", String(sharedOnly));

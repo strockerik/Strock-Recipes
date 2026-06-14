@@ -62,6 +62,8 @@ safe — the anon key only permits what RLS allows. The **service-role** key
 - **Forgot password?** emails a link that returns to the app and prompts you to
   set a new password (also how you set a password the first time on an account
   that was originally created via magic link).
+- **Account** (next to Sign out, once signed in) lets you set a new password
+  without signing out.
 
 New-account behavior depends on the Supabase **Authentication → Providers →
 Email → "Confirm email"** setting: ON sends one confirmation email at signup;
@@ -79,11 +81,20 @@ Use the app — no editing JS files:
   fetches the page server-side and prefers the site's embedded schema.org
   Recipe data (JSON-LD) over raw page text — most recipe blogs have it.
   Login-walled or heavily scripted pages (Instagram, TikTok) won't fetch;
-  paste the caption text for those. Text and link extractions cost roughly half
+  paste the caption text for those. Two other categories of link can't be
+  fetched either, and the app will tell you to paste text instead:
+  **bot-protected sites** (e.g. liquor.com) — their Cloudflare-style
+  protection blocks any non-browser request outright, no matter the headers —
+  and **JS-only "app" sites** (e.g. some recipe-card apps built with
+  React/Vite) whose server response is an empty shell with no content until
+  client-side JavaScript runs. Both are fundamental limits of fetching a page
+  server-side, not bugs to retry. Text and link extractions cost roughly half
   a cent (Haiku); photo extractions a couple of cents (Sonnet, needed to read
   messy handwriting). The AI completes cut-off recipes, infers proportions when
   only ingredients are given, and ignores non-recipe clutter on the card or
   screenshot — anything it guesses shows up as an "AI added:" line in Notes.
+  Each account is capped at **20 AI extractions/day** (resets at midnight UTC)
+  to keep API costs predictable.
   - **Multiple photos, one recipe:** if a recipe spans the front and back of a
     card, or several pages, tap "Take / choose photo" for each one (up to 4) —
     a thumbnail strip with an **+ Add another photo** button appears, and
@@ -227,6 +238,56 @@ writable row from a recipe shared with them.
 > toggle stop being shared with anyone once this SQL runs (`recipe_shares`
 > starts empty) — re-share them with specific people's emails afterward.
 
+## AI extraction limit
+
+Each account can run at most **20 AI extractions/day** (any mix of photo,
+text, or link), enforced server-side so it can't be bypassed from the
+browser. The count resets at midnight UTC.
+
+**One-time setup (Supabase SQL editor)** — run once:
+
+```sql
+create table public.extraction_usage (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  usage_date date not null,
+  count int not null default 0,
+  primary key (user_id, usage_date)
+);
+alter table public.extraction_usage enable row level security;
+-- Intentionally no policies: only reachable via the SECURITY DEFINER
+-- function below (or the service role), so users can't reset or inflate
+-- their own counters directly.
+
+create or replace function public.increment_extraction_usage(daily_limit int)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  updated_count int;
+begin
+  insert into public.extraction_usage as eu (user_id, usage_date, count)
+  values (auth.uid(), (now() at time zone 'utc')::date, 1)
+  on conflict (user_id, usage_date) do update
+    set count = eu.count + 1
+    where eu.count < daily_limit
+  returning eu.count into updated_count;
+
+  if updated_count is null then
+    return -1; -- already at/over the limit, not incremented
+  end if;
+  return updated_count;
+end;
+$$;
+
+grant execute on function public.increment_extraction_usage(int) to authenticated;
+```
+
+If this SQL hasn't been run yet (or the RPC call errors for any reason), the
+Edge Function fails open — extraction proceeds without a cap rather than
+breaking.
+
 ## Edge Function deployment (AI)
 
 `extract-recipe` is deployed via the Supabase dashboard (Edge Functions → the
@@ -245,12 +306,6 @@ module 'jsr:…'") because its TypeScript server type-checks the file as Node
 code. They're cosmetic — the function runs on Supabase's Deno runtime, where
 both resolve fine. Installing the official Deno VSCode extension (with
 `deno.enablePaths: ["supabase/functions"]`) silences them.
-
-> **Pending redeploy:** photo extraction now sends `{ type: "image", images:
-> [...] }` (one or more photos of the same recipe) instead of a single
-> `data`/`mediaType` pair, so AI photo extraction won't work until you paste
-> the current `index.ts` into the dashboard editor and hit **Deploy**. Text
-> and link extraction are unaffected.
 
 ## Grocery list → Google Keep
 

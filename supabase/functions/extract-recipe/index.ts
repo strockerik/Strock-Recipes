@@ -27,6 +27,8 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 // model to read reliably; the extra cost (~1-2 cents) is worth it there.
 const MODEL_TEXT = "claude-haiku-4-5-20251001";
 const MODEL_VISION = "claude-sonnet-4-6";
+// Soft per-user cap on paid Anthropic calls, enforced via increment_extraction_usage().
+const DAILY_EXTRACTION_LIMIT = 20;
 function pickModel(type: string) {
   return type === "image" ? MODEL_VISION : MODEL_TEXT;
 }
@@ -197,6 +199,25 @@ function findRecipeNode(node: unknown): unknown {
   return null;
 }
 
+// Cloudflare and similar bot-protection services serve a small JS-challenge
+// page ("Just a moment...") instead of the real content — sometimes with a
+// non-200 status, sometimes with 200. Either way the fetch "succeeded" but
+// there's nothing to extract, so give a specific, actionable error.
+function looksLikeBotChallenge(html: string): boolean {
+  const head = html.slice(0, 4000);
+  return /Just a moment|Enable JavaScript and cookies to continue|Checking your browser before accessing|cf-browser-verification|cf_chl_opt/i.test(head);
+}
+
+// Some recipe sites are client-rendered apps (React/Vite/Next): the server
+// sends an near-empty shell (a root mount point + bundled <script> tags) and
+// the real content is fetched by the browser's JS after load, which a
+// server-side fetch never runs.
+function looksLikeEmptyAppShell(html: string): boolean {
+  const hasAppRoot = /<div[^>]+id=["'](root|app|__next)["']/i.test(html);
+  const text = htmlToText(html);
+  return hasAppRoot && text.length < 200;
+}
+
 // Crude but dependency-free HTML → text, for pages without Recipe JSON-LD.
 function htmlToText(html: string): string {
   return html
@@ -280,15 +301,24 @@ Deno.serve(async (req) => {
             "Accept": "text/html,application/xhtml+xml"
           }
         });
-        if (!pageRes.ok) throw new Error(`status ${pageRes.status}`);
         html = await pageRes.text();
+        // A non-OK status is usually a real "couldn't load it" — unless the
+        // body is a bot-challenge page, which the check below handles with a
+        // more specific message regardless of status code.
+        if (!pageRes.ok && !looksLikeBotChallenge(html)) throw new Error(`status ${pageRes.status}`);
       } catch (fetchErr) {
         console.error("URL fetch failed:", url.href, fetchErr);
         return json({ error: "Couldn’t load that page — the site may block robots. Copy the recipe text and paste it instead." });
       }
+      if (looksLikeBotChallenge(html)) {
+        return json({ error: "This site’s bot-protection is blocking automatic access — copy the recipe text and paste it instead." });
+      }
       const jsonLd = findJsonLdRecipe(html);
       const content = (jsonLd ? JSON.stringify(jsonLd) : htmlToText(html)).slice(0, MAX_PAGE_CHARS);
       if (content.length < 80) {
+        if (looksLikeEmptyAppShell(html)) {
+          return json({ error: "This page loads its recipe with JavaScript, so there’s no readable text without it — copy the recipe text and paste it instead." });
+        }
         return json({ error: "Couldn’t find readable recipe text on that page — paste the text instead." });
       }
       userContent = [
@@ -300,6 +330,16 @@ Deno.serve(async (req) => {
     } else {
       return json({ error: "Invalid request." });
     }
+
+    // Enforce the per-user daily cap right before the paid call, so requests
+    // that fail validation above never consume quota. Fails open (logs and
+    // proceeds) if the SQL migration for this hasn't been run yet.
+    const { data: usageResult, error: usageError } = await supabaseClient
+      .rpc("increment_extraction_usage", { daily_limit: DAILY_EXTRACTION_LIMIT });
+    if (!usageError && usageResult === -1) {
+      return json({ error: `You’ve used today’s ${DAILY_EXTRACTION_LIMIT} AI recipe extractions — it resets at midnight UTC. Try again tomorrow, or add this one manually.` });
+    }
+    if (usageError) console.error("extraction_usage check failed:", usageError);
 
     const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
