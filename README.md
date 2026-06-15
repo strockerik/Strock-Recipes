@@ -198,19 +198,30 @@ create table public.recipe_shares (
 );
 alter table public.recipe_shares enable row level security;
 
+-- SECURITY DEFINER helpers: a policy on recipe_shares needs to check recipes
+-- (and vice-versa). Calling the other table inline makes each table's RLS
+-- invoke the other's, which Postgres rejects as "infinite recursion detected
+-- in policy". These helpers read the other table WITHOUT re-triggering its RLS,
+-- breaking the cycle. Empty search_path keeps them locked down.
+create or replace function public.owns_recipe(rid uuid)
+returns boolean language sql security definer set search_path = '' stable as $$
+  select exists (select 1 from public.recipes where id = rid and user_id = auth.uid());
+$$;
+grant execute on function public.owns_recipe(uuid) to authenticated;
+
+create or replace function public.recipe_shared_with_me(rid uuid)
+returns boolean language sql security definer set search_path = '' stable as $$
+  select exists (select 1 from public.recipe_shares where recipe_id = rid and shared_with_user_id = auth.uid());
+$$;
+grant execute on function public.recipe_shared_with_me(uuid) to authenticated;
+
 -- Owners can create/view/delete shares for recipes they own. The `with check`
--- subquery stops anyone from "sharing" a recipe_id they don't actually own.
+-- (via owns_recipe) stops anyone from "sharing" a recipe_id they don't own.
 create policy "owners manage shares on their recipes"
   on public.recipe_shares for all
   to authenticated
   using (shared_by_user_id = auth.uid())
-  with check (
-    shared_by_user_id = auth.uid()
-    and exists (
-      select 1 from public.recipes r
-      where r.id = recipe_id and r.user_id = auth.uid()
-    )
-  );
+  with check (shared_by_user_id = auth.uid() and public.owns_recipe(recipe_id));
 
 -- Recipients can see shares directed at them (drives "Shared by X" lookups).
 create policy "recipients view shares directed at them"
@@ -223,12 +234,7 @@ create policy "recipients view shares directed at them"
 create policy "recipes shared with you are viewable"
   on public.recipes for select
   to authenticated
-  using (
-    exists (
-      select 1 from public.recipe_shares rs
-      where rs.recipe_id = recipes.id and rs.shared_with_user_id = auth.uid()
-    )
-  );
+  using (public.recipe_shared_with_me(id));
 
 -- 5. Email -> user id lookup for the "share with..." flow. SECURITY DEFINER +
 -- empty search_path so it can read auth.users without granting broad access;
@@ -248,6 +254,36 @@ grant execute on function public.lookup_user_id_by_email(text) to authenticated;
 The existing owner-only policy for insert/update/delete on `recipes` is
 untouched, so "Copy to my book" is still the only way another user gets a
 writable row from a recipe shared with them.
+
+> **Already set up sharing and seeing "infinite recursion detected in policy
+> for relation recipe_shares"?** You ran an earlier version whose policies
+> referenced each other's table inline. Run this once to switch to the
+> recursion-free helper form:
+>
+> ```sql
+> create or replace function public.owns_recipe(rid uuid)
+> returns boolean language sql security definer set search_path = '' stable as $$
+>   select exists (select 1 from public.recipes where id = rid and user_id = auth.uid());
+> $$;
+> grant execute on function public.owns_recipe(uuid) to authenticated;
+>
+> create or replace function public.recipe_shared_with_me(rid uuid)
+> returns boolean language sql security definer set search_path = '' stable as $$
+>   select exists (select 1 from public.recipe_shares where recipe_id = rid and shared_with_user_id = auth.uid());
+> $$;
+> grant execute on function public.recipe_shared_with_me(uuid) to authenticated;
+>
+> drop policy if exists "owners manage shares on their recipes" on public.recipe_shares;
+> create policy "owners manage shares on their recipes"
+>   on public.recipe_shares for all to authenticated
+>   using (shared_by_user_id = auth.uid())
+>   with check (shared_by_user_id = auth.uid() and public.owns_recipe(recipe_id));
+>
+> drop policy if exists "recipes shared with you are viewable" on public.recipes;
+> create policy "recipes shared with you are viewable"
+>   on public.recipes for select to authenticated
+>   using (public.recipe_shared_with_me(id));
+> ```
 
 > **Note:** recipes previously shared via the old "share with household"
 > toggle stop being shared with anyone once this SQL runs (`recipe_shares`

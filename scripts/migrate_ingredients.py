@@ -8,6 +8,11 @@ vague, unmeasured amount ("a decent knob of butter", "a large handful of frozen
 peas"): it asks Claude Haiku for a concrete amount + unit and a clean item name.
 Every other ingredient is left exactly as stored.
 
+Common phrases ("a knob of butter", "a handful of …", "a splash", "a drizzle")
+are resolved by a built-in table, so NO API key is needed for them. An
+ANTHROPIC_API_KEY (optional) is only used to handle any unusual phrase the table
+doesn't cover.
+
 Safe by default: runs as a DRY RUN that only prints a before/after diff.
 Pass --apply to actually PATCH the changed rows. Idempotent — re-running after
 an --apply changes nothing (the amounts are no longer null).
@@ -102,8 +107,41 @@ def sb_request(method, path, body=None):
         return json.loads(raw) if raw else None
 
 
+# Deterministic quantities for the common vague phrases — so the script works
+# with NO API key. Each entry: (regex on the phrase) -> (amount, unit).
+COMMON_VAGUE = [
+    (re.compile(r"\bknob\b", re.I), 2, "tbsp"),
+    (re.compile(r"\b(large |small )?handful\b", re.I), 1, "cup"),
+    (re.compile(r"\bsplash\b", re.I), 1, "tbsp"),
+    (re.compile(r"\bdrizzle\b", re.I), 1, "tbsp"),
+]
+QUALIFIERS_RE = re.compile(
+    r"^\s*(a|an|the)\s+|(decent|large|small|good|generous|big|nice|hefty)\s+|"
+    r"\b(knob|handful|splash|drizzle)\b\s*(of\s+)?",
+    re.I,
+)
+
+
+def guess_quantity(item: str):
+    """Resolve a common vague phrase to {amount, unit, item} with no LLM call.
+
+    "a decent knob of butter" -> {2, tbsp, butter};
+    "a large handful of frozen peas" -> {1, cup, frozen peas}.
+    """
+    for rx, amount, unit in COMMON_VAGUE:
+        if rx.search(item):
+            m = re.search(r"\bof\s+(.+)$", item, re.I)
+            food = m.group(1) if m else QUALIFIERS_RE.sub("", item)
+            food = strip_prep(food).strip(" .,")
+            return {"amount": amount, "unit": unit, "item": food or item}
+    return None
+
+
 def quantify(item: str):
-    """Ask Claude Haiku for {amount, unit, item} for a vague ingredient."""
+    """Try the no-key table first, then Claude Haiku if a key is set."""
+    g = guess_quantity(item)
+    if g:
+        return g
     if not ANTHROPIC_KEY:
         return None
     prompt = (
@@ -174,7 +212,8 @@ def main():
     mode = "APPLIED" if APPLY else "DRY RUN (no writes — pass --apply to write)"
     print(f"\n{mode}: {changed} recipe(s) would change of {len(recipes)} total.")
     if not ANTHROPIC_KEY:
-        print("Note: ANTHROPIC_API_KEY not set — vague amounts were left unquantified.")
+        print("(No ANTHROPIC_API_KEY set — common phrases were handled by the built-in "
+              "table; any '! could not quantify' lines above need a key or a manual edit.)")
 
 
 if __name__ == "__main__":
