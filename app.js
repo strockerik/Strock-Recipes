@@ -237,6 +237,56 @@
     return PANTRY_STAPLE_RE.test(nameLower);
   }
 
+  // ---------- Grocery store aisle categorization ----------
+  // Keyword buckets that sort the combined shopping list into store sections.
+  // Rules are tested in array order and the first match wins, so conflict-prone
+  // buckets come before the fresh aisles they could otherwise steal from:
+  // Frozen before Produce ("frozen peas" -> Frozen), Canned before Meat/Dairy
+  // ("chicken broth" -> Canned, "coconut milk" -> Canned). Word boundaries (\b)
+  // keep e.g. "gin" out of "ginger" and "ale" out of "kale". Anything unmatched
+  // falls to "Other". It's a heuristic on free-text ingredient names, not a
+  // product database, so the odd item lands a shelf over — easy to eyeball.
+  const GROCERY_CATEGORY_RULES = [
+    { name: "Frozen", terms: ["frozen", "ice cream", "gelato", "sherbet", "popsicle", "tater tot", "tater tots"] },
+    { name: "Canned & Jarred", terms: ["canned", "broth", "stock", "bouillon", "condensed", "cream of", "soup", "tomato sauce", "tomato paste", "tomato puree", "crushed tomato", "crushed tomatoes", "diced tomato", "diced tomatoes", "stewed tomato", "marinara", "pasta sauce", "coconut milk", "evaporated milk", "sweetened condensed", "black bean", "black beans", "kidney bean", "kidney beans", "pinto bean", "pinto beans", "white bean", "white beans", "navy bean", "cannellini", "garbanzo", "chickpea", "chickpeas", "refried", "baked bean", "baked beans", "olives", "pickle", "pickles", "relish", "salsa", "jam", "jelly", "preserves", "enchilada sauce", "green chile", "green chiles", "green chilies", "water chestnut", "water chestnuts", "artichoke heart", "artichoke hearts", "roasted red pepper", "anchovy", "anchovies", "capers", "jarred", "applesauce", "pumpkin puree", "canned tuna"] },
+    { name: "Bakery", terms: ["bread", "tortilla", "tortillas", "bun", "buns", "bagel", "bagels", "pita", "baguette", "roll", "rolls", "croissant", "naan", "english muffin", "pie crust", "pizza dough", "biscuit", "biscuits", "focaccia", "dinner roll", "hamburger bun", "hot dog bun"] },
+    { name: "Produce", terms: ["onion", "onions", "garlic", "tomato", "tomatoes", "potato", "potatoes", "carrot", "carrots", "celery", "lettuce", "romaine", "spinach", "kale", "arugula", "chard", "broccoli", "cauliflower", "cucumber", "cucumbers", "zucchini", "squash", "pumpkin", "butternut", "mushroom", "mushrooms", "cremini", "portobello", "shiitake", "bell pepper", "bell peppers", "jalapeno", "jalapeño", "serrano", "poblano", "lemon", "lemons", "lime", "limes", "orange", "oranges", "apple", "apples", "banana", "bananas", "berry", "berries", "strawberry", "strawberries", "blueberry", "blueberries", "raspberry", "raspberries", "grape", "grapes", "avocado", "avocados", "ginger", "cilantro", "parsley", "basil", "mint", "thyme", "rosemary", "sage", "dill", "scallion", "scallions", "green onion", "green onions", "shallot", "shallots", "leek", "leeks", "corn", "cabbage", "eggplant", "asparagus", "green bean", "green beans", "snap pea", "snap peas", "peas", "sweet potato", "sweet potatoes", "yam", "beet", "beets", "radish", "turnip", "parsnip", "fennel", "herbs", "pineapple", "mango", "peach", "peaches", "pear", "pears", "cherry", "cherries", "cranberry", "cranberries", "melon", "watermelon", "sprouts", "bok choy"] },
+    { name: "Meat & Seafood", terms: ["chicken", "beef", "pork", "bacon", "sausage", "sausages", "ham", "turkey", "lamb", "steak", "steaks", "mince", "ground beef", "ground turkey", "ground pork", "ground chicken", "ground meat", "salmon", "tuna", "shrimp", "prawn", "prawns", "fish", "cod", "tilapia", "halibut", "crab", "lobster", "scallop", "scallops", "chorizo", "prosciutto", "pancetta", "ribs", "brisket", "veal", "duck", "meatball", "meatballs", "filet", "fillet", "tenderloin", "sirloin", "ribeye", "chuck roast", "wings", "drumstick", "drumsticks", "thigh", "thighs", "chicken breast", "pepperoni", "salami", "bratwurst", "hot dog", "hot dogs"] },
+    { name: "Dairy & Eggs", terms: ["milk", "cheese", "cheddar", "mozzarella", "parmesan", "parmigiano", "feta", "ricotta", "gouda", "swiss cheese", "provolone", "monterey jack", "pepper jack", "cream cheese", "sour cream", "heavy cream", "whipping cream", "half and half", "yogurt", "yoghurt", "egg", "eggs", "margarine", "buttermilk", "cottage cheese", "mascarpone", "creme fraiche", "almond milk", "oat milk", "soy milk", "cream"] },
+    { name: "Dry Goods & Baking", terms: ["flour", "sugar", "brown sugar", "powdered sugar", "confectioners", "rice", "pasta", "spaghetti", "penne", "macaroni", "fettuccine", "linguine", "noodle", "noodles", "oat", "oats", "oatmeal", "quinoa", "lentil", "lentils", "couscous", "barley", "cornmeal", "cornstarch", "corn starch", "baking powder", "baking soda", "yeast", "cocoa", "vanilla", "almond extract", "chocolate chip", "chocolate chips", "chocolate", "nut", "nuts", "almond", "almonds", "walnut", "walnuts", "pecan", "pecans", "cashew", "cashews", "peanut", "peanuts", "raisin", "raisins", "honey", "maple syrup", "syrup", "molasses", "breadcrumb", "breadcrumbs", "panko", "cereal", "granola", "cracker", "crackers", "gelatin", "shortening", "split pea", "polenta", "grits", "sesame seed", "sesame seeds", "chia", "flax", "sunflower seed", "shredded coconut", "coconut flake", "marshmallow", "marshmallows", "sprinkles", "cake mix", "pancake mix", "baking mix"] },
+    { name: "Condiments, Sauces & Spices", terms: ["salt", "pepper", "peppercorn", "soy sauce", "worcestershire", "fish sauce", "oyster sauce", "hoisin", "sriracha", "hot sauce", "tabasco", "ketchup", "catsup", "mustard", "mayo", "mayonnaise", "vinegar", "oil", "olive oil", "vegetable oil", "canola", "sesame oil", "cooking spray", "dressing", "ranch", "bbq sauce", "barbecue sauce", "teriyaki", "gravy", "pesto", "tahini", "miso", "gochujang", "sambal", "harissa", "horseradish", "spice", "spices", "cumin", "paprika", "cinnamon", "nutmeg", "oregano", "garlic powder", "onion powder", "chili powder", "cayenne", "turmeric", "curry", "coriander", "cardamom", "clove", "cloves", "allspice", "bay leaf", "bay leaves", "red pepper flake", "red pepper flakes", "italian seasoning", "seasoning", "garam masala", "extract", "mustard seed", "sea salt", "kosher salt", "taco seasoning", "sauce"] },
+    { name: "Beverages", terms: ["wine", "beer", "ale", "lager", "cider", "soda", "cola", "tonic", "club soda", "sparkling water", "seltzer", "coffee", "espresso", "tea", "rum", "vodka", "gin", "tequila", "whiskey", "whisky", "bourbon", "brandy", "vermouth", "liqueur", "triple sec", "champagne", "prosecco", "sake", "lemonade"] }
+  ];
+  const GROCERY_CATEGORY_RE = GROCERY_CATEGORY_RULES.map((c) => ({
+    name: c.name,
+    re: new RegExp(`\\b(?:${c.terms.join("|")})\\b`, "i")
+  }));
+  const OTHER_CATEGORY = "Other";
+  // Store-walk order for display (independent of the match-priority order
+  // above); empty sections are skipped, "Other" is always last.
+  const GROCERY_CATEGORY_ORDER = ["Produce", "Bakery", "Meat & Seafood", "Dairy & Eggs", "Frozen", "Canned & Jarred", "Dry Goods & Baking", "Condiments, Sauces & Spices", "Beverages", OTHER_CATEGORY];
+
+  function categorizeGrocery(nameLower) {
+    for (const c of GROCERY_CATEGORY_RE) {
+      if (c.re.test(nameLower)) return c.name;
+    }
+    return OTHER_CATEGORY;
+  }
+
+  // Group a flat combined-grocery list into store sections, in walk order,
+  // skipping any section with no items.
+  function groceryByCategory(items) {
+    const buckets = new Map();
+    items.forEach((it) => {
+      const cat = categorizeGrocery(it.item.toLowerCase());
+      if (!buckets.has(cat)) buckets.set(cat, []);
+      buckets.get(cat).push(it);
+    });
+    return GROCERY_CATEGORY_ORDER
+      .filter((cat) => buckets.has(cat))
+      .map((cat) => ({ category: cat, items: buckets.get(cat) }));
+  }
+
   // ---------- Data loading (Supabase) ----------
   function mapRecipe(row) {
     return {
@@ -684,18 +734,20 @@
   }
 
   function renderGroceryPanel() {
-    const items = combinedGroceryItems();
-    const itemsHtml = items.length
-      ? items.map((it) => {
-          const checked = checkedGroceryItems.has(it.key);
-          const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + it.unit : "");
-          return `<li class="${checked ? "is-checked" : ""}">
-            <label class="g-item">
-              <input type="checkbox" class="g-item-check" data-key="${esc(it.key)}" ${checked ? "checked" : ""}>
-              <span class="ing-amt">${esc(amtStr)}</span><span>${esc(it.item)}</span>
-            </label>
-          </li>`;
-        }).join("")
+    const sections = groceryByCategory(combinedGroceryItems());
+    const itemsHtml = sections.length
+      ? sections.map((sec) => `
+          <li class="g-category">${esc(sec.category)}</li>
+          ${sec.items.map((it) => {
+            const checked = checkedGroceryItems.has(it.key);
+            const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + it.unit : "");
+            return `<li class="${checked ? "is-checked" : ""}">
+              <label class="g-item">
+                <input type="checkbox" class="g-item-check" data-key="${esc(it.key)}" ${checked ? "checked" : ""}>
+                <span class="ing-amt">${esc(amtStr)}</span><span>${esc(it.item)}</span>
+              </label>
+            </li>`;
+          }).join("")}`).join("")
       : `<p class="g-empty">Nothing to buy \u2014 try turning off "Skip pantry staples".</p>`;
 
     groceryContent.innerHTML = `
@@ -720,12 +772,16 @@
   function groceryText() {
     const date = new Date().toLocaleDateString();
     let out = `Grocery list \u2014 ${date}\n\n`;
-    combinedGroceryItems().forEach((it) => {
-      const box = checkedGroceryItems.has(it.key) ? "\u2611" : "\u2610";
-      const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + it.unit : "") + " ";
-      out += `${box} ${amtStr}${it.item}\n`;
+    groceryByCategory(combinedGroceryItems()).forEach((sec) => {
+      out += `${sec.category.toUpperCase()}\n`;
+      sec.items.forEach((it) => {
+        const box = checkedGroceryItems.has(it.key) ? "\u2611" : "\u2610";
+        const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + it.unit : "") + " ";
+        out += `${box} ${amtStr}${it.item}\n`;
+      });
+      out += `\n`;
     });
-    out += `\nRecipes:\n`;
+    out += `Recipes:\n`;
     groceryGroups().forEach((g) => {
       out += `\u2022 ${g.name} (${g.servings} ${g.label})\n`;
     });
