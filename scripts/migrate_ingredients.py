@@ -108,33 +108,35 @@ def sb_request(method, path, body=None):
 
 
 # Deterministic quantities for the common vague phrases — so the script works
-# with NO API key. Each entry: (regex on the phrase) -> (amount, unit).
-COMMON_VAGUE = [
-    (re.compile(r"\bknob\b", re.I), 2, "tbsp"),
-    (re.compile(r"\b(large |small )?handful\b", re.I), 1, "cup"),
-    (re.compile(r"\bsplash\b", re.I), 1, "tbsp"),
-    (re.compile(r"\bdrizzle\b", re.I), 1, "tbsp"),
-]
-QUALIFIERS_RE = re.compile(
-    r"^\s*(a|an|the)\s+|(decent|large|small|good|generous|big|nice|hefty)\s+|"
-    r"\b(knob|handful|splash|drizzle)\b\s*(of\s+)?",
+# with NO API key. Only fires when the item STARTS with the vague measure
+# (e.g. "a decent knob of butter"), so a "knob"/"handful" buried mid-sentence
+# in a larger descriptive item is left for a human, not mangled.
+VAGUE_AMOUNTS = {"knob": (2, "tbsp"), "handful": (1, "cup"), "splash": (1, "tbsp"), "drizzle": (1, "tbsp")}
+LEADING_VAGUE_RE = re.compile(
+    r"^\s*(?:a|an|the)?\s*(?:decent|large|small|good|generous|big|nice|hefty)?\s*"
+    r"(knob|handful|splash|drizzle)\b",
     re.I,
 )
 
 
 def guess_quantity(item: str):
-    """Resolve a common vague phrase to {amount, unit, item} with no LLM call.
+    """Resolve a leading vague phrase to {amount, unit, item} with no LLM call.
 
     "a decent knob of butter" -> {2, tbsp, butter};
-    "a large handful of frozen peas" -> {1, cup, frozen peas}.
+    "a handful of cherry tomatoes (whole, for the pan)" -> {1, cup, cherry tomatoes}.
+    Returns None (leave it for the LLM / a human) if the item doesn't *start*
+    with a vague measure.
     """
-    for rx, amount, unit in COMMON_VAGUE:
-        if rx.search(item):
-            m = re.search(r"\bof\s+(.+)$", item, re.I)
-            food = m.group(1) if m else QUALIFIERS_RE.sub("", item)
-            food = strip_prep(food).strip(" .,")
-            return {"amount": amount, "unit": unit, "item": food or item}
-    return None
+    m = LEADING_VAGUE_RE.match(item)
+    if not m:
+        return None
+    amount, unit = VAGUE_AMOUNTS[m.group(1).lower()]
+    after = re.search(r"\bof\s+(.+)$", item, re.I)
+    food = after.group(1) if after else item[m.end():]
+    food = re.sub(r"\([^)]*\)", " ", food)   # drop parentheticals (no dangling "(")
+    food = strip_prep(food).strip(" .,")
+    food = re.sub(r"\s+", " ", food)
+    return {"amount": amount, "unit": unit, "item": food or item}
 
 
 def quantify(item: str):
