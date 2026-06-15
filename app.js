@@ -787,7 +787,8 @@
         <button class="ghost-btn small edit-recipe" data-id="${esc(it.id)}">Edit</button>
         <button class="ghost-btn small delete-recipe-btn" data-id="${esc(it.id)}">Delete</button>
         <button class="ghost-btn small share-toggle-btn${openShareIds.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${shareButtonLabel(it)}</button>` : `
-        <button class="ghost-btn small copy-to-book-btn" data-id="${esc(it.id)}">📋 Copy to my book</button>`}
+        <button class="ghost-btn small copy-to-book-btn" data-id="${esc(it.id)}">📋 Copy to my book</button>
+        <button class="ghost-btn small remove-shared-btn" data-id="${esc(it.id)}">Remove</button>`}
       </div>
       ${mine && openShareIds.has(it.id) ? renderSharePanel(it) : ""}
     </div>`;
@@ -1453,6 +1454,22 @@
     renderList();
   }
 
+  // A recipient dismissing a recipe shared with them: delete the share row that
+  // points at them. Doesn't touch the owner's recipe (RLS only lets you delete
+  // a share where shared_with_user_id = you).
+  async function removeSharedWithMe(item) {
+    if (!session) { toast("You've been signed out — sign in again."); return; }
+    if (!confirm(`Remove “${item.name}” from your shared recipes? This only removes it from your list — the owner keeps their copy.`)) return;
+    const { error } = await supabaseClient.from("recipe_shares")
+      .delete()
+      .eq("recipe_id", item.id)
+      .eq("shared_with_user_id", session.user.id);
+    if (error) { toast(`Couldn’t remove: ${error.message}`); return; }
+    openItems.delete(item.id);
+    await loadData();
+    toast("Removed from your shared recipes.");
+  }
+
   async function copyToMyBook(item) {
     if (!session) { toast("You've been signed out — sign in again."); return; }
     const name = item.name;
@@ -1813,6 +1830,11 @@
 
     if (e.target.closest(".copy-to-book-btn")) {
       copyToMyBook(byId[id]);
+      return;
+    }
+
+    if (e.target.closest(".remove-shared-btn")) {
+      removeSharedWithMe(byId[id]);
       return;
     }
 

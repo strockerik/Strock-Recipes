@@ -229,6 +229,14 @@ create policy "recipients view shares directed at them"
   to authenticated
   using (shared_with_user_id = auth.uid());
 
+-- Recipients can dismiss a recipe shared with them (delete their own share
+-- row). This only removes it from their "Shared with me" list — the owner's
+-- recipe is untouched.
+create policy "recipients can remove a share directed at them"
+  on public.recipe_shares for delete
+  to authenticated
+  using (shared_with_user_id = auth.uid());
+
 -- 4. A recipe is visible if you own it (existing policy, unchanged) or it has
 -- been explicitly shared with you.
 create policy "recipes shared with you are viewable"
