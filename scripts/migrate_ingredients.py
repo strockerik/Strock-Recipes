@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""One-time migration: clean stored recipe ingredient names.
+"""One-time migration: quantify vague recipe ingredient amounts.
 
-For every recipe in Supabase it:
-  1. Strips prep instructions from each ingredient `item` ("carrots, diced"
-     -> "carrots", "potatoes, peeled and chopped" -> "potatoes"), keeping
-     product-form adjectives ("peeled tomatoes", "shredded mozzarella") and
-     non-prep comma clauses ("boneless, skinless chicken"). Same rule as the
-     front-end `displayGroceryName` in app.js.
-  2. Quantifies vague amounts (amount is null AND the item reads like
-     "a knob of butter" / "a large handful of frozen peas") by asking Claude
-     Haiku for a concrete amount + unit, and cleans the item text.
+Prep notes (e.g. "carrots, diced") are intentionally LEFT IN PLACE — the recipe
+and Cook views need them, and the grocery list already strips them at display
+time (app.js `displayGroceryName`). This script only touches ingredients with a
+vague, unmeasured amount ("a decent knob of butter", "a large handful of frozen
+peas"): it asks Claude Haiku for a concrete amount + unit and a clean item name.
+Every other ingredient is left exactly as stored.
 
 Safe by default: runs as a DRY RUN that only prints a before/after diff.
 Pass --apply to actually PATCH the changed rows. Idempotent — re-running after
-an --apply changes nothing.
+an --apply changes nothing (the amounts are no longer null).
 
 Credentials (never hard-code): read from environment, falling back to the
 gitignored notes.md for the Supabase values.
@@ -148,29 +145,29 @@ def main():
         ings = r.get("ingredients") or []
         new_ings = []
         diffs = []
+        recipe_changed = False
         for ing in ings:
-            ni = dict(ing)
             orig = ing.get("item") or ""
             if is_vague(ing):
                 q = quantify(orig)
                 if q:
+                    ni = dict(ing)
                     ni["amount"] = q.get("amount", ni.get("amount"))
                     ni["unit"] = q.get("unit", ni.get("unit"))
                     ni["item"] = strip_prep(q.get("item") or orig)
-                    diffs.append(f"    ~ {orig!r} -> {ni['amount']} {ni['unit'] or ''} {ni['item']!r} (LLM)")
+                    diffs.append(f"    ~ {orig!r} -> {ni['amount']} {ni['unit'] or ''} {ni['item']!r}")
+                    new_ings.append(ni)
+                    recipe_changed = True
                 else:
-                    ni["item"] = strip_prep(orig)
-                    if ni["item"] != orig:
-                        diffs.append(f"    ~ {orig!r} -> {ni['item']!r}")
+                    diffs.append(f"    ! could not quantify {orig!r} (left as-is)")
+                    new_ings.append(ing)
             else:
-                ni["item"] = strip_prep(orig)
-                if ni["item"] != orig:
-                    diffs.append(f"    ~ {orig!r} -> {ni['item']!r}")
-            new_ings.append(ni)
+                new_ings.append(ing)  # untouched — prep notes stay
         if diffs:
-            changed += 1
             print(f"\n{r['name']}:")
             print("\n".join(diffs))
+        if recipe_changed:
+            changed += 1
             if APPLY:
                 sb_request("PATCH", f"/rest/v1/recipes?id=eq.{r['id']}", {"ingredients": new_ings})
                 print("    -> applied")
