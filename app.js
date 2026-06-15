@@ -225,21 +225,31 @@
     return { amount, family: null, unit: UNIT_SYNONYMS[u] || u };
   }
 
-  // Convert a combined canonical quantity to what's sold at a US grocery store.
+  const ceilToQuarter = (n) => Math.ceil(n * 4) / 4;
+  const ceilToHalf = (n) => Math.ceil(n * 2) / 2;
+
+  // Convert a combined canonical quantity to what's sold at a US grocery store,
+  // rounded UP to a practical increment so the list never has you under-buy:
+  // weights to the nearest ¼ oz/lb, volumes to ¼ cup / ½ tbsp / ¼ tsp, and
+  // loose counts to a whole number (you can't buy 1.3 onions).
   function shoppableQuantity(amount, family, unit) {
     if (amount == null) return { amount: null, unit };
     if (family === "weight") {
-      if (amount < MIN_SHOPPABLE_GRAMS) return { amount, unit: "g" };
-      const oz = amount / G_PER_OZ;
-      return oz >= 16 ? { amount: oz / 16, unit: "lb" } : { amount: oz, unit: "oz" };
+      if (amount < MIN_SHOPPABLE_GRAMS) return { amount: Math.round(amount), unit: "g" };
+      const ozUp = ceilToQuarter(amount / G_PER_OZ);
+      return ozUp >= 16
+        ? { amount: ceilToQuarter(amount / G_PER_LB), unit: "lb" }
+        : { amount: ozUp, unit: "oz" };
     }
     if (family === "volume") {
       const cups = amount / ML_PER_CUP;
-      if (cups >= 0.2) return { amount: cups, unit: "cup" };
+      if (cups >= 0.2) return { amount: ceilToQuarter(cups), unit: "cup" };
       const tbsp = amount / ML_PER_TBSP;
-      return tbsp >= 1 ? { amount: tbsp, unit: "tbsp" } : { amount: amount / ML_PER_TSP, unit: "tsp" };
+      return tbsp >= 1
+        ? { amount: ceilToHalf(tbsp), unit: "tbsp" }
+        : { amount: ceilToQuarter(amount / ML_PER_TSP), unit: "tsp" };
     }
-    return { amount, unit };
+    return { amount: Math.ceil(amount), unit };
   }
 
   // Convert an ingredient amount into a target unit system for the per-recipe
@@ -308,6 +318,19 @@
     return s.replace(/\s+/g, " ").trim();
   }
 
+  // The name shown on the grocery list: keep the original wording, casing, and
+  // product adjectives ("peeled tomatoes", "floury potatoes"), but drop prep
+  // instructions the shopper doesn't need ("carrots, diced" -> "carrots",
+  // "potatoes, peeled and chopped" -> "potatoes", "olive oil — a splash" ->
+  // "olive oil"). Comma clauses that aren't prep ("boneless, skinless chicken")
+  // are left intact.
+  function displayGroceryName(item) {
+    let s = String(item).trim();
+    s = s.split(/\s[—–-]\s/)[0];          // drop a trailing dash note
+    s = s.replace(PREP_CLAUSE_RE, "");    // drop known prep clauses
+    return s.replace(/\s+/g, " ").replace(/[\s,]+$/, "").trim();
+  }
+
   // ---------- Grocery store aisle categorization ----------
   // Keyword buckets that sort the combined shopping list into store sections.
   // Rules are tested in array order and the first match wins, so conflict-prone
@@ -327,7 +350,7 @@
     // rule's bare "butter" term so "peanut butter" doesn't land in Dairy.
     { name: "Dry Goods & Baking", terms: ["peanut butter", "almond butter", "cashew butter", "sunflower butter", "sunflower seed butter", "nut butter", "cocoa butter"] },
     { name: "Dairy & Eggs", terms: ["milk", "butter", "cheese", "cheddar", "mozzarella", "parmesan", "parmigiano", "feta", "ricotta", "gouda", "swiss cheese", "provolone", "monterey jack", "pepper jack", "cream cheese", "sour cream", "heavy cream", "whipping cream", "half and half", "yogurt", "yoghurt", "egg", "eggs", "margarine", "buttermilk", "cottage cheese", "mascarpone", "creme fraiche", "almond milk", "oat milk", "soy milk", "cream", "burrata", "pecorino", "romano", "gruyere", "gruyère", "asiago", "manchego", "brie", "camembert", "havarti", "queso", "cotija", "halloumi", "paneer"] },
-    { name: "Dry Goods & Baking", terms: ["flour", "sugar", "brown sugar", "powdered sugar", "confectioners", "rice", "pasta", "spaghetti", "penne", "macaroni", "fettuccine", "linguine", "noodle", "noodles", "oat", "oats", "oatmeal", "quinoa", "lentil", "lentils", "couscous", "barley", "cornmeal", "cornstarch", "corn starch", "baking powder", "baking soda", "yeast", "cocoa", "vanilla", "almond extract", "chocolate chip", "chocolate chips", "chocolate", "nut", "nuts", "almond", "almonds", "walnut", "walnuts", "pecan", "pecans", "cashew", "cashews", "peanut", "peanuts", "raisin", "raisins", "honey", "maple syrup", "syrup", "molasses", "breadcrumb", "breadcrumbs", "panko", "cereal", "granola", "cracker", "crackers", "gelatin", "shortening", "split pea", "polenta", "grits", "sesame seed", "sesame seeds", "chia", "flax", "sunflower seed", "shredded coconut", "coconut flake", "marshmallow", "marshmallows", "sprinkles", "cake mix", "pancake mix", "baking mix", "crisco", "semolina", "masa", "arrowroot", "tapioca"] },
+    { name: "Dry Goods & Baking", terms: ["flour", "sugar", "brown sugar", "powdered sugar", "confectioners", "rice", "pasta", "spaghetti", "penne", "macaroni", "fettuccine", "linguine", "noodle", "noodles", "bucatini", "rigatoni", "fusilli", "farfalle", "orzo", "ziti", "rotini", "tagliatelle", "pappardelle", "gnocchi", "lasagna", "lasagne", "vermicelli", "cavatappi", "orecchiette", "gemelli", "ravioli", "tortellini", "cannelloni", "manicotti", "angel hair", "capellini", "ditalini", "paccheri", "conchiglie", "oat", "oats", "oatmeal", "quinoa", "lentil", "lentils", "couscous", "barley", "cornmeal", "cornstarch", "corn starch", "baking powder", "baking soda", "yeast", "cocoa", "vanilla", "almond extract", "chocolate chip", "chocolate chips", "chocolate", "nut", "nuts", "almond", "almonds", "walnut", "walnuts", "pecan", "pecans", "cashew", "cashews", "peanut", "peanuts", "raisin", "raisins", "honey", "maple syrup", "syrup", "molasses", "breadcrumb", "breadcrumbs", "panko", "cereal", "granola", "cracker", "crackers", "gelatin", "shortening", "split pea", "polenta", "grits", "sesame seed", "sesame seeds", "chia", "flax", "sunflower seed", "shredded coconut", "coconut flake", "marshmallow", "marshmallows", "sprinkles", "cake mix", "pancake mix", "baking mix", "crisco", "semolina", "masa", "arrowroot", "tapioca"] },
     { name: "Condiments, Sauces & Spices", terms: ["salt", "pepper", "peppercorn", "soy sauce", "worcestershire", "fish sauce", "oyster sauce", "hoisin", "sriracha", "hot sauce", "tabasco", "ketchup", "catsup", "mustard", "mayo", "mayonnaise", "vinegar", "oil", "olive oil", "vegetable oil", "canola", "sesame oil", "cooking spray", "dressing", "ranch", "bbq sauce", "barbecue sauce", "teriyaki", "gravy", "pesto", "tahini", "miso", "gochujang", "sambal", "harissa", "horseradish", "spice", "spices", "cumin", "paprika", "cinnamon", "nutmeg", "oregano", "garlic powder", "onion powder", "chili powder", "cayenne", "turmeric", "curry", "coriander", "cardamom", "clove", "cloves", "allspice", "bay leaf", "bay leaves", "red pepper flake", "red pepper flakes", "italian seasoning", "seasoning", "garam masala", "extract", "mustard seed", "sea salt", "kosher salt", "taco seasoning", "sauce"] },
     { name: "Beverages", terms: ["wine", "beer", "ale", "lager", "cider", "soda", "cola", "tonic", "club soda", "sparkling water", "seltzer", "coffee", "espresso", "tea", "rum", "vodka", "gin", "tequila", "whiskey", "whisky", "bourbon", "brandy", "vermouth", "liqueur", "triple sec", "champagne", "prosecco", "sake", "lemonade", "campari", "aperol", "chartreuse", "amaro", "amaretto", "cointreau", "grand marnier", "st-germain", "pimm", "bitters", "angostura", "sherry", "port", "mezcal", "scotch", "rye", "absinthe", "curacao", "verjus", "shochu", "shōchū", "soju", "spirit"] }
   ];
@@ -838,7 +861,7 @@
         if (existing) {
           if (amount != null) existing.amount = (existing.amount || 0) + amount;
         } else {
-          map.set(key, { key, item: ing.item.trim(), family, unit, amount });
+          map.set(key, { key, item: displayGroceryName(ing.item), family, unit, amount });
         }
       });
     }
@@ -880,7 +903,7 @@
             <p class="g-recipe-name">${esc(g.name)}</p>
             <p class="g-recipe-serv">${g.servings} ${esc(g.label)}</p>
             <ul class="g-items">
-              ${g.lines.map((l) => `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`).join("")}
+              ${g.lines.map((l) => `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(displayGroceryName(l.item))}</span></li>`).join("")}
             </ul>
           </div>`).join("")}
       </details>`;

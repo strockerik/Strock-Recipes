@@ -82,9 +82,9 @@ const RECIPE_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          amount: { type: ["number", "null"], description: "Numeric quantity, fractions as decimals (1/2 -> 0.5). Null if not a measured amount (e.g. 'to taste')." },
+          amount: { type: ["number", "null"], description: "Numeric quantity, fractions as decimals (1/2 -> 0.5). Always give a concrete number — estimate vague measures (a knob of butter -> 2, a large handful -> 1). Use null only for a true season-to-taste item (e.g. salt to taste)." },
           unit: { type: ["string", "null"], description: "Unit of measure (g, cup, tbsp, etc.), or null if countable / no unit" },
-          item: { type: "string", description: "The ingredient's common name in full, consistent words (no abbreviations or brand names), followed by any prep notes" },
+          item: { type: "string", description: "The ingredient's common name in full, consistent words (no abbreviations or brand names), with NO prep instructions. Product forms that describe what to buy stay ('peeled tomatoes', 'shredded mozzarella'); prep like 'diced', 'chopped', 'minced', 'to taste' does NOT go here." },
           group: { type: ["string", "null"], description: "Short Title-Case label of the sub-recipe / component this belongs to (e.g. 'Dough', 'Sauce', 'Syrup'), or null if the recipe is one straightforward preparation. See SUB-RECIPES." }
         },
         required: ["amount", "unit", "item", "group"]
@@ -120,15 +120,15 @@ READING THE SOURCE
 FILLING GAPS — this is wanted, do not refuse
 - If the method is cut off or missing, complete it with the standard steps for this dish so it can be cooked start to finish.
 - If ingredients are listed with no amounts (common on cocktail cards and casual notes), supply sensible amounts for one standard batch (or one drink for a single cocktail).
-- If a narrative describes the process loosely, rewrite it as clean ordered steps and a proper ingredient list, normalizing vague amounts ("about 2 tbsp" -> 2 tbsp, "a couple cloves" -> 2).
+- If a narrative describes the process loosely, rewrite it as clean ordered steps and a proper ingredient list, normalizing vague amounts ("about 2 tbsp" -> 2 tbsp, "a couple cloves" -> 2, "a knob of butter" -> 2 tbsp, "a large handful" -> ~1 cup, "a splash" -> 1 tbsp).
 - Whenever you infer, complete, or guess anything that was NOT clearly in the source — a missing step, an estimated amount, an added ingredient — add ONE short line at the very end of \`notes\` beginning with "AI added: " naming each thing, so the cook knows to double-check (e.g. "AI added: estimated cocktail proportions and the final baking step."). Never introduce an ingredient or amount the source didn't clearly have without flagging it here; if you are unsure whether something was on the card, leave it out rather than slip it in silently.
 - Invent only what's needed to make the recipe complete. Do not fabricate a specific source, author, or backstory — leave source null if unknown.
 
 FORMATTING
 - Split amount, unit, and item: "2 cups flour" -> amount 2, unit "cups", item "flour".
-- Item names: write the ingredient's common name in full words, not the card's shorthand — expand abbreviations ("grnd beef" -> "ground beef", "GR PEPPER" -> "green pepper"), drop brand names (use "ketchup" not "Heinz ketchup"), and use the same name every time the same ingredient appears (don't call it "cheddar" in one recipe and "shredded cheese" in another unless the card is genuinely specific). Prep notes ("diced", "room temperature", "for garnish") stay, after the ingredient name. This is spelling/phrasing normalization only — never change what the ingredient actually is.
+- Item names: write the ingredient's common name in full words, not the card's shorthand — expand abbreviations ("grnd beef" -> "ground beef", "GR PEPPER" -> "green pepper"), drop brand names (use "ketchup" not "Heinz ketchup"), and use the same name every time the same ingredient appears (don't call it "cheddar" in one recipe and "shredded cheese" in another unless the card is genuinely specific). Do NOT put prep instructions in the item: "carrots, diced" becomes item "carrots" (put the dicing in a method step if it matters); likewise drop "chopped", "minced", "room temperature", "for garnish". Product forms that describe what to BUY do stay ("peeled tomatoes", "floury potatoes", "shredded cheese"). This is spelling/phrasing normalization only — never change what the ingredient actually is.
 - Normalize fractions and ranges to decimals ("1/2" -> 0.5, "1-2 tsp" -> 1.5). Keep oven temperatures (e.g. "415°") in the relevant method step, never as an ingredient.
-- If an ingredient has no measurable amount even after inference (e.g. "salt to taste"), set amount and unit to null and put the full description in item.
+- Only a genuine season-to-taste item (e.g. "salt to taste") gets amount and unit null; everything else should have an estimated concrete amount and unit (and flag estimates in the "AI added:" note).
 - Preserve the given order of steps; slot any completed steps into their natural position.
 - section: "bar" only for a cocktail or mixed drink, otherwise "kitchen".
 - base_servings: the number the amounts are written for (default 4 for food, 1 for a single cocktail). servings_label: the unit, e.g. "servings", "pizzas", "glasses", "loaves".

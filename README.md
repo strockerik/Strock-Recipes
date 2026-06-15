@@ -378,8 +378,13 @@ one line. Names are normalized before combining, so prep notes and wording
 don't split a line ("Salt and Black Pepper, to taste" + "salt and pepper",
 or "guanciale, diced" + "guanciale", each merge to one). Weights and volumes
 are converted to what a US grocery store sells (grams/kg → oz/lb, ml/l →
-cups/tbsp/tsp); small gram amounts like yeast or spices are left as-is. Items
-are grouped under store-aisle headers (Produce, Meat & Seafood, Dairy, …). Tap
+cups/tbsp/tsp) and rounded **up** to a practical amount so you never under-buy —
+weights to the nearest ¼ oz/lb (450 g → 1 lb, 90 g → 3¼ oz), volumes to ¼ cup /
+½ tbsp, loose counts to a whole; small gram amounts like yeast or spices are
+left as-is. Prep instructions are dropped from the shopping name ("carrots,
+diced" → "carrots") while what-to-buy adjectives stay ("peeled tomatoes",
+"floury potatoes"). Items are grouped under store-aisle headers (Produce, Meat
+& Seafood, Dairy, …). Tap
 an item to check it off as you shop, or use **Skip pantry staples** to hide
 salt, pepper, oil, water, sugar, butter, and flour from the list (produce
 peppers like bell or red pepper are never treated as a staple). The **By
