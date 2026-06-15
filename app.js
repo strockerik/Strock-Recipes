@@ -16,6 +16,7 @@
   const basket = new Map();
   let skipPantryStaples = false;
   const checkedGroceryItems = new Set(); // grocery: combined-item keys checked off
+  let unitSystem = "original"; // recipe-detail display: "original" | "us" | "metric"
 
   const DATA = { recipes: [], cocktails: [], sharedRecipes: [], sharedCocktails: [] };
   const POOL_KEY = { recipes: "recipes", cocktails: "cocktails" };
@@ -144,9 +145,10 @@
     }));
   }
 
-  function ingLine(ing, useScaled) {
-    const amt = useScaled ? ing.scaled : ing.amount;
-    const amtStr = amt == null ? "\u2014" : fmtAmount(amt) + (ing.unit ? " " + ing.unit : "");
+  function ingLine(ing, useScaled, system) {
+    const rawAmt = useScaled ? ing.scaled : ing.amount;
+    const conv = convertForDisplay(rawAmt, ing.unit, system || "original");
+    const amtStr = conv.amount == null ? "\u2014" : fmtAmount(conv.amount) + (conv.unit ? " " + conv.unit : "");
     return { amtStr, item: ing.item };
   }
 
@@ -229,6 +231,37 @@
     return { amount, unit };
   }
 
+  // Convert an ingredient amount into a target unit system for the per-recipe
+  // toggle. "original" leaves it untouched; "metric" gives weights in g/kg and
+  // volumes in ml/l; "us" gives weights in oz/lb and volumes in tsp/tbsp/cup.
+  // Units that are neither weight nor volume (cloves, cans, slices, plain
+  // counts) and blank "to taste" amounts pass through unchanged — there's no
+  // sensible metric form of "2 cloves garlic".
+  function convertForDisplay(amount, unit, system) {
+    if (system === "original" || amount == null || !unit) return { amount, unit };
+    const u = unit.trim().toLowerCase();
+    const gramsPer = WEIGHT_TO_G[u];
+    if (gramsPer != null) {
+      const g = amount * gramsPer;
+      if (system === "metric") {
+        return g >= 1000 ? { amount: g / 1000, unit: "kg" } : { amount: g, unit: "g" };
+      }
+      const oz = g / G_PER_OZ;
+      return oz >= 16 ? { amount: oz / 16, unit: "lb" } : { amount: oz, unit: "oz" };
+    }
+    const mlPer = VOLUME_TO_ML[u];
+    if (mlPer != null) {
+      const ml = amount * mlPer;
+      if (system === "metric") {
+        return ml >= 1000 ? { amount: ml / 1000, unit: "l" } : { amount: ml, unit: "ml" };
+      }
+      if (ml / ML_PER_CUP >= 0.25) return { amount: ml / ML_PER_CUP, unit: "cup" };
+      if (ml / ML_PER_TBSP >= 1) return { amount: ml / ML_PER_TBSP, unit: "tbsp" };
+      return { amount: ml / ML_PER_TSP, unit: "tsp" };
+    }
+    return { amount, unit }; // not a convertible unit
+  }
+
   // Always-on-hand items that don't belong on a shopping list. One precompiled
   // alternation (rather than building 6 RegExps per ingredient per render).
   const PANTRY_STAPLE_TERMS = ["salt", "pepper", "oil", "water", "sugar", "butter"];
@@ -252,7 +285,10 @@
     { name: "Bakery", terms: ["bread", "tortilla", "tortillas", "bun", "buns", "bagel", "bagels", "pita", "baguette", "roll", "rolls", "croissant", "naan", "english muffin", "pie crust", "pizza dough", "biscuit", "biscuits", "focaccia", "dinner roll", "hamburger bun", "hot dog bun"] },
     { name: "Produce", terms: ["onion", "onions", "garlic", "tomato", "tomatoes", "potato", "potatoes", "carrot", "carrots", "celery", "lettuce", "romaine", "spinach", "kale", "arugula", "chard", "broccoli", "cauliflower", "cucumber", "cucumbers", "zucchini", "squash", "pumpkin", "butternut", "mushroom", "mushrooms", "cremini", "portobello", "shiitake", "bell pepper", "bell peppers", "jalapeno", "jalapeño", "serrano", "poblano", "lemon", "lemons", "lime", "limes", "orange", "oranges", "apple", "apples", "banana", "bananas", "berry", "berries", "strawberry", "strawberries", "blueberry", "blueberries", "raspberry", "raspberries", "grape", "grapes", "avocado", "avocados", "ginger", "cilantro", "parsley", "basil", "mint", "thyme", "rosemary", "sage", "dill", "scallion", "scallions", "green onion", "green onions", "shallot", "shallots", "leek", "leeks", "corn", "cabbage", "eggplant", "asparagus", "green bean", "green beans", "snap pea", "snap peas", "peas", "sweet potato", "sweet potatoes", "yam", "beet", "beets", "radish", "turnip", "parsnip", "fennel", "herbs", "pineapple", "mango", "peach", "peaches", "pear", "pears", "cherry", "cherries", "cranberry", "cranberries", "melon", "watermelon", "sprouts", "bok choy"] },
     { name: "Meat & Seafood", terms: ["chicken", "beef", "pork", "bacon", "sausage", "sausages", "ham", "turkey", "lamb", "steak", "steaks", "mince", "ground beef", "ground turkey", "ground pork", "ground chicken", "ground meat", "salmon", "tuna", "shrimp", "prawn", "prawns", "fish", "cod", "tilapia", "halibut", "crab", "lobster", "scallop", "scallops", "chorizo", "prosciutto", "pancetta", "ribs", "brisket", "veal", "duck", "meatball", "meatballs", "filet", "fillet", "tenderloin", "sirloin", "ribeye", "chuck roast", "wings", "drumstick", "drumsticks", "thigh", "thighs", "chicken breast", "pepperoni", "salami", "bratwurst", "hot dog", "hot dogs"] },
-    { name: "Dairy & Eggs", terms: ["milk", "cheese", "cheddar", "mozzarella", "parmesan", "parmigiano", "feta", "ricotta", "gouda", "swiss cheese", "provolone", "monterey jack", "pepper jack", "cream cheese", "sour cream", "heavy cream", "whipping cream", "half and half", "yogurt", "yoghurt", "egg", "eggs", "margarine", "buttermilk", "cottage cheese", "mascarpone", "creme fraiche", "almond milk", "oat milk", "soy milk", "cream"] },
+    // Nut/seed butters are pantry spreads, not dairy — caught before the Dairy
+    // rule's bare "butter" term so "peanut butter" doesn't land in Dairy.
+    { name: "Dry Goods & Baking", terms: ["peanut butter", "almond butter", "cashew butter", "sunflower butter", "sunflower seed butter", "nut butter", "cocoa butter"] },
+    { name: "Dairy & Eggs", terms: ["milk", "butter", "cheese", "cheddar", "mozzarella", "parmesan", "parmigiano", "feta", "ricotta", "gouda", "swiss cheese", "provolone", "monterey jack", "pepper jack", "cream cheese", "sour cream", "heavy cream", "whipping cream", "half and half", "yogurt", "yoghurt", "egg", "eggs", "margarine", "buttermilk", "cottage cheese", "mascarpone", "creme fraiche", "almond milk", "oat milk", "soy milk", "cream"] },
     { name: "Dry Goods & Baking", terms: ["flour", "sugar", "brown sugar", "powdered sugar", "confectioners", "rice", "pasta", "spaghetti", "penne", "macaroni", "fettuccine", "linguine", "noodle", "noodles", "oat", "oats", "oatmeal", "quinoa", "lentil", "lentils", "couscous", "barley", "cornmeal", "cornstarch", "corn starch", "baking powder", "baking soda", "yeast", "cocoa", "vanilla", "almond extract", "chocolate chip", "chocolate chips", "chocolate", "nut", "nuts", "almond", "almonds", "walnut", "walnuts", "pecan", "pecans", "cashew", "cashews", "peanut", "peanuts", "raisin", "raisins", "honey", "maple syrup", "syrup", "molasses", "breadcrumb", "breadcrumbs", "panko", "cereal", "granola", "cracker", "crackers", "gelatin", "shortening", "split pea", "polenta", "grits", "sesame seed", "sesame seeds", "chia", "flax", "sunflower seed", "shredded coconut", "coconut flake", "marshmallow", "marshmallows", "sprinkles", "cake mix", "pancake mix", "baking mix"] },
     { name: "Condiments, Sauces & Spices", terms: ["salt", "pepper", "peppercorn", "soy sauce", "worcestershire", "fish sauce", "oyster sauce", "hoisin", "sriracha", "hot sauce", "tabasco", "ketchup", "catsup", "mustard", "mayo", "mayonnaise", "vinegar", "oil", "olive oil", "vegetable oil", "canola", "sesame oil", "cooking spray", "dressing", "ranch", "bbq sauce", "barbecue sauce", "teriyaki", "gravy", "pesto", "tahini", "miso", "gochujang", "sambal", "harissa", "horseradish", "spice", "spices", "cumin", "paprika", "cinnamon", "nutmeg", "oregano", "garlic powder", "onion powder", "chili powder", "cayenne", "turmeric", "curry", "coriander", "cardamom", "clove", "cloves", "allspice", "bay leaf", "bay leaves", "red pepper flake", "red pepper flakes", "italian seasoning", "seasoning", "garam masala", "extract", "mustard seed", "sea salt", "kosher salt", "taco seasoning", "sauce"] },
     { name: "Beverages", terms: ["wine", "beer", "ale", "lager", "cider", "soda", "cola", "tonic", "club soda", "sparkling water", "seltzer", "coffee", "espresso", "tea", "rum", "vodka", "gin", "tequila", "whiskey", "whisky", "bourbon", "brandy", "vermouth", "liqueur", "triple sec", "champagne", "prosecco", "sake", "lemonade"] }
@@ -617,17 +653,26 @@
           .map(([k, v]) => `<span><b>${esc(k[0].toUpperCase() + k.slice(1))}:</b> ${esc(v)}</span>`).join("")
       : "";
     const ownerNote = !mine ? ` \u00B7 Shared by ${esc(profileNames[it.userId] || "someone")}` : "";
+    const unitToggle = `
+      <div class="unit-toggle" role="group" aria-label="Measurement units">
+        ${[["original", "Original"], ["us", "US"], ["metric", "Metric"]].map(([v, label]) =>
+          `<button class="unit-toggle-btn${unitSystem === v ? " is-on" : ""}" data-unit="${v}" aria-pressed="${unitSystem === v}">${label}</button>`
+        ).join("")}
+      </div>`;
     return `
     <div class="item-detail">
       <p class="detail-meta">Source: ${esc(it.source || "\u2014")}${scaledNote}${ownerNote}</p>
       <div class="detail-grid">
         <div>
-          <h3 class="detail-h">Ingredients</h3>
+          <div class="detail-h-row">
+            <h3 class="detail-h">Ingredients</h3>
+            ${unitToggle}
+          </div>
           ${groupRuns(ings).map((run) => `
             ${run.group ? `<h4 class="sub-group">${esc(run.group)}</h4>` : ""}
             <ul class="ing-list">
               ${run.items.map((ing) => {
-                const l = ingLine(ing, true);
+                const l = ingLine(ing, true, unitSystem);
                 return `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
               }).join("")}
             </ul>`).join("")}
@@ -1488,6 +1533,13 @@
 
     if (e.target.closest(".copy-to-book-btn")) {
       copyToMyBook(byId[id]);
+      return;
+    }
+
+    const unitBtn = e.target.closest(".unit-toggle-btn");
+    if (unitBtn) {
+      unitSystem = unitBtn.dataset.unit;
+      renderList();
       return;
     }
 

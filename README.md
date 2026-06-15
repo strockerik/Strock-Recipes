@@ -116,6 +116,14 @@ the same list.
 Amounts entered as decimals display as fractions (0.5 → ½). Leave an ingredient
 amount blank for "to taste"–style items that shouldn't scale.
 
+Each open recipe has an **Original / US / Metric** toggle by the Ingredients
+heading. *Original* shows the units as written; *US* converts weights to oz/lb
+and volumes to tsp/tbsp/cup; *Metric* converts weights to g/kg and volumes to
+ml/l — so a recipe written in 700 g of beef can be read as 1½ lb. Counts that
+aren't weights or volumes (e.g. "2 cloves garlic") and blank "to taste" amounts
+are left untouched. The toggle only changes the on-screen display; the saved
+recipe and the grocery list are unaffected.
+
 ### Recipe sections (sub-recipes)
 
 A recipe that's really two preparations — a dough and a sauce, a cocktail and
