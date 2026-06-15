@@ -17,6 +17,11 @@
   // per-recipe chosen servings (id -> servings); absent = the recipe's base.
   // Lets you scale a recipe in its detail view whether or not it's in the basket.
   const servingsByRecipe = new Map();
+  // Weekly meal planning. The tray is a session-only staging area of recipe ids;
+  // assignments (mealPlan) are persisted in Supabase (meal_plan_entries).
+  const mealPlanTray = new Set();
+  let mealPlan = [];           // entries in the rolling window: {id,recipeId,date,slot,servings,purchasedAt}
+  let armedTrayId = null;      // tray recipe currently armed for placement onto a day/slot
   let skipPantryStaples = false;
   const checkedGroceryItems = new Set(); // grocery: combined-item keys checked off
   let unitSystem = "original"; // recipe-detail display: "original" | "us" | "metric"
@@ -50,6 +55,8 @@
   const grocerySummary = $("#grocery-summary");
   const groceryPanel = $("#grocery-panel");
   const groceryContent = $("#grocery-content");
+  const mealPlanPanel = $("#meal-plan-panel");
+  const mealPlanContent = $("#meal-plan-content");
   const authGate = $("#auth-gate");
   const authForm = $("#auth-form");
   const authEmailEl = $("#auth-email");
@@ -451,6 +458,9 @@
     openItems.clear();
     openShareIds.clear();
     basket.clear();
+    mealPlan = [];
+    mealPlanTray.clear();
+    armedTrayId = null;
     favoritesOnly = false;
     toggleFavoritesBtn.setAttribute("aria-pressed", "false");
     sharedOnly = false;
@@ -718,8 +728,11 @@
           ${it.notes ? `<p class="detail-notes">${esc(it.notes)}</p>` : ""}
         </div>
       </div>
-      <div class="detail-actions">
+      <div class="detail-actions-row">
         ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
+        <button class="ghost-btn small add-to-plan-btn" data-id="${esc(it.id)}">📅 Add to Weekly Meal Plan</button>
+      </div>
+      <div class="detail-actions-row">
         ${mine ? `
         <button class="ghost-btn small edit-recipe" data-id="${esc(it.id)}">Edit</button>
         <button class="ghost-btn small delete-recipe-btn" data-id="${esc(it.id)}">Delete</button>
@@ -863,6 +876,161 @@
       out += `\u2022 ${g.name} (${g.servings} ${g.label})\n`;
     });
     return out;
+  }
+
+  // ---------- Weekly meal planning ----------
+  // Local-date helpers (avoid toISOString's UTC shift so "today" is the user's).
+  function isoDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  function midnight() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
+  function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+  function dayLabel(d) {
+    return {
+      wd: d.toLocaleDateString(undefined, { weekday: "short" }),
+      md: d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    };
+  }
+  const SLOTS = ["breakfast", "lunch", "dinner"];
+  const slotLabel = (s) => s[0].toUpperCase() + s.slice(1);
+
+  // Load the rolling window of plan entries (past 7 days \u2026 next 7 days). Fails
+  // open to an empty plan if the table doesn't exist yet (migration not run).
+  async function loadMealPlan() {
+    if (!session) { mealPlan = []; return; }
+    const { data, error } = await supabaseClient
+      .from("meal_plan_entries")
+      .select("*")
+      .gte("plan_date", isoDate(addDays(midnight(), -7)))
+      .lte("plan_date", isoDate(addDays(midnight(), 6)))
+      .order("plan_date");
+    if (error) { mealPlan = []; return; }
+    mealPlan = (data || []).map((r) => ({
+      id: r.id, recipeId: r.recipe_id, date: r.plan_date,
+      slot: r.slot, servings: r.servings, purchasedAt: r.purchased_at
+    }));
+  }
+
+  function addToMealPlanTray(id) {
+    mealPlanTray.add(id);
+    toast("Added to meal plan");
+  }
+  function removeFromTray(id) {
+    mealPlanTray.delete(id);
+    if (armedTrayId === id) armedTrayId = null;
+    renderMealPlan();
+  }
+
+  async function assignMealEntry(recipeId, date, slot) {
+    if (!session) { toast("You've been signed out \u2014 sign in again."); return; }
+    const it = byId[recipeId];
+    const servings = it ? chosenServings(it) : null;
+    const { data, error } = await supabaseClient
+      .from("meal_plan_entries")
+      .insert({ recipe_id: recipeId, plan_date: date, slot, servings })
+      .select()
+      .single();
+    if (error) { toast(`Couldn't add to plan: ${error.message}`); return; }
+    mealPlan.push({ id: data.id, recipeId, date, slot, servings, purchasedAt: null });
+    renderMealPlan();
+  }
+
+  async function removeMealEntry(entryId) {
+    const { error } = await supabaseClient.from("meal_plan_entries").delete().eq("id", entryId);
+    if (error) { toast(`Couldn't remove: ${error.message}`); return; }
+    mealPlan = mealPlan.filter((e) => e.id !== entryId);
+    renderMealPlan();
+  }
+
+  // Build a grocery list from the upcoming planned week: sum each recipe's
+  // servings across the days it appears, load that into the basket, and reuse
+  // the whole grocery engine. Mark those entries purchased.
+  async function groceryFromPlan() {
+    const start = isoDate(midnight());
+    const end = isoDate(addDays(midnight(), 6));
+    const upcoming = mealPlan.filter((e) => e.date >= start && e.date <= end);
+    if (!upcoming.length) { toast("No upcoming meals planned yet."); return; }
+    const totals = new Map();
+    upcoming.forEach((e) => {
+      const it = byId[e.recipeId];
+      if (!it) return;
+      const s = e.servings ?? it.baseServings;
+      totals.set(e.recipeId, (totals.get(e.recipeId) || 0) + s);
+    });
+    if (!totals.size) { toast("Those planned recipes aren't available."); return; }
+    basket.clear();
+    checkedGroceryItems.clear();
+    totals.forEach((s, id) => basket.set(id, { servings: s }));
+    const now = new Date().toISOString();
+    const ids = upcoming.map((e) => e.id);
+    await supabaseClient.from("meal_plan_entries").update({ purchased_at: now }).in("id", ids);
+    upcoming.forEach((e) => { e.purchasedAt = now; });
+    mealPlanPanel.hidden = true;
+    renderList();
+    renderGroceryBar();
+    renderGroceryPanel();
+    groceryPanel.hidden = false;
+  }
+
+  function mealDayCard(d, isHistory) {
+    const ds = isoDate(d);
+    const { wd, md } = dayLabel(d);
+    const dayPurchased = isHistory && mealPlan.some((e) => e.date === ds && e.purchasedAt);
+    const slotsHtml = SLOTS.map((slot) => {
+      const entries = mealPlan.filter((e) => e.date === ds && e.slot === slot);
+      const chips = entries.map((e) => {
+        const it = byId[e.recipeId];
+        const name = it ? esc(it.name) : "(recipe unavailable)";
+        return isHistory
+          ? `<button class="mp-chip mp-chip-hist" data-cook="${esc(e.recipeId)}" data-serv="${e.servings ?? ""}"${it ? "" : " disabled"}>${name}</button>`
+          : `<span class="mp-chip">${name}<button class="mp-chip-x" data-entry="${esc(e.id)}" aria-label="Remove">\u00d7</button></span>`;
+      }).join("");
+      const add = isHistory ? "" : `<button class="mp-slot-add" data-date="${ds}" data-slot="${slot}" aria-label="Add to ${slot}">+</button>`;
+      return `<div class="mp-slot">
+        <span class="mp-slot-label">${slotLabel(slot)}</span>
+        <div class="mp-slot-items">${chips}${add}</div>
+      </div>`;
+    }).join("");
+    return `<div class="mp-day">
+      <div class="mp-day-head"><span class="mp-day-wd">${wd}</span> <span class="mp-day-md">${md}</span>${dayPurchased ? `<span class="mp-purchased">\u2713 purchased</span>` : ""}</div>
+      ${slotsHtml}
+    </div>`;
+  }
+
+  function renderMealPlan() {
+    const trayIds = [...mealPlanTray];
+    const tray = trayIds.length
+      ? trayIds.map((id) => {
+          const it = byId[id];
+          if (!it) return "";
+          const armed = armedTrayId === id;
+          return `<span class="mp-tray-item">
+            <button class="mp-tray-chip${armed ? " is-armed" : ""}" data-tray="${esc(id)}">${esc(it.name)}</button>
+            <button class="mp-tray-x" data-tray-remove="${esc(id)}" aria-label="Remove from tray">\u00d7</button>
+          </span>`;
+        }).join("")
+      : `<p class="mp-empty">Open a recipe and tap <b>\ud83d\udcc5 Add to Weekly Meal Plan</b> to stage it here, then tap it and a day below to schedule it.</p>`;
+
+    const upcoming = [0, 1, 2, 3, 4, 5, 6].map((i) => mealDayCard(addDays(midnight(), i), false)).join("");
+    const history = [1, 2, 3, 4, 5, 6, 7].map((i) => mealDayCard(addDays(midnight(), -i), true)).join("");
+
+    mealPlanContent.innerHTML = `
+      <section class="mp-section">
+        <h3 class="detail-h">Recipes to plan</h3>
+        <div class="mp-tray">${tray}</div>
+        ${armedTrayId && byId[armedTrayId] ? `<p class="mp-hint">Placing <b>${esc(byId[armedTrayId].name)}</b> \u2014 tap a meal slot below (tap the recipe again to stop).</p>` : ""}
+      </section>
+      <section class="mp-section">
+        <div class="mp-section-head">
+          <h3 class="detail-h">Upcoming 7 days</h3>
+          <button id="mp-make-grocery" class="solid-btn small">\ud83d\uded2 Create grocery list</button>
+        </div>
+        ${upcoming}
+      </section>
+      <section class="mp-section">
+        <h3 class="detail-h">History \u2014 last 7 days</h3>
+        ${history}
+      </section>`;
   }
 
   function toast(msg) {
@@ -1598,6 +1766,11 @@
       return;
     }
 
+    if (e.target.closest(".add-to-plan-btn")) {
+      addToMealPlanTray(id);
+      return;
+    }
+
     const unitBtn = e.target.closest(".unit-toggle-btn");
     if (unitBtn) {
       unitSystem = unitBtn.dataset.unit;
@@ -1743,6 +1916,45 @@
   groceryPanel.addEventListener("click", (e) => {
     if (e.target === groceryPanel) groceryPanel.hidden = true;
   });
+
+  // Weekly meal plan: open/close + all in-panel interactions (delegated).
+  $("#open-meal-plan").addEventListener("click", async () => {
+    if (!session) { toast("Sign in to plan meals."); return; }
+    await loadMealPlan();
+    renderMealPlan();
+    mealPlanPanel.hidden = false;
+  });
+  $("#close-meal-plan").addEventListener("click", () => (mealPlanPanel.hidden = true));
+  mealPlanPanel.addEventListener("click", (e) => {
+    if (e.target === mealPlanPanel) mealPlanPanel.hidden = true;
+  });
+  mealPlanContent.addEventListener("click", (e) => {
+    if (e.target.closest("#mp-make-grocery")) { groceryFromPlan(); return; }
+    const trayRemove = e.target.closest("[data-tray-remove]");
+    if (trayRemove) { removeFromTray(trayRemove.dataset.trayRemove); return; }
+    const trayChip = e.target.closest("[data-tray]");
+    if (trayChip) {
+      const tid = trayChip.dataset.tray;
+      armedTrayId = armedTrayId === tid ? null : tid;
+      renderMealPlan();
+      return;
+    }
+    const slotAdd = e.target.closest(".mp-slot-add");
+    if (slotAdd) {
+      if (!armedTrayId) { toast("Tap a recipe in the tray first, then a slot."); return; }
+      assignMealEntry(armedTrayId, slotAdd.dataset.date, slotAdd.dataset.slot);
+      return;
+    }
+    const entryX = e.target.closest("[data-entry]");
+    if (entryX) { removeMealEntry(entryX.dataset.entry); return; }
+    const cook = e.target.closest("[data-cook]");
+    if (cook) {
+      const it = byId[cook.dataset.cook];
+      if (!it) { toast("That recipe is no longer available."); return; }
+      mealPlanPanel.hidden = true;
+      openCookMode(it, cook.dataset.serv ? Number(cook.dataset.serv) : it.baseServings);
+    }
+  });
   $("#clear-grocery").addEventListener("click", () => {
     basket.clear();
     checkedGroceryItems.clear();
@@ -1807,6 +2019,7 @@
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !cookPanel.hidden) return;
     if (!groceryPanel.hidden) groceryPanel.hidden = true;
+    if (!mealPlanPanel.hidden) mealPlanPanel.hidden = true;
     if (!recipeFormPanel.hidden) closeRecipeForm();
     if (!aiImportPanel.hidden) closeAiImport();
   });

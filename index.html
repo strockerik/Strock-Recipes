@@ -66,6 +66,7 @@
         <button id="toggle-filters" class="ghost-btn" aria-expanded="false">Filter by tag</button>
         <button id="toggle-favorites" class="ghost-btn" aria-pressed="false">★ Favorites</button>
         <button id="toggle-shared" class="ghost-btn" aria-pressed="false">👥 Shared with me</button>
+        <button id="open-meal-plan" class="ghost-btn">📅 Meal Plan</button>
       </div>
       <div id="tag-filters" class="tag-filters" hidden></div>
       <div id="active-filters" class="active-filters" hidden></div>
@@ -112,6 +113,17 @@
       <p class="keep-hint">On your phone, <strong>Send to phone / Keep</strong> opens the share sheet — pick
         Google Keep to drop the list straight into a note. On desktop, use <strong>Copy list</strong> and paste
         into <a href="https://keep.google.com" target="_blank" rel="noopener">keep.google.com</a>.</p>
+    </div>
+  </div>
+
+  <!-- Weekly meal-plan page -->
+  <div id="meal-plan-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Weekly meal plan" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Weekly meal plan</h2>
+        <button id="close-meal-plan" class="ghost-btn small" aria-label="Close meal plan">Close</button>
+      </div>
+      <div id="meal-plan-content" class="meal-plan-content"></div>
     </div>
   </div>
 

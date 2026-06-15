@@ -253,6 +253,48 @@ writable row from a recipe shared with them.
 > toggle stop being shared with anyone once this SQL runs (`recipe_shares`
 > starts empty) — re-share them with specific people's emails afterward.
 
+## Weekly meal planning
+
+Plan what to cook across the week and shop for it in one pass:
+
+- On any recipe, tap **📅 Add to Weekly Meal Plan** (next to ▶ Cook) to stage it.
+- Open **📅 Meal Plan** (top controls) for a three-part page:
+  - **Recipes to plan** (top) — your staged recipes. Tap one to *arm* it.
+  - **Upcoming 7 days** (middle) — with a recipe armed, tap a day's
+    Breakfast / Lunch / Dinner **+** to schedule it there. A slot can hold more
+    than one recipe; tap a meal's **×** to unschedule it.
+  - **History — last 7 days** (bottom) — past days you've shopped for; tap a
+    meal to jump straight into that recipe's Cook mode.
+- Tap **🛒 Create grocery list** to roll every upcoming planned meal into the
+  normal grocery list — a recipe planned on two days has its servings summed,
+  and those days are marked "✓ purchased."
+
+The staging tray is per-session; the schedule itself is saved per-user in
+Supabase, so it follows you across devices. The app only ever shows a rolling
+window of the past 7 and next 7 days.
+
+**One-time setup (Supabase SQL editor)** — run once:
+
+```sql
+create table public.meal_plan_entries (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  recipe_id uuid not null references public.recipes(id) on delete cascade,
+  plan_date date not null,
+  slot text not null check (slot in ('breakfast','lunch','dinner')),
+  servings int,                       -- null = use the recipe's base servings
+  purchased_at timestamptz,           -- set when a grocery list is generated for it
+  created_at timestamptz not null default now()
+);
+alter table public.meal_plan_entries enable row level security;
+create policy "owners manage their meal plan" on public.meal_plan_entries
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create index meal_plan_entries_user_date on public.meal_plan_entries (user_id, plan_date);
+```
+
+Until this runs, the planner just shows up empty (it fails open).
+
 ## AI extraction limit
 
 Each account can run at most **20 AI extractions/day** (any mix of photo,
