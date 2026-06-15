@@ -356,7 +356,38 @@ button:focus-visible, input:focus-visible {
 .detail-meta {
   font-size: 0.83rem;
   color: var(--faint);
+  margin: 0 0 10px;
+}
+/* Servings stepper at the top of an open recipe — scales the displayed
+   amounts (and the grocery list) up or down from the recipe's base. */
+.detail-serv {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin: 0 0 14px;
+}
+.detail-serv-btn {
+  width: 28px; height: 28px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 6px;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: var(--ink);
+  cursor: pointer;
+}
+.detail-serv-btn:hover { border-color: var(--accent); color: var(--accent); }
+.detail-serv-num {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  min-width: 4.5em;
+  text-align: center;
+}
+.detail-serv-mult {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--accent);
 }
 .detail-grid { display: grid; grid-template-columns: 1fr 1.4fr; gap: 24px; }
 @media (max-width: 620px) { .detail-grid { grid-template-columns: 1fr; } }
@@ -716,7 +747,8 @@ button:focus-visible, input:focus-visible {
   border-radius: var(--radius);
   padding: 10px 14px;
   display: flex;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 8px 18px;
   align-items: center;
 }
 .rf-section legend {
@@ -789,6 +821,15 @@ button:focus-visible, input:focus-visible {
   gap: 8px;
   align-items: start;
 }
+/* Grid children default to min-width:auto and refuse to shrink below their
+   content, which blew these rows past a narrow phone viewport. */
+.rf-ing-row > *, .rf-step-row > *, .rf-section-row > * { min-width: 0; }
+/* On phones, drop the long ingredient field onto its own full-width line so
+   amount/unit/remove no longer fight it for horizontal space. */
+@media (max-width: 480px) {
+  .rf-ing-row { grid-template-columns: 1fr 1fr auto; }
+  .rf-ing-row .rf-ing-item { grid-column: 1 / -1; }
+}
 .rf-ing-row input, .rf-step-row textarea {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -808,6 +849,25 @@ button:focus-visible, input:focus-visible {
   color: var(--faint);
 }
 .rf-row-remove:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Step reorder: the ▲▼ control is hidden until "Reorder" mode is toggled on,
+   at which point the step row grows a third column to hold it. */
+.rf-step-move { display: none; flex-direction: column; gap: 2px; }
+.rf-step-move button {
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 6px;
+  width: 32px;
+  line-height: 1;
+  padding: 3px 0;
+  font-size: 0.7rem;
+  color: var(--faint);
+  cursor: pointer;
+}
+.rf-step-move button:hover { border-color: var(--accent); color: var(--accent); }
+#rf-method.reordering .rf-step-row { grid-template-columns: 1fr auto auto; }
+#rf-method.reordering .rf-step-move { display: flex; }
+#rf-reorder-steps[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 
 /* Section divider row in the recipe form — rows below it belong to this
    section. Visually distinct from ingredient/step rows so the grouping reads. */

@@ -102,10 +102,17 @@ Use the app — no editing JS files:
     photos together as one recipe (not a batch of separate recipes), merging
     e.g. ingredients from the front with the method from the back.
 - **+ Add recipe** — fill in the form manually (name, section, servings, tags,
-  ingredient rows, method steps, notes).
+  ingredient rows, method steps, notes). Need to slot a step into the middle?
+  Tap **↕ Reorder** by Method to reveal ▲▼ controls on each step and nudge it
+  into place (the saved order follows what's on screen).
 - Open any recipe to **Edit** or **Delete** it — or tap **▶ Cook** for a
   full-screen guided mode: one step at a time, tap to advance, an ingredients
   toggle scaled to your servings, and the screen stays awake while you cook.
+
+Every open recipe has a **servings stepper** at the top: scale a recipe written
+for 4 up to 8 (it shows "×2 of 4") and the ingredient amounts rescale live. The
+chosen servings carry straight into the grocery list, so a doubled recipe adds
+doubled quantities to your shopping list.
 
 Tags are picked from a fixed list, not typed — kitchen recipes get at most one
 cuisine, one protein/diet, and one dish-type tag (e.g. italian + chicken +

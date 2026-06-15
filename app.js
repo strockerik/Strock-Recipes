@@ -14,6 +14,9 @@
   let sharesByRecipe = {};    // recipe_id -> [shared_with_user_id, ...], for recipes I own
   // grocery: id -> { servings }
   const basket = new Map();
+  // per-recipe chosen servings (id -> servings); absent = the recipe's base.
+  // Lets you scale a recipe in its detail view whether or not it's in the basket.
+  const servingsByRecipe = new Map();
   let skipPantryStaples = false;
   const checkedGroceryItems = new Set(); // grocery: combined-item keys checked off
   let unitSystem = "original"; // recipe-detail display: "original" | "us" | "metric"
@@ -78,6 +81,7 @@
   const rfMethod = $("#rf-method");
   const rfAddIngredientBtn = $("#rf-add-ingredient");
   const rfAddStepBtn = $("#rf-add-step");
+  const rfReorderStepsBtn = $("#rf-reorder-steps");
 
   const addRecipeAiBtn = $("#add-recipe-ai");
   const aiImportPanel = $("#ai-import-panel");
@@ -594,6 +598,26 @@
       ` <button class="ghost-btn small" id="clear-tags">Clear all</button>`;
   }
 
+  // The chosen serving count for a recipe: the basket value if it's in the
+  // grocery list, else a detail-view override, else the recipe's base. One
+  // source of truth shared by the list row, the detail stepper, and grocery.
+  function chosenServings(it) {
+    return basket.has(it.id)
+      ? basket.get(it.id).servings
+      : (servingsByRecipe.get(it.id) ?? it.baseServings);
+  }
+
+  // Set a recipe's servings from any +/- control, keeping the grocery basket in
+  // sync so the combined shopping list reflects the new scale immediately.
+  function setRecipeServings(id, n) {
+    const v = Math.max(1, n);
+    servingsByRecipe.set(id, v);
+    if (basket.has(id)) basket.get(id).servings = v;
+    renderList();
+    renderGroceryBar();
+    if (!groceryPanel.hidden) renderGroceryPanel();
+  }
+
   function renderList() {
     const items = currentItems();
     resultCountEl.textContent =
@@ -613,7 +637,7 @@
 
     listEl.innerHTML = items.map((it) => {
       const picked = basket.has(it.id);
-      const servings = picked ? basket.get(it.id).servings : it.baseServings;
+      const servings = chosenServings(it);
       const open = openItems.has(it.id);
       const mine = it.userId === session?.user?.id;
       return `
@@ -645,9 +669,16 @@
   function renderDetail(it, servings) {
     const ings = scaledIngredients(it, servings);
     const mine = it.userId === session?.user?.id;
-    const scaledNote = servings !== it.baseServings
-      ? ` \u00B7 scaled to ${servings} ${esc(it.servingsLabel)}`
-      : ` \u00B7 makes ${it.baseServings} ${esc(it.servingsLabel)}`;
+    const multNote = servings !== it.baseServings
+      ? `<span class="detail-serv-mult">\u00D7${fmtAmount(servings / it.baseServings)} of ${it.baseServings}</span>`
+      : "";
+    const servControl = `
+      <div class="detail-serv" aria-label="Servings">
+        <button class="detail-serv-btn" data-step="-1" aria-label="Fewer servings">\u2212</button>
+        <span class="detail-serv-num">${servings} ${esc(it.servingsLabel)}</span>
+        <button class="detail-serv-btn" data-step="1" aria-label="More servings">+</button>
+        ${multNote}
+      </div>`;
     const specRows = it.specs
       ? Object.entries(it.specs).filter(([, v]) => v)
           .map(([k, v]) => `<span><b>${esc(k[0].toUpperCase() + k.slice(1))}:</b> ${esc(v)}</span>`).join("")
@@ -661,7 +692,8 @@
       </div>`;
     return `
     <div class="item-detail">
-      <p class="detail-meta">Source: ${esc(it.source || "\u2014")}${scaledNote}${ownerNote}</p>
+      <p class="detail-meta">Source: ${esc(it.source || "\u2014")}${ownerNote}</p>
+      ${servControl}
       <div class="detail-grid">
         <div>
           <div class="detail-h-row">
@@ -861,9 +893,15 @@
   }
 
   function stepRow(text) {
+    // The ▲▼ control is only visible in reorder mode (CSS hides it otherwise),
+    // and the save read-back ignores everything but .rf-step-text, so it's inert.
     return `
       <div class="rf-step-row">
         <textarea class="rf-step-text" rows="2" placeholder="Step…">${esc(text || "")}</textarea>
+        <div class="rf-step-move">
+          <button type="button" class="rf-move-up" aria-label="Move step up">▲</button>
+          <button type="button" class="rf-move-down" aria-label="Move step down">▼</button>
+        </div>
         <button type="button" class="rf-row-remove" aria-label="Remove step">×</button>
       </div>`;
   }
@@ -943,6 +981,10 @@
       rfMethod.innerHTML = stepRow("");
       deleteRecipeBtn.hidden = true;
     }
+    // The form DOM persists between opens — make sure reorder mode starts off.
+    rfMethod.classList.remove("reordering");
+    rfReorderStepsBtn.setAttribute("aria-pressed", "false");
+    rfReorderStepsBtn.textContent = "↕ Reorder";
     updateTagGroupsVisibility();
     recipeFormPanel.hidden = false;
   }
@@ -1031,7 +1073,29 @@
     if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-ing-row, .rf-section-row").remove();
   });
   rfMethod.addEventListener("click", (e) => {
-    if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-step-row, .rf-section-row").remove();
+    if (e.target.classList.contains("rf-row-remove")) {
+      e.target.closest(".rf-step-row, .rf-section-row").remove();
+      return;
+    }
+    // Reorder mode: nudge a step up or down one position. The save handler
+    // reads order (and re-derives each step's group) from the DOM, so moving
+    // rows is all that's needed — moving across a section divider re-groups it.
+    const up = e.target.closest(".rf-move-up");
+    if (up) {
+      const r = up.closest(".rf-step-row");
+      if (r.previousElementSibling) rfMethod.insertBefore(r, r.previousElementSibling);
+      return;
+    }
+    const down = e.target.closest(".rf-move-down");
+    if (down) {
+      const r = down.closest(".rf-step-row");
+      if (r.nextElementSibling) rfMethod.insertBefore(r.nextElementSibling, r);
+    }
+  });
+  rfReorderStepsBtn.addEventListener("click", () => {
+    const on = rfMethod.classList.toggle("reordering");
+    rfReorderStepsBtn.setAttribute("aria-pressed", String(on));
+    rfReorderStepsBtn.textContent = on ? "✓ Done" : "↕ Reorder";
   });
 
   addRecipeBtn.addEventListener("click", () => openRecipeForm(null));
@@ -1485,7 +1549,8 @@
     }
 
     if (e.target.classList.contains("pick")) {
-      if (e.target.checked) basket.set(id, { servings: byId[id].baseServings });
+      // Carry any scale chosen in the detail view into the grocery list.
+      if (e.target.checked) basket.set(id, { servings: chosenServings(byId[id]) });
       else basket.delete(id);
       renderList();
       renderGroceryBar();
@@ -1493,19 +1558,16 @@
       return;
     }
 
-    const stepBtn = e.target.closest(".serv-btn");
+    // Servings steppers: the list-row one (grocery) and the detail-view one
+    // both route through setRecipeServings so the scale stays consistent.
+    const stepBtn = e.target.closest(".serv-btn, .detail-serv-btn");
     if (stepBtn) {
-      const entry = basket.get(id);
-      entry.servings = Math.max(1, entry.servings + Number(stepBtn.dataset.step));
-      renderList();
-      renderGroceryBar();
-      if (!groceryPanel.hidden) renderGroceryPanel();
+      setRecipeServings(id, chosenServings(byId[id]) + Number(stepBtn.dataset.step));
       return;
     }
 
     if (e.target.closest(".cook-btn")) {
-      const servings = basket.has(id) ? basket.get(id).servings : byId[id].baseServings;
-      openCookMode(byId[id], servings);
+      openCookMode(byId[id], chosenServings(byId[id]));
       return;
     }
 
