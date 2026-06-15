@@ -374,12 +374,17 @@ both resolve fine. Installing the official Deno VSCode extension (with
 
 The grocery list combines matching ingredients across every checked recipe
 into a single shopping list — e.g. ground beef needed by two recipes becomes
-one line. Weights and volumes are converted to what a US grocery store sells
-(grams/kg → oz/lb, ml/l → cups/tbsp/tsp); small gram amounts like yeast or
-spices are left as-is. Tap an item to check it off as you shop, or use **Skip
-pantry staples** to hide salt, pepper, oil, water, sugar, and butter from the
-list. The **By recipe** section below the list still shows each recipe's full
-ingredients at your chosen servings, unaffected by the staples toggle.
+one line. Names are normalized before combining, so prep notes and wording
+don't split a line ("Salt and Black Pepper, to taste" + "salt and pepper",
+or "guanciale, diced" + "guanciale", each merge to one). Weights and volumes
+are converted to what a US grocery store sells (grams/kg → oz/lb, ml/l →
+cups/tbsp/tsp); small gram amounts like yeast or spices are left as-is. Items
+are grouped under store-aisle headers (Produce, Meat & Seafood, Dairy, …). Tap
+an item to check it off as you shop, or use **Skip pantry staples** to hide
+salt, pepper, oil, water, sugar, butter, and flour from the list (produce
+peppers like bell or red pepper are never treated as a staple). The **By
+recipe** section below the list still shows each recipe's full ingredients at
+your chosen servings, unaffected by the staples toggle.
 
 The grocery selection lives in the current session, so fully closing the app
 resets the checked recipes and check-offs — build the list and send it to Keep.

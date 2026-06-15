@@ -275,10 +275,37 @@
 
   // Always-on-hand items that don't belong on a shopping list. One precompiled
   // alternation (rather than building 6 RegExps per ingredient per render).
-  const PANTRY_STAPLE_TERMS = ["salt", "pepper", "oil", "water", "sugar", "butter"];
+  const PANTRY_STAPLE_TERMS = ["salt", "pepper", "oil", "water", "sugar", "butter", "flour"];
   const PANTRY_STAPLE_RE = new RegExp(`\\b(?:${PANTRY_STAPLE_TERMS.join("|")})\\b`, "i");
   function isPantryStaple(nameLower) {
-    return PANTRY_STAPLE_RE.test(nameLower);
+    // Don't let produce peppers (bell/red/chili pepper) or specialty flours
+    // (almond/coconut/etc.) trip the staple match — only true staples skip.
+    const n = nameLower
+      .replace(/\b(?:bell|red|green|chili|chilli|sweet|cayenne|lemon|jalape\w*)\s+pepper/g, " ")
+      .replace(/\b(?:almond|coconut|oat|rice|chickpea|nut)\s+flour/g, " ");
+    return PANTRY_STAPLE_RE.test(n);
+  }
+
+  // Normalize an ingredient name for COMBINING and CATEGORIZING only — the name
+  // shown in the list keeps its original wording. Strips prep notes and folds
+  // common descriptor synonyms so e.g. "Salt and Black Pepper, to taste" and
+  // "salt and pepper", or "guanciale, diced" and "guanciale", land on one line.
+  const PREP_WORDS = "to taste|diced|chopped|finely chopped|roughly chopped|minced|grated|finely grated|freshly grated|shredded|sliced|thinly sliced|cubed|crushed|melted|softened|room temperature|at room temperature|sifted|divided|drained|rinsed|optional|peeled|seeded|deseeded|halved|quartered|crumbled|beaten|packed|cooked|uncooked|toasted|warmed|chilled";
+  const PREP_CLAUSE_RE = new RegExp(`,\\s*(?:${PREP_WORDS}|plus more\\b.*|for\\b.*|to top\\b.*|to serve\\b.*|to garnish\\b.*)[^,]*`, "gi");
+  function normalizeItemName(name) {
+    let s = String(name).toLowerCase().trim();
+    s = s.replace(/\([^)]*\)/g, " ");        // drop parentheticals "(sauce)", "(⅔ cup)"
+    s = s.split(/\s[—–-]\s/)[0];             // drop a trailing dash note ("olive oil — a splash")
+    s = s.replace(PREP_CLAUSE_RE, " ");      // drop known prep clauses (keeps "boneless, skinless …")
+    s = s
+      .replace(/\b(?:black|white|freshly ground|ground)\s+pepper\b/g, "pepper")
+      .replace(/\b(?:kosher|sea|maldon|flaky|fine|table)\s+salt\b/g, "salt")
+      .replace(/\bextra[-\s]?virgin\s+olive oil\b/g, "olive oil")
+      .replace(/\bevoo\b/g, "olive oil")
+      .replace(/\bscallions?\b/g, "green onion")
+      .replace(/\bconfectioners'?\s+sugar\b/g, "powdered sugar")
+      .replace(/\bgarbanzos?\b/g, "chickpea");
+    return s.replace(/\s+/g, " ").trim();
   }
 
   // ---------- Grocery store aisle categorization ----------
@@ -294,15 +321,15 @@
     { name: "Frozen", terms: ["frozen", "ice cream", "gelato", "sherbet", "popsicle", "tater tot", "tater tots"] },
     { name: "Canned & Jarred", terms: ["canned", "broth", "stock", "bouillon", "condensed", "cream of", "soup", "tomato sauce", "tomato paste", "tomato puree", "crushed tomato", "crushed tomatoes", "diced tomato", "diced tomatoes", "stewed tomato", "marinara", "pasta sauce", "coconut milk", "evaporated milk", "sweetened condensed", "black bean", "black beans", "kidney bean", "kidney beans", "pinto bean", "pinto beans", "white bean", "white beans", "navy bean", "cannellini", "garbanzo", "chickpea", "chickpeas", "refried", "baked bean", "baked beans", "olives", "pickle", "pickles", "relish", "salsa", "jam", "jelly", "preserves", "enchilada sauce", "green chile", "green chiles", "green chilies", "water chestnut", "water chestnuts", "artichoke heart", "artichoke hearts", "roasted red pepper", "anchovy", "anchovies", "capers", "jarred", "applesauce", "pumpkin puree", "canned tuna"] },
     { name: "Bakery", terms: ["bread", "tortilla", "tortillas", "bun", "buns", "bagel", "bagels", "pita", "baguette", "roll", "rolls", "croissant", "naan", "english muffin", "pie crust", "pizza dough", "biscuit", "biscuits", "focaccia", "dinner roll", "hamburger bun", "hot dog bun"] },
-    { name: "Produce", terms: ["onion", "onions", "garlic", "tomato", "tomatoes", "potato", "potatoes", "carrot", "carrots", "celery", "lettuce", "romaine", "spinach", "kale", "arugula", "chard", "broccoli", "cauliflower", "cucumber", "cucumbers", "zucchini", "squash", "pumpkin", "butternut", "mushroom", "mushrooms", "cremini", "portobello", "shiitake", "bell pepper", "bell peppers", "jalapeno", "jalapeño", "serrano", "poblano", "lemon", "lemons", "lime", "limes", "orange", "oranges", "apple", "apples", "banana", "bananas", "berry", "berries", "strawberry", "strawberries", "blueberry", "blueberries", "raspberry", "raspberries", "grape", "grapes", "avocado", "avocados", "ginger", "cilantro", "parsley", "basil", "mint", "thyme", "rosemary", "sage", "dill", "scallion", "scallions", "green onion", "green onions", "shallot", "shallots", "leek", "leeks", "corn", "cabbage", "eggplant", "asparagus", "green bean", "green beans", "snap pea", "snap peas", "peas", "sweet potato", "sweet potatoes", "yam", "beet", "beets", "radish", "turnip", "parsnip", "fennel", "herbs", "pineapple", "mango", "peach", "peaches", "pear", "pears", "cherry", "cherries", "cranberry", "cranberries", "melon", "watermelon", "sprouts", "bok choy"] },
-    { name: "Meat & Seafood", terms: ["chicken", "beef", "pork", "bacon", "sausage", "sausages", "ham", "turkey", "lamb", "steak", "steaks", "mince", "ground beef", "ground turkey", "ground pork", "ground chicken", "ground meat", "salmon", "tuna", "shrimp", "prawn", "prawns", "fish", "cod", "tilapia", "halibut", "crab", "lobster", "scallop", "scallops", "chorizo", "prosciutto", "pancetta", "ribs", "brisket", "veal", "duck", "meatball", "meatballs", "filet", "fillet", "tenderloin", "sirloin", "ribeye", "chuck roast", "wings", "drumstick", "drumsticks", "thigh", "thighs", "chicken breast", "pepperoni", "salami", "bratwurst", "hot dog", "hot dogs"] },
+    { name: "Produce", terms: ["onion", "onions", "garlic", "tomato", "tomatoes", "potato", "potatoes", "carrot", "carrots", "celery", "lettuce", "romaine", "spinach", "kale", "arugula", "chard", "broccoli", "cauliflower", "cucumber", "cucumbers", "zucchini", "squash", "pumpkin", "butternut", "mushroom", "mushrooms", "cremini", "portobello", "shiitake", "bell pepper", "bell peppers", "jalapeno", "jalapeño", "serrano", "poblano", "lemon", "lemons", "lime", "limes", "orange", "oranges", "apple", "apples", "banana", "bananas", "berry", "berries", "strawberry", "strawberries", "blueberry", "blueberries", "raspberry", "raspberries", "grape", "grapes", "avocado", "avocados", "ginger", "cilantro", "parsley", "basil", "mint", "thyme", "rosemary", "sage", "dill", "scallion", "scallions", "green onion", "green onions", "shallot", "shallots", "leek", "leeks", "corn", "cabbage", "eggplant", "asparagus", "green bean", "green beans", "snap pea", "snap peas", "peas", "sweet potato", "sweet potatoes", "yam", "beet", "beets", "radish", "turnip", "parsnip", "fennel", "herbs", "pineapple", "mango", "peach", "peaches", "pear", "pears", "cherry", "cherries", "cranberry", "cranberries", "melon", "watermelon", "sprouts", "bok choy", "chilli", "chillies", "chile", "chiles", "chile pepper", "red chili", "red chilli", "thai chili", "thai chilli", "fresno", "habanero", "scotch bonnet", "bird's eye"] },
+    { name: "Meat & Seafood", terms: ["chicken", "beef", "pork", "bacon", "sausage", "sausages", "ham", "turkey", "lamb", "steak", "steaks", "mince", "ground beef", "ground turkey", "ground pork", "ground chicken", "ground meat", "salmon", "tuna", "shrimp", "prawn", "prawns", "fish", "cod", "tilapia", "halibut", "crab", "lobster", "scallop", "scallops", "chorizo", "prosciutto", "pancetta", "ribs", "brisket", "veal", "duck", "meatball", "meatballs", "filet", "fillet", "tenderloin", "sirloin", "ribeye", "chuck roast", "wings", "drumstick", "drumsticks", "thigh", "thighs", "chicken breast", "pepperoni", "salami", "bratwurst", "hot dog", "hot dogs", "guanciale", "capicola", "capocollo", "soppressata", "mortadella", "speck", "bresaola", "pastrami", "corned beef", "andouille", "kielbasa", "lardons", "ground lamb", "ground veal", "short rib", "short ribs", "flank", "skirt steak", "oxtail", "jowl"] },
     // Nut/seed butters are pantry spreads, not dairy — caught before the Dairy
     // rule's bare "butter" term so "peanut butter" doesn't land in Dairy.
     { name: "Dry Goods & Baking", terms: ["peanut butter", "almond butter", "cashew butter", "sunflower butter", "sunflower seed butter", "nut butter", "cocoa butter"] },
-    { name: "Dairy & Eggs", terms: ["milk", "butter", "cheese", "cheddar", "mozzarella", "parmesan", "parmigiano", "feta", "ricotta", "gouda", "swiss cheese", "provolone", "monterey jack", "pepper jack", "cream cheese", "sour cream", "heavy cream", "whipping cream", "half and half", "yogurt", "yoghurt", "egg", "eggs", "margarine", "buttermilk", "cottage cheese", "mascarpone", "creme fraiche", "almond milk", "oat milk", "soy milk", "cream"] },
-    { name: "Dry Goods & Baking", terms: ["flour", "sugar", "brown sugar", "powdered sugar", "confectioners", "rice", "pasta", "spaghetti", "penne", "macaroni", "fettuccine", "linguine", "noodle", "noodles", "oat", "oats", "oatmeal", "quinoa", "lentil", "lentils", "couscous", "barley", "cornmeal", "cornstarch", "corn starch", "baking powder", "baking soda", "yeast", "cocoa", "vanilla", "almond extract", "chocolate chip", "chocolate chips", "chocolate", "nut", "nuts", "almond", "almonds", "walnut", "walnuts", "pecan", "pecans", "cashew", "cashews", "peanut", "peanuts", "raisin", "raisins", "honey", "maple syrup", "syrup", "molasses", "breadcrumb", "breadcrumbs", "panko", "cereal", "granola", "cracker", "crackers", "gelatin", "shortening", "split pea", "polenta", "grits", "sesame seed", "sesame seeds", "chia", "flax", "sunflower seed", "shredded coconut", "coconut flake", "marshmallow", "marshmallows", "sprinkles", "cake mix", "pancake mix", "baking mix"] },
+    { name: "Dairy & Eggs", terms: ["milk", "butter", "cheese", "cheddar", "mozzarella", "parmesan", "parmigiano", "feta", "ricotta", "gouda", "swiss cheese", "provolone", "monterey jack", "pepper jack", "cream cheese", "sour cream", "heavy cream", "whipping cream", "half and half", "yogurt", "yoghurt", "egg", "eggs", "margarine", "buttermilk", "cottage cheese", "mascarpone", "creme fraiche", "almond milk", "oat milk", "soy milk", "cream", "burrata", "pecorino", "romano", "gruyere", "gruyère", "asiago", "manchego", "brie", "camembert", "havarti", "queso", "cotija", "halloumi", "paneer"] },
+    { name: "Dry Goods & Baking", terms: ["flour", "sugar", "brown sugar", "powdered sugar", "confectioners", "rice", "pasta", "spaghetti", "penne", "macaroni", "fettuccine", "linguine", "noodle", "noodles", "oat", "oats", "oatmeal", "quinoa", "lentil", "lentils", "couscous", "barley", "cornmeal", "cornstarch", "corn starch", "baking powder", "baking soda", "yeast", "cocoa", "vanilla", "almond extract", "chocolate chip", "chocolate chips", "chocolate", "nut", "nuts", "almond", "almonds", "walnut", "walnuts", "pecan", "pecans", "cashew", "cashews", "peanut", "peanuts", "raisin", "raisins", "honey", "maple syrup", "syrup", "molasses", "breadcrumb", "breadcrumbs", "panko", "cereal", "granola", "cracker", "crackers", "gelatin", "shortening", "split pea", "polenta", "grits", "sesame seed", "sesame seeds", "chia", "flax", "sunflower seed", "shredded coconut", "coconut flake", "marshmallow", "marshmallows", "sprinkles", "cake mix", "pancake mix", "baking mix", "crisco", "semolina", "masa", "arrowroot", "tapioca"] },
     { name: "Condiments, Sauces & Spices", terms: ["salt", "pepper", "peppercorn", "soy sauce", "worcestershire", "fish sauce", "oyster sauce", "hoisin", "sriracha", "hot sauce", "tabasco", "ketchup", "catsup", "mustard", "mayo", "mayonnaise", "vinegar", "oil", "olive oil", "vegetable oil", "canola", "sesame oil", "cooking spray", "dressing", "ranch", "bbq sauce", "barbecue sauce", "teriyaki", "gravy", "pesto", "tahini", "miso", "gochujang", "sambal", "harissa", "horseradish", "spice", "spices", "cumin", "paprika", "cinnamon", "nutmeg", "oregano", "garlic powder", "onion powder", "chili powder", "cayenne", "turmeric", "curry", "coriander", "cardamom", "clove", "cloves", "allspice", "bay leaf", "bay leaves", "red pepper flake", "red pepper flakes", "italian seasoning", "seasoning", "garam masala", "extract", "mustard seed", "sea salt", "kosher salt", "taco seasoning", "sauce"] },
-    { name: "Beverages", terms: ["wine", "beer", "ale", "lager", "cider", "soda", "cola", "tonic", "club soda", "sparkling water", "seltzer", "coffee", "espresso", "tea", "rum", "vodka", "gin", "tequila", "whiskey", "whisky", "bourbon", "brandy", "vermouth", "liqueur", "triple sec", "champagne", "prosecco", "sake", "lemonade"] }
+    { name: "Beverages", terms: ["wine", "beer", "ale", "lager", "cider", "soda", "cola", "tonic", "club soda", "sparkling water", "seltzer", "coffee", "espresso", "tea", "rum", "vodka", "gin", "tequila", "whiskey", "whisky", "bourbon", "brandy", "vermouth", "liqueur", "triple sec", "champagne", "prosecco", "sake", "lemonade", "campari", "aperol", "chartreuse", "amaro", "amaretto", "cointreau", "grand marnier", "st-germain", "pimm", "bitters", "angostura", "sherry", "port", "mezcal", "scotch", "rye", "absinthe", "curacao", "verjus", "shochu", "shōchū", "soju", "spirit"] }
   ];
   const GROCERY_CATEGORY_RE = GROCERY_CATEGORY_RULES.map((c) => ({
     name: c.name,
@@ -325,7 +352,7 @@
   function groceryByCategory(items) {
     const buckets = new Map();
     items.forEach((it) => {
-      const cat = categorizeGrocery(it.item.toLowerCase());
+      const cat = categorizeGrocery(normalizeItemName(it.item));
       if (!buckets.has(cat)) buckets.set(cat, []);
       buckets.get(cat).push(it);
     });
@@ -803,7 +830,7 @@
       if (!it) continue;
       scaledIngredients(it, servings).forEach((ing) => {
         if (!ing.item) return;
-        const nameKey = ing.item.trim().toLowerCase();
+        const nameKey = normalizeItemName(ing.item);
         if (skipPantryStaples && isPantryStaple(nameKey)) return;
         const { amount, family, unit } = canonicalQuantity(ing.scaled, ing.unit);
         const key = `${nameKey}__${family || unit || ""}`;
@@ -843,7 +870,7 @@
     groceryContent.innerHTML = `
       <label class="g-staples-toggle">
         <input type="checkbox" id="grocery-skip-staples" ${skipPantryStaples ? "checked" : ""}>
-        Skip pantry staples (salt, pepper, oil, water, sugar, butter)
+        Skip pantry staples (salt, pepper, oil, water, sugar, butter, flour)
       </label>
       <ul class="g-combined">${itemsHtml}</ul>
       <details class="g-by-recipe">
