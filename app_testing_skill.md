@@ -31,8 +31,18 @@ Architecture recap (so you test the right boundary):
 - **Backend** — Supabase: Postgres + RLS, Auth, and the `extract-recipe` Edge
   Function (`supabase/functions/extract-recipe/index.ts`, Deno/TS), deployed
   **manually via the dashboard** — pushing to GitHub does *not* redeploy it.
+  Tables: `recipes`, `profiles` (display names for share attribution),
+  `recipe_shares` (per-user shares — the *only* cross-user read), and
+  `meal_plan_entries` (dated B/L/D assignments). RLS-only helpers `owns_recipe`
+  and `recipe_shared_with_me` live in the non-exposed `private` schema; the
+  `recipes` ↔ `recipe_shares` policies must not recurse.
+- **Schema/data changes** — applied by hand in the dashboard SQL editor (no
+  CLI). One-time data migrations live in `scripts/` (e.g.
+  `migrate_ingredients.py`) and are **user-run only** — see Phase 2.
 - **Secrets** — service-role key + user ids live in the gitignored `notes.md`
   and `.env.local`. The Anthropic key is a server-side Edge Function secret.
+  **Never** run a script that uses the service-role key against production from
+  here.
 
 **Cost guard:** Photo/text/URL extraction calls Claude and counts against the
 20/day per-user cap (`increment_extraction_usage`). Live extraction tests
@@ -44,22 +54,42 @@ first.** Every other phase is free.
 Goal: prove the code at least parses and loads, with no obvious broken
 references, before doing anything dynamic.
 
-1. **JS parse/load check** (no Node, so use Chrome as the parser). Point a tiny
-   harness at `app.js` with a global `error` listener; `PARSED_OK` in the title
-   means it loaded without throwing:
+1. **JS parse/load check** (no Node, so use Chrome as the parser). `app.js` is
+   **not** a pure-logic module — it queries and wires DOM elements at top level
+   (`authForm.addEventListener`, …), so loading it against a *bare* `<body>`
+   always throws `Cannot read properties of null (reading 'addEventListener')`
+   before you can confirm anything. (That error actually proves it *parsed* — a
+   real `SyntaxError` reads differently — but it's a false negative for "loads
+   clean".) So run the check against the **real `index.html` DOM** with Supabase
+   stubbed, the same setup as Phase 3 — `PARSED_OK` in the title = parsed and ran
+   its top-level wiring with no throw:
 
    ```bash
-   cat > /tmp/syncheck.html <<'EOF'
-   <!doctype html><html><body>
-   <script>window.addEventListener('error',e=>{document.title='ERR: '+e.message});</script>
-   <script src="file:///FULL/PATH/app.js"></script>
-   <script>if(!document.title)document.title='PARSED_OK';</script>
-   </body></html>
-   EOF
+   cd /path/to/repo
+   python3 - <<'PY'
+   import re
+   html = open('index.html').read()
+   stub = ("<script>window.SUPABASE_URL='x';window.SUPABASE_ANON_KEY='y';"
+           "window.supabase={createClient:()=>({auth:{onAuthStateChange(){},"
+           "getSession:async()=>({data:{session:null}}),signOut(){}},"
+           "from:()=>({select:()=>({eq:()=>({order:async()=>({data:[],error:null})}),"
+           "order:async()=>({data:[],error:null}),in:async()=>({data:[],error:null})}),"
+           "insert:()=>({select:()=>({single:async()=>({data:{id:1},error:null})})}),"
+           "delete:()=>({eq:async()=>({error:null})}),update:()=>({in:async()=>({error:null})}),"
+           "upsert:async()=>({error:null})}),rpc:async()=>({data:0,error:null}),"
+           "functions:{invoke:async()=>({data:{},error:null})}})};"
+           "window.addEventListener('error',e=>{document.title='ERR: '+e.message});</script>")
+   html = re.sub(r'<script[^>]*supabase[^>]*></script>', '', html, flags=re.I)
+   html = re.sub(r'<script[^>]*src=["\']config\.js["\'][^>]*></script>', stub, html, flags=re.I)
+   html = html.replace('</body>', "<script>setTimeout(()=>{if(!document.title.startsWith('ERR'))document.title='PARSED_OK'},50)</script></body>")
+   open('test_parse.html','w').write(html)
+   PY
+   python3 -m http.server 8765 >/dev/null 2>&1 & SRV=$!; sleep 1
    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless \
-     --disable-gpu --no-sandbox --allow-file-access-from-files \
-     --virtual-time-budget=4000 --dump-dom file:///tmp/syncheck.html 2>/dev/null \
+     --disable-gpu --no-sandbox --virtual-time-budget=5000 \
+     --dump-dom http://localhost:8765/test_parse.html 2>/dev/null \
      | grep -o '<title>[^<]*</title>'
+   kill $SRV 2>/dev/null; rm -f test_parse.html
    ```
 
 2. **Edge Function** — there's no local Deno, so type-check it by eye against
@@ -109,6 +139,15 @@ A human reviewer's job — be systematic, don't eyeball:
 - **Duplication:** repeated literal lists (tag taxonomy, unit tables) should
   have one source of truth. The tag list exists in both `index.html` (checkbox
   UI) and the Edge Function schema by necessity — note it, but verify they match.
+  The prep-word / vague-amount rules are deliberately mirrored in two places —
+  `app.js` (`PREP_WORDS`, `displayGroceryName`) and `scripts/migrate_ingredients.py`
+  (`PREP_WORDS`, `strip_prep`) — because one runs in the browser and the other
+  is a one-time DB migration; if you change one, change the other.
+- **One-off scripts:** `scripts/migrate_ingredients.py` is **user-run only**
+  (it needs the service-role key from the gitignored `notes.md` and writes to
+  production — the sandbox blocks prod writes). Never invoke it from here. It is
+  idempotent and dry-run by default; `scripts/__pycache__/` is build cruft and
+  should be gitignored, not committed.
 
 Record: list each removal/edit; re-run Phase 1 after editing.
 
@@ -151,6 +190,20 @@ Smoke tests worth having (each its own `test_*.html` or one with sub-cases):
   (Known-good: this test passed 7/7 previously.)
 - **Sign-up paths** — both "confirm email ON" (toast about confirmation) and
   "OFF" (immediate sign-in) branches.
+- **Servings round-trip** — open a recipe, tap the detail `＋` stepper, assert
+  the ingredient amounts re-render scaled; check the row into the grocery
+  basket and assert the grocery total reflects the same scale (and stepping in
+  the grocery row updates the detail). Single source of truth = `chosenServings`.
+- **Unit toggle** — click `.unit-toggle-btn[data-unit="us"]` in an open detail
+  and assert weights flip to oz/lb (the open item re-renders, others unaffected;
+  nothing is saved to Supabase).
+- **Step reorder** — toggle `#rf-reorder-steps` in the form, assert `▲▼` controls
+  appear, click `▼` on a step and assert the textarea order changed; save and
+  assert `method` order follows the DOM.
+- **Meal plan flow** — stub `meal_plan_entries` insert/select; click `📅 Add to
+  Weekly Meal Plan` (tray gains the recipe), open the planner, arm the tray chip,
+  tap a day/slot `＋` and assert an `insert` fired; click "Create grocery list"
+  and assert the basket fills from planned servings + entries get `purchased_at`.
 
 ## 4. Functional / business-logic test matrix
 
@@ -162,15 +215,21 @@ logic into the harness). Assert exact outputs:
 |---|---|---|
 | Fraction display | `fmtAmount` | `0.5→½`, `0.25→¼`, `0.33→⅓`, `1.5→1½`, `2→2`, `0→` (blank/"to taste"), `0.125→⅛` |
 | Servings scaling | `scaledIngredients` | double servings doubles amounts; **blank amount stays blank** (to-taste never scales); base servings = no change |
-| Grocery combine | `combinedGroceryItems` | two recipes each needing ground beef → one line summing amounts; mismatched units handled by family |
-| Unit conversion | `canonicalQuantity`, `shoppableQuantity` | g/kg→oz/lb, ml/l→cups/tbsp/tsp; tiny gram amounts (yeast/spice) left as-is |
-| Pantry staples | `isPantryStaple` | salt/pepper/oil/water/sugar/butter → true; "olive oil" still matches; "flour" → false |
+| Servings single-source | `chosenServings`, `setRecipeServings` | basket value wins if picked; else a detail-view override (`servingsByRecipe`); else `baseServings`. Stepping in the **detail** view updates the **grocery** total and vice-versa; floor is 1. |
+| Unit toggle (display only) | `convertForDisplay` | `original`→ passthrough; `us`: 200 g→`7.05 oz`, 700 g→`1.54 lb` (flips to lb at ≥16 oz), 250 ml→`1.06 cup`; `metric`: 1 lb→`453.6 g`, 2 cup→`473 ml`. Non-convertible units (clove/can/slice) and blank amounts pass through unchanged. **Never persisted** — only the open detail re-renders. |
+| Grocery combine | `combinedGroceryItems` | two recipes each needing ground beef → one line summing amounts; mismatched units handled by family; combine key uses `normalizeItemName` so "Black Pepper, to taste" + "pepper" merge. |
+| Combine-key normalize | `normalizeItemName` | strips parentheticals + prep clauses + dash notes; folds synonyms (kosher salt→salt, EVOO/extra-virgin olive oil→olive oil, scallion→green onion, garbanzo→chickpea); "boneless, skinless chicken" kept (not a prep word). |
+| Practical rounding | `canonicalQuantity`, `shoppableQuantity` | rounds **up** so you never under-buy: 450 g→**1 lb**, 90 g→**3.25 oz**, 200 g→**7.25 oz**; `<50 g` stays whole grams (yeast/spice); 1.9 cup→**2 cup**, tbsp→½ steps; counts/cloves→whole number (1.3→2). |
+| Grocery display name | `displayGroceryName` | "carrots, diced"→"carrots", "potatoes, peeled and chopped"→"potatoes", "olive oil — a splash"→"olive oil"; **"peeled tomatoes" / "floury potatoes" kept**; recipe detail & cook view show the original (NOT stripped). |
+| Grocery aisles | `categorizeGrocery`, `groceryByCategory` | order-priority matters: "frozen peas"→**Frozen** (before Produce), "chicken broth"→**Canned** (before Meat), "peanut butter"→**Dry Goods** (before Dairy's bare "butter"); butter→**Dairy**, bucatini/any pasta shape→**Dry Goods**, guanciale→**Meat**, Campari→**Beverages**; unmatched→**Other** (last). Empty sections skipped. |
+| Pantry staples | `isPantryStaple` | salt/pepper/oil/water/sugar/butter/flour → true; "olive oil" still matches; **"bell pepper"/"red pepper" → false** (produce, not the staple); "almond flour" → false (specialty). |
 | Sections | `groupRuns` | items with mixed `group` labels split into runs in order; all-null → one ungrouped run |
 | Sharing labels | `shareButtonLabel`, `shareRecipients` | 0 → "Share", 1 → "Shared with 1 person", 2 → "…2 people" |
 | Escaping | `esc` | `<`, `>`, `&`, `"`, `'` all entity-encoded |
 
-For each: PASS only on exact expected value. A wrong fraction or a to-taste
-item that scaled is a real user-facing bug.
+For each: PASS only on exact expected value. A wrong fraction, a to-taste item
+that scaled, a prep note that leaked onto the shopping list, or a rounding that
+goes *down* (under-buy) is a real user-facing bug.
 
 ## 5. Edge Function logic tests (free — no API call)
 
@@ -292,8 +351,18 @@ Ideas to grow the suite as the app evolves:
   servings; wake-lock requested; works for sectioned recipes.
 - **Servings round-trip:** scale up, edit, save — base amounts unchanged
   (scaling is display-only, never persisted).
+- **Meal-plan persistence:** entries survive a reload (re-read from
+  `meal_plan_entries`); the rolling window is exactly today−7…today+6, so a day
+  ages out of "upcoming" into "history" and eventually drops off; `loadMealPlan`
+  **fails open** to an empty plan if the table is missing. History chips open
+  cook mode at the planned servings; a deleted recipe shows "(recipe unavailable)"
+  rather than throwing.
+- **Recipient remove:** a user who was shared a recipe can Remove it from their
+  own book (`removeSharedWithMe` deletes only their `recipe_shares` row) without
+  touching the owner's copy or anyone else's share.
 - **Empty/edge states:** zero recipes, a recipe with no tags, an ingredient
-  with a blank amount, a 1-step recipe, a recipe shared then unshared.
+  with a blank amount, a 1-step recipe, a recipe shared then unshared, a grocery
+  list built from a plan with a since-deleted recipe.
 - **Network resilience:** Edge Function timeout path (`Promise.race` in
   `app.js:1208`) shows a friendly message, not a spinner forever.
 - **Accessibility smoke:** buttons have labels, form inputs have associated
