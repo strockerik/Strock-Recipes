@@ -33,7 +33,10 @@ body.section-cocktails {
 html { scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  * { transition: none !important; animation: none !important; }
+  /* Disable decorative motion, but NOT the loading spinner — it's essential
+     feedback (an iPhone with Reduce Motion on would otherwise freeze it, so the
+     "Add with AI" wait looks broken). */
+  *:not(.spinner) { transition: none !important; animation: none !important; }
 }
 
 body {
@@ -103,7 +106,9 @@ button:focus-visible, input:focus-visible {
 .account-area {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px 10px;
 }
 .account-email {
   font-family: var(--font-mono);
