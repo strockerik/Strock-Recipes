@@ -248,6 +248,28 @@ test them against saved HTML fixtures with no spend:
 2. **`looksLikeEmptyAppShell`** — a JS-only SPA (e.g. an ostarecipes.com-style
    page): assert `<div id="root|app|__next">` present **and** stripped text
    length is tiny → `true`. A normal blog with real article text → `false`.
+2b. **Link-extraction suite** (the helpers that source URL content:
+   `findJsonLdRecipe`/`findRecipeNode`, `extractYouTube`, `pageMeta`,
+   `looksLikeBotChallenge`). `curl` real pages to `/tmp/*.html`, then run the
+   helper logic over the saved files — **no Anthropic spend.** The sandbox blocks
+   serving `/tmp` over http.server and Python's urllib has no CA certs, so the
+   reliable recipe here is: **curl the fixtures, then a Python script that
+   re-implements the same regex/JSON logic and reads the local files** (ports are
+   mechanical — keep them in sync with the TS). Assert:
+   - `youtube.com/watch?v=vpRV_Pvlczw` → `extractYouTube` returns a title + a
+     >1000-char description containing the recipe ("Butter 125", "apples"). This
+     is the regression test for the reported bug (recipe lived in the video
+     description, which `htmlToText` had thrown away).
+   - `bbcgoodfood.com` + `budgetbytes.com` recipes → `findJsonLdRecipe` returns a
+     Recipe node with `name` (+ `recipeIngredient` where present).
+   - `allrecipes.com` + `liquor.com` → `looksLikeBotChallenge` → `true` (these
+     Cloudflare-wall server fetches; the correct outcome is the paste-text error,
+     not extraction — a self-contained build can't beat their bot protection).
+   Last run: **all 5 PASS.** Also confirm the **front-end fallback**: in the
+   headless-Chrome harness, stub `functions.invoke` to return
+   `{data:{error:"…"}}` for a `type:"url"` payload and assert a
+   **📋 Paste text instead** button (`.ai-paste-fallback`) appears in the error
+   area and clicking it reveals the text box.
 3. **Input validation** — confirm (by reading the branch) that: missing/empty
    `text`, an `images` array longer than `MAX_IMAGES` (4), a disallowed
    `mediaType`, and an unknown `type` each return an `{error}` **before** any

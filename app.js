@@ -1646,6 +1646,17 @@
       aiImportPicker.hidden = false;
       aiImportLoading.hidden = true;
       aiImportStatus.textContent = `Error: ${data?.error || error.message}`;
+      // A link that can't be read (bot-walled site, video with no recipe) should
+      // route straight to the path that always works — pasting the text.
+      if (payload.type === "url") {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "ghost-btn small ai-paste-fallback";
+        btn.textContent = "📋 Paste text instead";
+        btn.addEventListener("click", () => aiPasteTextBtn.click());
+        aiImportStatus.appendChild(document.createElement("br"));
+        aiImportStatus.appendChild(btn);
+      }
       return;
     }
 

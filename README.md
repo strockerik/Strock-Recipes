@@ -80,13 +80,17 @@ Use the app — no editing JS files:
   before upload, so iPhone HEIC photos work. For links, the Edge Function
   fetches the page server-side and prefers the site's embedded schema.org
   Recipe data (JSON-LD) over raw page text — most recipe blogs have it.
-  Login-walled or heavily scripted pages (Instagram, TikTok) won't fetch;
-  paste the caption text for those. Two other categories of link can't be
-  fetched either, and the app will tell you to paste text instead:
-  **bot-protected sites** (e.g. liquor.com) — their Cloudflare-style
-  protection blocks any non-browser request outright, no matter the headers —
-  and **JS-only "app" sites** (e.g. some recipe-card apps built with
-  React/Vite) whose server response is an empty shell with no content until
+  **YouTube** links work too: the function reads the recipe out of the video's
+  description (and falls back to the auto-generated captions if the description
+  is just a teaser), so a cooking video whose creator listed the recipe extracts
+  like any other page. Login-walled or heavily scripted pages (Instagram,
+  TikTok) won't fetch; paste the caption text for those. Two other categories of
+  link can't be fetched either, and the app will tell you to paste text instead
+  (with a one-tap **📋 Paste text instead** button right on the error):
+  **bot-protected sites** (e.g. liquor.com, AllRecipes, Serious Eats) — their
+  Cloudflare-style protection blocks any non-browser request outright, no matter
+  the headers — and **JS-only "app" sites** (e.g. some recipe-card apps built
+  with React/Vite) whose server response is an empty shell with no content until
   client-side JavaScript runs. Both are fundamental limits of fetching a page
   server-side, not bugs to retry. Text and link extractions cost roughly half
   a cent (Haiku); photo extractions a couple of cents (Sonnet, needed to read
