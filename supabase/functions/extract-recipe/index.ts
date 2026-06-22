@@ -237,6 +237,75 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#0?39;|&apos;/gi, "'");
+}
+
+// Title + description from <title> / og: / meta tags — a dependable fallback to
+// give the model a head start on pages whose body text is thin.
+function pageMeta(html: string): { title: string; description: string } {
+  const pick = (re: RegExp) => { const m = html.match(re); return m ? decodeEntities(m[1].trim()) : ""; };
+  const title =
+    pick(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']*)["']/i) ||
+    pick(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const description =
+    pick(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']/i) ||
+    pick(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i);
+  return { title, description };
+}
+
+// ---------- YouTube / video helpers ----------
+// Cooking videos carry the recipe in the description (and/or the spoken
+// captions), not in page text or JSON-LD. YouTube embeds both in the watch page,
+// so read the description first and fall back to the captions.
+function isYouTube(url: URL): boolean {
+  const h = url.hostname.toLowerCase().replace(/^www\./, "");
+  return h === "youtube.com" || h === "m.youtube.com" || h === "youtu.be" || h.endsWith(".youtube.com");
+}
+
+// The description is stored JSON-escaped in the page (\n, \", é); wrap it
+// back into a JSON string to decode it.
+function decodeJsonString(raw: string): string {
+  try { return JSON.parse(`"${raw}"`); } catch { return raw; }
+}
+
+function extractYouTube(html: string): { title: string; description: string; author: string } | null {
+  const dm = html.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
+  if (!dm) return null;
+  const am = html.match(/"author":"((?:[^"\\]|\\.)*)"/);
+  return {
+    title: pageMeta(html).title,
+    description: decodeJsonString(dm[1]),
+    author: am ? decodeJsonString(am[1]) : ""
+  };
+}
+
+// Auto-generated captions as a last resort: read the first caption track and
+// flatten its json3 transcript into plain text. Returns "" if unavailable.
+async function fetchYouTubeTranscript(html: string): Promise<string> {
+  const tm = html.match(/"captionTracks":(\[.*?\])/);
+  if (!tm) return "";
+  let baseUrl = "";
+  try {
+    const tracks = JSON.parse(tm[1]) as Array<{ baseUrl?: string }>;
+    baseUrl = tracks[0]?.baseUrl || "";
+  } catch { return ""; }
+  if (!baseUrl) return "";
+  try {
+    const res = await fetch(baseUrl + "&fmt=json3", { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return "";
+    const data = await res.json();
+    const events = Array.isArray(data?.events) ? data.events : [];
+    return events
+      .map((e: { segs?: Array<{ utf8?: string }> }) => (e.segs || []).map((s) => s.utf8 || "").join(""))
+      .join(" ").replace(/\s+/g, " ").trim();
+  } catch {
+    return "";
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -314,20 +383,53 @@ Deno.serve(async (req) => {
       if (looksLikeBotChallenge(html)) {
         return json({ error: "This site’s bot-protection is blocking automatic access — copy the recipe text and paste it instead." });
       }
-      const jsonLd = findJsonLdRecipe(html);
-      const content = (jsonLd ? JSON.stringify(jsonLd) : htmlToText(html)).slice(0, MAX_PAGE_CHARS);
-      if (content.length < 80) {
-        if (looksLikeEmptyAppShell(html)) {
-          return json({ error: "This page loads its recipe with JavaScript, so there’s no readable text without it — copy the recipe text and paste it instead." });
+      let content: string;
+      let sourceHint = url.hostname;
+
+      if (isYouTube(url)) {
+        // The recipe is in the description; if that's just a teaser, fall back
+        // to the spoken captions, then to og: meta (consent pages have neither).
+        const yt = extractYouTube(html);
+        if (yt?.author) sourceHint = yt.author;
+        let videoText = yt ? `${yt.title}\n\n${yt.description}` : "";
+        if (videoText.replace(/\s/g, "").length < 200) {
+          const transcript = await fetchYouTubeTranscript(html);
+          if (transcript) {
+            const meta = pageMeta(html);
+            videoText = `${yt?.title || meta.title}\n\n${yt?.description || meta.description}\n\nTranscript:\n${transcript}`;
+          }
         }
-        return json({ error: "Couldn’t find readable recipe text on that page — paste the text instead." });
+        if (videoText.replace(/\s/g, "").length < 80) {
+          const meta = pageMeta(html);
+          videoText = `${meta.title}\n\n${meta.description}`;
+        }
+        content = videoText.trim().slice(0, MAX_PAGE_CHARS);
+        if (content.replace(/\s/g, "").length < 80) {
+          return json({ error: "Couldn’t read a recipe from this video — its description and captions don’t contain one. Open the description, copy the recipe text, and paste it instead." });
+        }
+      } else {
+        const jsonLd = findJsonLdRecipe(html);
+        if (jsonLd) {
+          content = JSON.stringify(jsonLd).slice(0, MAX_PAGE_CHARS);
+        } else {
+          // No structured recipe — give the model the page's title/description
+          // (often the recipe name + summary) ahead of the stripped body text.
+          const meta = pageMeta(html);
+          const metaBlock = [meta.title, meta.description].filter(Boolean).join("\n");
+          content = ((metaBlock ? metaBlock + "\n\n" : "") + htmlToText(html)).slice(0, MAX_PAGE_CHARS);
+        }
+        if (content.length < 80) {
+          if (looksLikeEmptyAppShell(html)) {
+            return json({ error: "This page loads its recipe with JavaScript, so there’s no readable text without it — copy the recipe text and paste it instead." });
+          }
+          return json({ error: "Couldn’t find readable recipe text on that page — paste the text instead." });
+        }
       }
-      userContent = [
-        {
-          type: "text",
-          text: `Extract the recipe from this content from ${url.hostname} by calling save_recipe. If the content names no clearer attribution, use "${url.hostname}" as the source.\n\n${content}`
-        }
-      ];
+
+      const promptText = isYouTube(url)
+        ? `Extract the recipe from this YouTube cooking video's description and/or transcript by calling save_recipe. It may be loosely written — turn it into a proper ingredient list and ordered steps, filling gaps as instructed. Use "${sourceHint}" as the source if no clearer attribution is given.\n\n${content}`
+        : `Extract the recipe from this content from ${sourceHint} by calling save_recipe. If the content names no clearer attribution, use "${sourceHint}" as the source.\n\n${content}`;
+      userContent = [{ type: "text", text: promptText }];
     } else {
       return json({ error: "Invalid request." });
     }
