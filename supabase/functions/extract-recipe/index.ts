@@ -65,7 +65,7 @@ const ALL_TAGS = [
 const RECIPE_SCHEMA = {
   type: "object",
   properties: {
-    name: { type: "string", description: "Recipe title" },
+    name: { type: "string", description: "Recipe title, written head-noun-first for alphabetical findability: lead with the core dish or main ingredient, then any style/qualifier descriptors after ' - '. E.g. 'Ultra Fluffy Pancakes' -> 'Pancakes - Ultra Fluffy'. See the naming rule under FORMATTING." },
     subtitle: { type: ["string", "null"], description: "Short tagline or description, or null" },
     source: { type: ["string", "null"], description: "Where the recipe came from (book, site, person), or null" },
     section: { type: "string", enum: ["kitchen", "bar"], description: "'bar' for cocktails/drinks, 'kitchen' for everything else" },
@@ -125,6 +125,7 @@ FILLING GAPS — this is wanted, do not refuse
 - Invent only what's needed to make the recipe complete. Do not fabricate a specific source, author, or backstory — leave source null if unknown.
 
 FORMATTING
+- name: write it HEAD-NOUN-FIRST so the alphabetical list sorts and scans well. Lead with the core dish or main ingredient — the word someone would actually look for — and move marketing / style / attribution words ("Ultra Fluffy", "Restaurant-Style", "The Best", "Easy", "Grandma's", "Famous") to AFTER a " - ". Examples: "Ultra Fluffy Pancakes" -> "Pancakes - Ultra Fluffy"; "Restaurant-Style Taco Beef" -> "Taco Beef - Restaurant-Style"; "Grandma's Apple Pie" -> "Apple Pie - Grandma's". BUT leave a title that already starts with its key word alone ("Chicken Tikka Masala", "Beef Bourguignon", "Banana Bread"), and never reorder an established proper cocktail name ("Negroni", "Aperol Spritz", "Piña Colada") — there the name itself IS the title. Keep it concise; don't invent flavour text.
 - Split amount, unit, and item: "2 cups flour" -> amount 2, unit "cups", item "flour".
 - Item names: write the ingredient's common name in full words, not the card's shorthand — expand abbreviations ("grnd beef" -> "ground beef", "GR PEPPER" -> "green pepper"), drop brand names (use "ketchup" not "Heinz ketchup"), and use the same name every time the same ingredient appears (don't call it "cheddar" in one recipe and "shredded cheese" in another unless the card is genuinely specific). Do NOT put prep instructions in the item: "carrots, diced" becomes item "carrots" (put the dicing in a method step if it matters); likewise drop "chopped", "minced", "room temperature", "for garnish". Product forms that describe what to BUY do stay ("peeled tomatoes", "floury potatoes", "shredded cheese"). This is spelling/phrasing normalization only — never change what the ingredient actually is.
 - Normalize fractions and ranges to decimals ("1/2" -> 0.5, "1-2 tsp" -> 1.5). Keep oven temperatures (e.g. "415°") in the relevant method step, never as an ingredient.
