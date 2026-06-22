@@ -564,20 +564,45 @@
     toast(error ? `Error: ${error.message}` : "Password updated.");
   }
 
+  // One auth request at a time. Pressing Enter twice (or double-tapping) would
+  // otherwise fire two requests and trip Supabase's rate limit, locking the user
+  // out for ~60s. The flag guards re-entry; disabling the submit button also
+  // stops an Enter keypress from re-submitting the form while one is in flight.
+  const authSignInBtn = $("#auth-signin");
+  let authBusy = false;
+  function setAuthBusy(busy) {
+    authBusy = busy;
+    authSignInBtn.disabled = busy;
+    authSignUpBtn.disabled = busy;
+    authForgotBtn.disabled = busy;
+  }
+
+  // Where confirmation / reset links should return: THIS deployed app URL, not
+  // Supabase's Site URL (which 404s if misconfigured). Must also be in the
+  // Supabase redirect allowlist or it's ignored — see README "Accounts".
+  const authRedirectTo = () => window.location.origin + window.location.pathname;
+
   // Sign in (form submit / Enter key / primary button)
   authForm.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (authBusy) return;
     const email = authEmailEl.value.trim();
     const password = authPasswordEl.value;
     if (!email || !password) return;
+    setAuthBusy(true);
     authStatusEl.textContent = "Signing in…";
-    const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-    if (error) authStatusEl.textContent = `Error: ${error.message}`;
-    // On success, onAuthStateChange takes over (hides the gate, loads data).
+    try {
+      const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+      if (error) authStatusEl.textContent = `Error: ${error.message}`;
+      // On success, onAuthStateChange takes over (hides the gate, loads data).
+    } finally {
+      setAuthBusy(false);
+    }
   });
 
   // Create a new account
   authSignUpBtn.addEventListener("click", async () => {
+    if (authBusy) return;
     const email = authEmailEl.value.trim();
     const password = authPasswordEl.value;
     if (!email || !password) {
@@ -588,31 +613,45 @@
       authStatusEl.textContent = "Password must be at least 8 characters.";
       return;
     }
+    setAuthBusy(true);
     authStatusEl.textContent = "Creating account…";
-    const { data, error } = await supabaseClient.auth.signUp({ email, password });
-    if (error) {
-      authStatusEl.textContent = `Error: ${error.message}`;
-    } else if (data.session) {
-      authStatusEl.textContent = "Account created!"; // confirmation off → signed in now
-    } else {
-      authStatusEl.textContent = `Account created — check ${email} to confirm, then sign in.`;
+    try {
+      const { data, error } = await supabaseClient.auth.signUp({
+        email, password,
+        options: { emailRedirectTo: authRedirectTo() }
+      });
+      if (error) {
+        authStatusEl.textContent = `Error: ${error.message}`;
+      } else if (data.session) {
+        authStatusEl.textContent = "Account created!"; // confirmation off → signed in now
+      } else {
+        authStatusEl.textContent = `Account created — check ${email} to confirm, then sign in.`;
+      }
+    } finally {
+      setAuthBusy(false);
     }
   });
 
   // Forgot / set password — emails a link that returns here in recovery mode
   authForgotBtn.addEventListener("click", async () => {
+    if (authBusy) return;
     const email = authEmailEl.value.trim();
     if (!email) {
       authStatusEl.textContent = "Enter your email above first.";
       return;
     }
+    setAuthBusy(true);
     authStatusEl.textContent = "Sending reset link…";
-    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin + window.location.pathname
-    });
-    authStatusEl.textContent = error
-      ? `Error: ${error.message}`
-      : `Check ${email} for a link to set your password.`;
+    try {
+      const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+        redirectTo: authRedirectTo()
+      });
+      authStatusEl.textContent = error
+        ? `Error: ${error.message}`
+        : `Check ${email} for a link to set your password.`;
+    } finally {
+      setAuthBusy(false);
+    }
   });
 
   accountBtn.addEventListener("click", promptForNewPassword);

@@ -67,7 +67,26 @@ safe — the anon key only permits what RLS allows. The **service-role** key
 
 New-account behavior depends on the Supabase **Authentication → Providers →
 Email → "Confirm email"** setting: ON sends one confirmation email at signup;
-OFF signs the new account in immediately. The app handles both.
+OFF signs the new account in immediately. The app handles both. To avoid tripping
+Supabase's rate limit, the sign-in / create-account / reset buttons disable
+themselves while a request is in flight (one request per tap).
+
+### ⚠️ Required URL configuration (or confirmation/reset links 404)
+
+The app asks Supabase to send confirmation and reset links back to its own
+deployed URL (`emailRedirectTo` / `redirectTo`), **but Supabase only honors that
+if the URL is allowlisted — otherwise it silently falls back to the project's
+Site URL.** If the Site URL is wrong (e.g. the default, or the user-root
+`https://strockerik.github.io` which has no Pages site), the email link lands on
+a **404**. Set both, in **Supabase Dashboard → Authentication → URL
+Configuration**:
+
+- **Site URL:** `https://strockerik.github.io/Strock-Recipes/`
+- **Redirect URLs (allowlist):** `https://strockerik.github.io/Strock-Recipes/**`
+  — plus `http://localhost:*/**` for local `python3 -m http.server` testing.
+
+Confirmation links already sent before fixing this keep the old (bad) redirect
+baked in — sign up again (or resend) after correcting the config.
 
 ## Adding recipes
 
