@@ -50,6 +50,7 @@
       </nav>
       <div id="account-area" class="account-area" hidden>
         <span id="account-email" class="account-email"></span>
+        <button id="open-backup" class="ghost-btn small">⬇ Back up</button>
         <button id="account-btn" class="ghost-btn small">Account</button>
         <button id="sign-out" class="ghost-btn small">Sign out</button>
       </div>
@@ -113,6 +114,26 @@
       <p class="keep-hint">On your phone, <strong>Send to phone / Keep</strong> opens the share sheet — pick
         Google Keep to drop the list straight into a note. On desktop, use <strong>Copy list</strong> and paste
         into <a href="https://keep.google.com" target="_blank" rel="noopener">keep.google.com</a>.</p>
+    </div>
+  </div>
+
+  <!-- Backup / export panel -->
+  <div id="backup-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Back up recipes" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Back up recipes</h2>
+        <button id="close-backup" class="ghost-btn small" aria-label="Close backup">Close</button>
+      </div>
+      <div id="backup-content" class="grocery-content"></div>
+      <div class="grocery-actions">
+        <button id="share-backup" class="solid-btn">Send / email to yourself</button>
+        <button id="download-backup" class="ghost-btn">Download .json</button>
+        <button id="copy-backup" class="ghost-btn">Copy JSON</button>
+      </div>
+      <p class="keep-hint">This is your safety net: it saves <strong>your own recipes</strong> (kitchen + bar)
+        as a JSON file. <strong>Send / email to yourself</strong> keeps an offsite copy — do it now and again
+        whenever you add recipes you'd hate to lose. Restoring from a backup is done with
+        <code>scripts/backup_recipes.py</code> (see the README).</p>
     </div>
   </div>
 

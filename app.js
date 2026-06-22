@@ -55,6 +55,7 @@
   const grocerySummary = $("#grocery-summary");
   const groceryPanel = $("#grocery-panel");
   const groceryContent = $("#grocery-content");
+  const backupPanel = $("#backup-panel");
   const mealPlanPanel = $("#meal-plan-panel");
   const mealPlanContent = $("#meal-plan-content");
   const authGate = $("#auth-gate");
@@ -1470,6 +1471,40 @@
     toast("Removed from your shared recipes.");
   }
 
+  // The portable, re-importable shape of one recipe: the `recipes` columns
+  // minus the environment-specific `id`/`user_id`. Single source of truth shared
+  // by copyToMyBook (clone within the app), the JSON export, and the backup
+  // script — change a column in one place and all three stay in sync.
+  function toBackupRow(it) {
+    return {
+      section: it.section,
+      name: it.name,
+      subtitle: it.subtitle,
+      source: it.source,
+      tags: it.tags,
+      base_servings: it.baseServings,
+      servings_label: it.servingsLabel,
+      ingredients: it.ingredients,
+      method: it.method,
+      specs: it.specs,
+      notes: it.notes,
+      is_favorite: it.isFavorite
+    };
+  }
+
+  // Serialize ALL of the signed-in user's own recipes (kitchen + bar) to a
+  // versioned JSON envelope. DATA.recipes/cocktails are already owner-only, so
+  // recipes others shared with me are correctly left out of my backup.
+  function exportRecipesJSON() {
+    return JSON.stringify({
+      app: "The House Index",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      account: session?.user?.email || null,
+      recipes: [...DATA.recipes, ...DATA.cocktails].map(toBackupRow)
+    }, null, 2);
+  }
+
   async function copyToMyBook(item) {
     if (!session) { toast("You've been signed out — sign in again."); return; }
     const name = item.name;
@@ -1478,21 +1513,8 @@
     );
     if (dupe && !confirm(`A recipe named "${dupe.name}" already exists in your book. Copy this one too?`)) return;
 
-    const row = {
-      user_id: session.user.id,
-      section: item.section,
-      name: item.name,
-      subtitle: item.subtitle,
-      source: item.source,
-      tags: item.tags,
-      base_servings: item.baseServings,
-      servings_label: item.servingsLabel,
-      ingredients: item.ingredients,
-      method: item.method,
-      specs: item.specs,
-      notes: item.notes,
-      is_favorite: false
-    };
+    // A copy is a fresh, unfavorited recipe owned by me.
+    const row = { ...toBackupRow(item), user_id: session.user.id, is_favorite: false };
     const { error } = await supabaseClient.from("recipes").insert(row);
     if (error) { toast(`Error: ${error.message}`); return; }
     toast("Copied to your book");
@@ -2085,12 +2107,76 @@
     }
   });
 
-  // Escape closes the grocery panel / recipe form / AI import panel.
+  // ---------- Backup / export ----------
+  // Mirrors the grocery export trio (Download / Copy / Share), but the payload
+  // is the full-fidelity recipe JSON and Share prefers a real file attachment so
+  // an email-to-self lands as a saveable .json (the offsite copy).
+  function backupFilename() {
+    return `house-index-backup-${isoDate(new Date())}.json`;
+  }
+  $("#open-backup").addEventListener("click", () => {
+    if (!session) { toast("Sign in to back up your recipes."); return; }
+    const k = DATA.recipes.length, b = DATA.cocktails.length, n = k + b;
+    $("#backup-content").innerHTML =
+      `<p class="g-empty">${n} recipe${n === 1 ? "" : "s"} ready to export as JSON ` +
+      `(${k} kitchen, ${b} bar).</p>`;
+    backupPanel.hidden = false;
+  });
+  $("#close-backup").addEventListener("click", () => (backupPanel.hidden = true));
+  backupPanel.addEventListener("click", (e) => {
+    if (e.target === backupPanel) backupPanel.hidden = true;
+  });
+
+  $("#copy-backup").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(exportRecipesJSON());
+      toast("Backup JSON copied — paste it somewhere safe");
+    } catch {
+      toast("Couldn’t copy — try the download button");
+    }
+  });
+
+  $("#download-backup").addEventListener("click", () => {
+    const blob = new Blob([exportRecipesJSON()], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = backupFilename();
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  $("#share-backup").addEventListener("click", async () => {
+    const json = exportRecipesJSON();
+    const name = backupFilename();
+    // Prefer sharing an actual file so it arrives as a saveable attachment.
+    if (navigator.canShare) {
+      try {
+        const file = new File([json], name, { type: "application/json" });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: "House Index backup" });
+          return;
+        }
+      } catch { /* fall through to text / copy */ }
+    }
+    if (navigator.share) {
+      try { await navigator.share({ title: "House Index backup", text: json }); return; }
+      catch { /* user cancelled or failed — fall through */ }
+    }
+    try {
+      await navigator.clipboard.writeText(json);
+      toast("Sharing isn’t available here — backup copied instead");
+    } catch {
+      toast("Use Copy or Download on this device");
+    }
+  });
+
+  // Escape closes the grocery / backup panel / meal plan / recipe form / AI import.
   // Cook mode sits on top of everything and has its own Escape handler —
   // don't also close the panels underneath it on the same keypress.
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !cookPanel.hidden) return;
     if (!groceryPanel.hidden) groceryPanel.hidden = true;
+    if (!backupPanel.hidden) backupPanel.hidden = true;
     if (!mealPlanPanel.hidden) mealPlanPanel.hidden = true;
     if (!recipeFormPanel.hidden) closeRecipeForm();
     if (!aiImportPanel.hidden) closeAiImport();

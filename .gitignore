@@ -12,3 +12,6 @@ data/Recipe App Competition
 # Python bytecode cache from one-off scripts/
 __pycache__/
 *.pyc
+
+# Local recipe backups written by scripts/backup_recipes.py
+backups/

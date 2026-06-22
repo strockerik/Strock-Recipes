@@ -446,6 +446,43 @@ resets the checked recipes and check-offs — build the list and send it to Keep
    app. Sign in once and your recipes sync to any device you sign in on with the
    same email + password.
 
+## Backup & restore
+
+Your recipes live only in Supabase, so keep an off-Supabase copy — especially of
+anything you'd hate to lose (the handwritten family recipes you photographed).
+There are two paths; the scope of a backup is **your own recipes, kitchen + bar**
+(recipes others shared with you, your meal plan, and grocery picks are not
+included — they're reconstructable).
+
+**Everyday, from the app (phone-friendly).** Sign in, then tap **⬇ Back up** in
+the header. It exports your recipes as a single JSON file with three options:
+
+- **Send / email to yourself** — opens the share sheet so you can email or AirDrop
+  the file to yourself. This is the important one: it's your *offsite* copy. Do it
+  now, and again whenever you add recipes you care about.
+- **Download .json** — saves the file to Files / Downloads on the device.
+- **Copy JSON** — copies the text as a fallback.
+
+**Archival + restore, from your Mac (the disaster-recovery path).**
+`scripts/backup_recipes.py` reads `SUPABASE_URL` and the service-role key from the
+environment or the gitignored `notes.md` (same as `migrate_ingredients.py`).
+
+```bash
+# Write a faithful, timestamped snapshot to backups/house-index-YYYY-MM-DD.json
+python3 scripts/backup_recipes.py
+
+# Put a snapshot back. Dry-run first (prints what it would do), then --apply.
+python3 scripts/backup_recipes.py --restore backups/house-index-2026-06-22.json
+python3 scripts/backup_recipes.py --restore backups/house-index-2026-06-22.json --apply
+```
+
+The script snapshot keeps each recipe's `id` and owner, so a restore is exact and
+**idempotent** — a recipe whose `id` already exists is skipped, so re-running
+never duplicates. To restore an **in-app export** instead (those files carry no
+ids), add `--owner <your-user-uuid>` (find it in `notes.md`); those rows are
+inserted as new recipes owned by you and deduped by name + section. The
+`backups/` folder is gitignored — keep at least one copy somewhere off this Mac.
+
 ## Local preview
 
 ```bash
