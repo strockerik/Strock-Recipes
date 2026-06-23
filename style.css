@@ -162,6 +162,48 @@ button:focus-visible, input:focus-visible {
   padding: 4px;
 }
 .auth-link:hover { color: var(--accent); }
+.auth-switch {
+  margin-top: 16px;
+  font-size: 0.88rem;
+  color: var(--faint);
+}
+.auth-switch .auth-link {
+  margin-top: 0;
+  font-size: 0.88rem;
+}
+
+/* Password field with an inline Show/Hide toggle */
+.pw-field { position: relative; display: flex; }
+.pw-field .search { flex: 1; padding-right: 64px; }
+.pw-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 8px;
+}
+.pw-toggle:hover { color: var(--accent); }
+
+/* Small spinner that sits inside a button while a request is in flight */
+.btn-spin {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 7px;
+}
+
+/* Account menu panel */
+.account-menu { display: flex; flex-direction: column; gap: 16px; }
+.account-who { margin: 0; color: var(--faint); font-size: 0.95rem; }
+.account-who strong { color: var(--ink); font-family: var(--font-mono); font-size: 0.9rem; }
+#account-reset .account-who { margin-bottom: 4px; }
 
 /* ---------- Controls ---------- */
 .controls { margin-top: 26px; }

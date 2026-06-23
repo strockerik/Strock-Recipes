@@ -62,13 +62,22 @@
   const authForm = $("#auth-form");
   const authEmailEl = $("#auth-email");
   const authPasswordEl = $("#auth-password");
-  const authSignUpBtn = $("#auth-signup");
+  const authSubmitBtn = $("#auth-submit");
   const authForgotBtn = $("#auth-forgot");
   const authStatusEl = $("#auth-status");
+  const authSubEl = $("#auth-sub");
+  const authSwitchBtn = $("#auth-switch");
+  const authSwitchLabel = $("#auth-switch-label");
   const accountArea = $("#account-area");
-  const accountEmailEl = $("#account-email");
   const accountBtn = $("#account-btn");
-  const signOutBtn = $("#sign-out");
+  const accountPanel = $("#account-panel");
+  const accountEmailEl = $("#account-email");
+  const accountMenu = $("#account-menu");
+  const accountResetForm = $("#account-reset");
+  const accountResetIntro = $("#account-reset-intro");
+  const accountNewPass = $("#account-newpass");
+  const accountNewPass2 = $("#account-newpass2");
+  const accountResetStatus = $("#account-reset-status");
   const addRecipeBtn = $("#add-recipe");
   const recipeFormPanel = $("#recipe-form-panel");
   const recipeForm = $("#recipe-form");
@@ -524,6 +533,7 @@
     authGate.hidden = !!session;
     accountArea.hidden = !session;
     if (session) accountEmailEl.textContent = session.user.email;
+    else if (!accountPanel.hidden) accountPanel.hidden = true; // signed out → close menu
   }
 
   let loadedUserId = null; // whose data is currently loaded
@@ -552,29 +562,10 @@
         loadedUserId = null;
         setTimeout(clearData, 0);
       }
-      // Arrived via a "Forgot password?" reset link — let them set a new one.
-      if (event === "PASSWORD_RECOVERY") setTimeout(promptForNewPassword, 0);
+      // Arrived via a "Forgot password?" reset link — the recovery session is
+      // already active, so open the account menu's set-password form.
+      if (event === "PASSWORD_RECOVERY") setTimeout(() => openAccountPanel("reset", true), 0);
     });
-  }
-
-  async function promptForNewPassword() {
-    const password = prompt("Set a new password (at least 8 characters):");
-    if (!password) return;
-    const { error } = await supabaseClient.auth.updateUser({ password });
-    toast(error ? `Error: ${error.message}` : "Password updated.");
-  }
-
-  // One auth request at a time. Pressing Enter twice (or double-tapping) would
-  // otherwise fire two requests and trip Supabase's rate limit, locking the user
-  // out for ~60s. The flag guards re-entry; disabling the submit button also
-  // stops an Enter keypress from re-submitting the form while one is in flight.
-  const authSignInBtn = $("#auth-signin");
-  let authBusy = false;
-  function setAuthBusy(busy) {
-    authBusy = busy;
-    authSignInBtn.disabled = busy;
-    authSignUpBtn.disabled = busy;
-    authForgotBtn.disabled = busy;
   }
 
   // Where confirmation / reset links should return: THIS deployed app URL, not
@@ -582,26 +573,108 @@
   // Supabase redirect allowlist or it's ignored — see README "Accounts".
   const authRedirectTo = () => window.location.origin + window.location.pathname;
 
-  // Sign in (form submit / Enter key / primary button)
-  authForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    if (authBusy) return;
-    const email = authEmailEl.value.trim();
-    const password = authPasswordEl.value;
-    if (!email || !password) return;
-    setAuthBusy(true);
-    authStatusEl.textContent = "Signing in…";
-    try {
-      const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-      if (error) authStatusEl.textContent = `Error: ${error.message}`;
-      // On success, onAuthStateChange takes over (hides the gate, loads data).
-    } finally {
-      setAuthBusy(false);
+  // Turn a raw Supabase auth error into plain, recoverable guidance. Returns
+  // { text, resend?, switchToSignin? } — resend offers a "Resend confirmation"
+  // button; switchToSignin flips the form to sign-in mode.
+  function friendlyAuthError(error, ctx) {
+    const raw = (error && error.message) || "Something went wrong — try again.";
+    const m = raw.toLowerCase();
+    if (m.includes("invalid login credentials"))
+      return { text: "That email or password didn’t match. Check them, or reset your password." };
+    if (m.includes("email not confirmed"))
+      return { text: "Your email isn’t confirmed yet — check your inbox for the link.", resend: true };
+    if (ctx === "signup" && (m.includes("already registered") || m.includes("already been registered") || m.includes("user already")))
+      return { text: "You already have an account — switched you to Sign in.", switchToSignin: true };
+    if (m.includes("rate limit") || m.includes("too many") || m.includes("for security purposes"))
+      return { text: "Too many tries — wait a moment, then try again." };
+    return { text: raw };
+  }
+
+  // Render a status message; optionally append a "Resend confirmation" button.
+  function showAuthStatus(result, email) {
+    authStatusEl.textContent = result.text;
+    if (result.resend && email) {
+      authStatusEl.appendChild(document.createTextNode(" "));
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "auth-link";
+      btn.textContent = "Resend confirmation email";
+      btn.addEventListener("click", () => resendConfirmation(email, btn));
+      authStatusEl.appendChild(btn);
     }
+    if (result.switchToSignin) setAuthMode("signin", true);
+  }
+
+  async function resendConfirmation(email, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const { error } = await supabaseClient.auth.resend({
+        type: "signup", email, options: { emailRedirectTo: authRedirectTo() }
+      });
+      authStatusEl.textContent = error
+        ? friendlyAuthError(error).text
+        : `Sent — check ${email} for the confirmation link.`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // --- Sign in / Create account: one form, two modes ---
+  let authMode = "signin";
+  const AUTH_COPY = {
+    signin: { submit: "Sign in", busy: "Signing in…", sub: "Sign in to view your recipes.",
+              switchLabel: "New here?", switchBtn: "Create an account", pw: "current-password" },
+    signup: { submit: "Create account", busy: "Creating account…", sub: "Create an account to start your recipe book.",
+              switchLabel: "Have an account?", switchBtn: "Sign in", pw: "new-password" },
+  };
+
+  function setAuthMode(mode, keepStatus) {
+    authMode = mode === "signup" ? "signup" : "signin";
+    const c = AUTH_COPY[authMode];
+    authSubmitBtn.textContent = c.submit;
+    authSubEl.textContent = c.sub;
+    authSwitchLabel.textContent = c.switchLabel;
+    authSwitchBtn.textContent = c.switchBtn;
+    authPasswordEl.setAttribute("autocomplete", c.pw);
+    authForgotBtn.hidden = authMode !== "signin";
+    if (!keepStatus) authStatusEl.textContent = "";
+  }
+
+  // One auth request at a time. Pressing Enter twice (or double-tapping) would
+  // otherwise fire two requests and trip Supabase's rate limit, locking the user
+  // out for ~60s. The flag guards re-entry; disabling the buttons also stops an
+  // Enter keypress from re-submitting the form while one is in flight.
+  let authBusy = false;
+  function setAuthBusy(busy) {
+    authBusy = busy;
+    authSubmitBtn.disabled = busy;
+    authForgotBtn.disabled = busy;
+    authSwitchBtn.disabled = busy;
+    if (busy) authSubmitBtn.innerHTML = '<span class="spinner btn-spin"></span>' + AUTH_COPY[authMode].busy;
+    else authSubmitBtn.textContent = AUTH_COPY[authMode].submit;
+  }
+
+  // Password show/hide — works for every [data-pw-toggle] field (gate + reset)
+  document.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-pw-toggle]");
+    if (!t) return;
+    const input = document.getElementById(t.getAttribute("data-pw-toggle"));
+    if (!input) return;
+    const reveal = input.type === "password";
+    input.type = reveal ? "text" : "password";
+    t.setAttribute("aria-pressed", reveal ? "true" : "false");
+    t.setAttribute("aria-label", reveal ? "Hide password" : "Show password");
+    t.textContent = reveal ? "Hide" : "Show";
   });
 
-  // Create a new account
-  authSignUpBtn.addEventListener("click", async () => {
+  authSwitchBtn.addEventListener("click", () => {
+    if (authBusy) return;
+    setAuthMode(authMode === "signin" ? "signup" : "signin");
+  });
+
+  // Submit → sign in or create account depending on the current mode
+  authForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
     if (authBusy) return;
     const email = authEmailEl.value.trim();
     const password = authPasswordEl.value;
@@ -609,35 +682,36 @@
       authStatusEl.textContent = "Enter an email and password first.";
       return;
     }
-    if (password.length < 8) {
+    if (authMode === "signup" && password.length < 8) {
       authStatusEl.textContent = "Password must be at least 8 characters.";
       return;
     }
     setAuthBusy(true);
-    authStatusEl.textContent = "Creating account…";
+    authStatusEl.textContent = AUTH_COPY[authMode].busy;
     try {
-      const { data, error } = await supabaseClient.auth.signUp({
-        email, password,
-        options: { emailRedirectTo: authRedirectTo() }
-      });
-      if (error) {
-        authStatusEl.textContent = `Error: ${error.message}`;
-      } else if (data.session) {
-        authStatusEl.textContent = "Account created!"; // confirmation off → signed in now
+      if (authMode === "signup") {
+        const { data, error } = await supabaseClient.auth.signUp({
+          email, password, options: { emailRedirectTo: authRedirectTo() }
+        });
+        if (error) showAuthStatus(friendlyAuthError(error, "signup"), email);
+        else if (data.session) authStatusEl.textContent = "Account created!"; // confirmation off
+        else authStatusEl.textContent = `Account created — check ${email} to confirm, then sign in.`;
       } else {
-        authStatusEl.textContent = `Account created — check ${email} to confirm, then sign in.`;
+        const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        if (error) showAuthStatus(friendlyAuthError(error, "signin"), email);
+        // On success, onAuthStateChange takes over (hides the gate, loads data).
       }
     } finally {
       setAuthBusy(false);
     }
   });
 
-  // Forgot / set password — emails a link that returns here in recovery mode
+  // Forgot password — emails a link that returns here in recovery mode
   authForgotBtn.addEventListener("click", async () => {
     if (authBusy) return;
     const email = authEmailEl.value.trim();
     if (!email) {
-      authStatusEl.textContent = "Enter your email above first.";
+      authStatusEl.textContent = "Enter your email above first, then tap this.";
       return;
     }
     setAuthBusy(true);
@@ -647,16 +721,71 @@
         redirectTo: authRedirectTo()
       });
       authStatusEl.textContent = error
-        ? `Error: ${error.message}`
-        : `Check ${email} for a link to set your password.`;
+        ? friendlyAuthError(error).text
+        : `Check ${email} for a link to set a new password.`;
     } finally {
       setAuthBusy(false);
     }
   });
 
-  accountBtn.addEventListener("click", promptForNewPassword);
+  // --- Account menu (signed-in) ---
+  function showAccountView(view) {
+    const reset = view === "reset";
+    accountMenu.hidden = reset;
+    accountResetForm.hidden = !reset;
+    if (reset) {
+      accountNewPass.value = "";
+      accountNewPass2.value = "";
+      accountResetStatus.textContent = "";
+    }
+  }
+  function openAccountPanel(view, recovery) {
+    accountResetIntro.textContent = recovery
+      ? "Welcome back — choose a new password to finish."
+      : "Choose a new password.";
+    showAccountView(view || "menu");
+    accountPanel.hidden = false;
+  }
+  accountBtn.addEventListener("click", () => openAccountPanel("menu"));
+  $("#close-account").addEventListener("click", () => (accountPanel.hidden = true));
+  accountPanel.addEventListener("click", (e) => {
+    if (e.target === accountPanel) accountPanel.hidden = true;
+  });
+  $("#account-change-pw").addEventListener("click", () => showAccountView("reset"));
+  $("#account-reset-cancel").addEventListener("click", () => showAccountView("menu"));
+  $("#account-backup").addEventListener("click", () => {
+    accountPanel.hidden = true;
+    openBackupPanel();
+  });
+  $("#account-signout").addEventListener("click", () => {
+    accountPanel.hidden = true;
+    supabaseClient.auth.signOut();
+  });
 
-  signOutBtn.addEventListener("click", () => supabaseClient.auth.signOut());
+  let acctResetBusy = false;
+  accountResetForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (acctResetBusy) return;
+    const pw = accountNewPass.value;
+    const pw2 = accountNewPass2.value;
+    if (pw.length < 8) { accountResetStatus.textContent = "Password must be at least 8 characters."; return; }
+    if (pw !== pw2) { accountResetStatus.textContent = "Those two passwords don’t match."; return; }
+    acctResetBusy = true;
+    accountResetStatus.textContent = "Updating…";
+    try {
+      const { error } = await supabaseClient.auth.updateUser({ password: pw });
+      if (error) {
+        accountResetStatus.textContent = friendlyAuthError(error).text;
+      } else {
+        accountResetStatus.textContent = "Password updated.";
+        setTimeout(() => { accountPanel.hidden = true; showAccountView("menu"); }, 1200);
+      }
+    } finally {
+      acctResetBusy = false;
+    }
+  });
+
+  setAuthMode("signin"); // default the gate to sign-in
 
   // ---------- Filtering ----------
   function activePool() {
@@ -2164,14 +2293,14 @@
   function backupFilename() {
     return `house-index-backup-${isoDate(new Date())}.json`;
   }
-  $("#open-backup").addEventListener("click", () => {
+  function openBackupPanel() {
     if (!session) { toast("Sign in to back up your recipes."); return; }
     const k = DATA.recipes.length, b = DATA.cocktails.length, n = k + b;
     $("#backup-content").innerHTML =
       `<p class="g-empty">${n} recipe${n === 1 ? "" : "s"} ready to export as JSON ` +
       `(${k} kitchen, ${b} bar).</p>`;
     backupPanel.hidden = false;
-  });
+  }
   $("#close-backup").addEventListener("click", () => (backupPanel.hidden = true));
   backupPanel.addEventListener("click", (e) => {
     if (e.target === backupPanel) backupPanel.hidden = true;
@@ -2227,6 +2356,7 @@
     if (e.key !== "Escape" || !cookPanel.hidden) return;
     if (!groceryPanel.hidden) groceryPanel.hidden = true;
     if (!backupPanel.hidden) backupPanel.hidden = true;
+    if (!accountPanel.hidden) accountPanel.hidden = true;
     if (!mealPlanPanel.hidden) mealPlanPanel.hidden = true;
     if (!recipeFormPanel.hidden) closeRecipeForm();
     if (!aiImportPanel.hidden) closeAiImport();

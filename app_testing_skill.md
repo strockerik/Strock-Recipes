@@ -183,13 +183,32 @@ The established pattern for this app (no DOM/test framework, so drive the real
 Smoke tests worth having (each its own `test_*.html` or one with sub-cases):
 
 - **Auth UI** — `onAuthStateChange('SIGNED_IN')` hides the auth gate and shows
-  the recipe list; `SIGNED_OUT` reverses it. `PASSWORD_RECOVERY` fires
-  `promptForNewPassword`.
-- **Account button** — click `#account-btn`, stub `window.prompt`, assert
-  `auth.updateUser({password})` is called and a "Password updated." toast shows.
-  (Known-good: this test passed 7/7 previously.)
-- **Sign-up paths** — both "confirm email ON" (toast about confirmation) and
+  the recipe list; `SIGNED_OUT` reverses it. `PASSWORD_RECOVERY` opens the
+  **Account menu's set-password form** (`openAccountPanel("reset", true)`) — there
+  is no `window.prompt` anymore.
+- **One-action sign-in gate** — opens in sign-in mode (`#auth-submit` reads
+  "Sign in", password `autocomplete="current-password"`, `#auth-forgot` visible);
+  clicking `#auth-switch` flips to sign-up (button "Create account",
+  `autocomplete="new-password"`, forgot link hidden). Submit calls
+  `signInWithPassword` in signin mode and `signUp` in signup mode. A
+  double-`submit` in one tick fires **exactly one** call (the `authBusy` guard).
+- **Password show/hide** — clicking a `[data-pw-toggle]` flips its input between
+  `type="password"` and `type="text"`.
+- **Friendly errors** — stub `signInWithPassword` to return
+  `{message:"Invalid login credentials"}` → status reads "didn't match"; return
+  `{message:"Email not confirmed"}` → status shows a **"Resend confirmation
+  email"** button whose click calls `auth.resend`.
+- **Account menu** — click `#account-btn` → `#account-panel` opens on the menu
+  view; **Change password** shows `#account-reset`; a mismatched confirm blocks
+  `auth.updateUser` (status "don't match"), matching confirm calls it; Escape
+  closes the panel.
+- **Sign-up paths** — both "confirm email ON" (status about confirmation) and
   "OFF" (immediate sign-in) branches.
+
+  (Known-good: a 20-assertion headless harness covering all of the above passed
+  20/20 — build it the same way: stub `window.supabase.createClient`, drive the
+  **real** `index.html` DOM + `app.js`, write results into a `#result` div, run
+  with `python3 -m http.server` + Chrome `--headless=new --dump-dom`.)
 - **Servings round-trip** — open a recipe, tap the detail `＋` stepper, assert
   the ingredient amounts re-render scaled; check the row into the grocery
   basket and assert the grocery total reflects the same scale (and stepping in

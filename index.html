@@ -25,19 +25,28 @@
   <div id="auth-gate" class="auth-gate">
     <div class="auth-card">
       <h1 class="site-title">The House Index</h1>
-      <p class="auth-sub">Sign in to view your recipes.</p>
+      <p id="auth-sub" class="auth-sub">Sign in to view your recipes.</p>
+
+      <!-- Sign in / create account (one action; the switch link flips modes) -->
       <form id="auth-form" class="auth-form">
         <input id="auth-email" class="search" type="email" inputmode="email"
                autocomplete="email" placeholder="you@example.com" required
                aria-label="Email address">
-        <input id="auth-password" class="search" type="password"
-               autocomplete="current-password" placeholder="Password" required
-               minlength="8" aria-label="Password">
-        <button type="submit" id="auth-signin" class="solid-btn">Sign in</button>
-        <button type="button" id="auth-signup" class="ghost-btn">Create account</button>
+        <div class="pw-field">
+          <input id="auth-password" class="search" type="password"
+                 autocomplete="current-password" placeholder="Password" required
+                 minlength="8" aria-label="Password">
+          <button type="button" class="pw-toggle" data-pw-toggle="auth-password"
+                  aria-pressed="false" aria-label="Show password">Show</button>
+        </div>
+        <button type="submit" id="auth-submit" class="solid-btn">Sign in</button>
       </form>
       <button type="button" id="auth-forgot" class="auth-link">Forgot password?</button>
       <p id="auth-status" class="auth-status" aria-live="polite"></p>
+      <p class="auth-switch">
+        <span id="auth-switch-label">New here?</span>
+        <button type="button" id="auth-switch" class="auth-link">Create an account</button>
+      </p>
     </div>
   </div>
 
@@ -49,10 +58,7 @@
         <button class="tab tab-bar" role="tab" aria-selected="false" data-section="cocktails">Bar</button>
       </nav>
       <div id="account-area" class="account-area" hidden>
-        <span id="account-email" class="account-email"></span>
-        <button id="open-backup" class="ghost-btn small">⬇ Back up</button>
-        <button id="account-btn" class="ghost-btn small">Account</button>
-        <button id="sign-out" class="ghost-btn small">Sign out</button>
+        <button id="account-btn" class="ghost-btn small" aria-haspopup="dialog">Account ▾</button>
       </div>
     </div>
   </header>
@@ -134,6 +140,44 @@
         as a JSON file. <strong>Send / email to yourself</strong> keeps an offsite copy — do it now and again
         whenever you add recipes you'd hate to lose. Restoring from a backup is done with
         <code>scripts/backup_recipes.py</code> (see the README).</p>
+    </div>
+  </div>
+
+  <!-- Account menu -->
+  <div id="account-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Account" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Account</h2>
+        <button id="close-account" class="ghost-btn small" aria-label="Close account">Close</button>
+      </div>
+
+      <!-- Menu view -->
+      <div id="account-menu" class="account-menu">
+        <p class="account-who">Signed in as <strong id="account-email"></strong></p>
+        <div class="grocery-actions">
+          <button id="account-change-pw" class="ghost-btn">Change password</button>
+          <button id="account-backup" class="ghost-btn">⬇ Back up recipes</button>
+          <button id="account-signout" class="solid-btn">Sign out</button>
+        </div>
+      </div>
+
+      <!-- Set-a-new-password view (also shown on a reset-link landing) -->
+      <form id="account-reset" class="auth-form" hidden>
+        <p id="account-reset-intro" class="account-who">Choose a new password.</p>
+        <div class="pw-field">
+          <input id="account-newpass" class="search" type="password"
+                 autocomplete="new-password" placeholder="New password (8+ characters)" required
+                 minlength="8" aria-label="New password">
+          <button type="button" class="pw-toggle" data-pw-toggle="account-newpass"
+                  aria-pressed="false" aria-label="Show password">Show</button>
+        </div>
+        <input id="account-newpass2" class="search" type="password"
+               autocomplete="new-password" placeholder="Confirm new password" required
+               minlength="8" aria-label="Confirm new password">
+        <button type="submit" id="account-reset-submit" class="solid-btn">Set password</button>
+        <button type="button" id="account-reset-cancel" class="auth-link">Cancel</button>
+        <p id="account-reset-status" class="auth-status" aria-live="polite"></p>
+      </form>
     </div>
   </div>
 

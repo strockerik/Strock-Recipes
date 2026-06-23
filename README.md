@@ -57,19 +57,32 @@ safe — the anon key only permits what RLS allows. The **service-role** key
 
 ## Accounts
 
+The sign-in screen shows **one action at a time**: it opens in **Sign in** mode,
+and a **"New here? Create an account"** link flips it to sign-up (and back). The
+password field has a **Show/Hide** toggle, and the primary button shows a spinner
+while a request is in flight.
+
 - **Sign in** with your email + password.
-- **Create account** makes a new private recipe book for a new email.
-- **Forgot password?** emails a link that returns to the app and prompts you to
-  set a new password (also how you set a password the first time on an account
-  that was originally created via magic link).
-- **Account** (next to Sign out, once signed in) lets you set a new password
-  without signing out.
+- **Create an account** (via the switch link) makes a new private recipe book for
+  a new email.
+- **Forgot password?** (sign-in mode) emails a link that returns to the app and
+  drops you straight into a **set-a-new-password** form — new password + confirm,
+  with its own Show/Hide (also how you set a password the first time on an account
+  originally created via magic link). No browser pop-up.
+- **Account ▾** (top-right, once signed in) opens a small menu with your email,
+  **Change password** (the same inline form), **⬇ Back up recipes**, and
+  **Sign out**.
+
+Errors are mapped to plain, recoverable guidance instead of raw Supabase strings:
+a wrong password points you at "reset your password"; an **unconfirmed email**
+shows a one-tap **"Resend confirmation email"** button; signing up with an email
+that already exists auto-switches you to Sign in.
 
 New-account behavior depends on the Supabase **Authentication → Providers →
 Email → "Confirm email"** setting: ON sends one confirmation email at signup;
 OFF signs the new account in immediately. The app handles both. To avoid tripping
-Supabase's rate limit, the sign-in / create-account / reset buttons disable
-themselves while a request is in flight (one request per tap).
+Supabase's rate limit, the submit / forgot / switch controls disable themselves
+while a request is in flight (one request per tap).
 
 ### ⚠️ Required URL configuration (or confirmation/reset links 404)
 
@@ -477,8 +490,9 @@ There are two paths; the scope of a backup is **your own recipes, kitchen + bar*
 (recipes others shared with you, your meal plan, and grocery picks are not
 included — they're reconstructable).
 
-**Everyday, from the app (phone-friendly).** Sign in, then tap **⬇ Back up** in
-the header. It exports your recipes as a single JSON file with three options:
+**Everyday, from the app (phone-friendly).** Sign in, open **Account ▾** in the
+header, and tap **⬇ Back up recipes**. It exports your recipes as a single JSON
+file with three options:
 
 - **Send / email to yourself** — opens the share sheet so you can email or AirDrop
   the file to yourself. This is the important one: it's your *offsite* copy. Do it
