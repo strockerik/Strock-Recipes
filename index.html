@@ -58,6 +58,7 @@
         <button class="tab tab-bar" role="tab" aria-selected="false" data-section="cocktails">Bar</button>
       </nav>
       <div id="account-area" class="account-area" hidden>
+        <button id="open-guide" class="ghost-btn small">Guide</button>
         <button id="account-btn" class="ghost-btn small" aria-haspopup="dialog">Account ▾</button>
       </div>
     </div>
@@ -178,6 +179,108 @@
         <button type="button" id="account-reset-cancel" class="auth-link">Cancel</button>
         <p id="account-reset-status" class="auth-status" aria-live="polite"></p>
       </form>
+    </div>
+  </div>
+
+  <!-- Feature guide -->
+  <div id="guide-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Feature guide" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Feature guide</h2>
+        <button id="close-guide" class="ghost-btn small" aria-label="Close guide">Close</button>
+      </div>
+      <div class="guide-content">
+
+        <section class="guide-hero">
+          <p class="guide-eyebrow">A quick tour</p>
+          <h1 class="guide-h1">The House Index</h1>
+          <p class="guide-lede">Your recipes and house cocktails, kept in one tidy place — search them, scale them, cook straight from them, and turn a week of meals into a single grocery list.</p>
+          <p class="guide-sub">Here's a quick look at what it does, and how to add your first recipe. Sign in with your email on any device and your recipe book follows you.</p>
+        </section>
+
+        <section class="guide-feature">
+          <p class="guide-kicker">01 — Your recipe book</p>
+          <h2 class="guide-h2">Every recipe in one place</h2>
+          <p class="guide-p">Kitchen recipes and bar cocktails live side by side, each as a tidy card you can open to read in full. Search by name, ingredient, or tag, and star the ones you reach for most.</p>
+          <ul class="guide-pts">
+            <li><b>Search &amp; filter</b> by name, tag, or ingredient</li>
+            <li><b>Scale any recipe</b> — written for 4, cook for 8, amounts adjust live</li>
+            <li><b>Switch units</b> between original, US, and metric</li>
+          </ul>
+        </section>
+
+        <section class="guide-feature">
+          <p class="guide-kicker">02 — Cook mode</p>
+          <h2 class="guide-h2">Cook hands-free, one step at a time</h2>
+          <p class="guide-p">Tap <b>▶ Cook</b> on any recipe for a full-screen guided mode. Each step fills the screen in large type; tap to advance. The ingredient list is one tap away, already scaled to your servings.</p>
+          <ul class="guide-pts">
+            <li><b>The screen stays awake</b> while you cook — no more tapping with floury hands</li>
+            <li><b>Big, glanceable steps</b> you can read from across the counter</li>
+          </ul>
+        </section>
+
+        <section class="guide-feature">
+          <p class="guide-kicker">03 — Grocery list</p>
+          <h2 class="guide-h2">From recipes to a shopping list in one tap</h2>
+          <p class="guide-p">Check off the recipes you want to make and the app builds one combined list — the same ingredient from two recipes becomes a single line, with amounts rounded up to what a store actually sells.</p>
+          <ul class="guide-pts">
+            <li><b>Sorted by aisle</b> — produce, meat, dairy, and so on</li>
+            <li><b>Tick items off</b> as you shop</li>
+            <li><b>Send straight to Google Keep</b>, copy, or download</li>
+          </ul>
+        </section>
+
+        <section class="guide-feature">
+          <p class="guide-kicker">04 — Weekly meal plan</p>
+          <h2 class="guide-h2">Plan the week, shop for it once</h2>
+          <p class="guide-p">Stage the recipes you're thinking about, then drop them onto a day and a meal — breakfast, lunch, or dinner. When the week's set, roll the whole plan into one grocery list.</p>
+          <ul class="guide-pts">
+            <li><b>A rolling 7-day view</b>, plus a week of history</li>
+            <li><b>Servings add up</b> across the days a recipe appears</li>
+          </ul>
+        </section>
+
+        <section class="guide-feature">
+          <p class="guide-kicker">05 — Ask AI</p>
+          <h2 class="guide-h2">A cooking coach for every recipe</h2>
+          <p class="guide-p">Open any recipe and tap <b>✨ Ask AI</b> to talk it through. It's a real back-and-forth chat with two modes — reply and keep going until it clicks.</p>
+          <ul class="guide-pts">
+            <li><b>🛟 What went wrong?</b> — describe a flop and it asks about pan, heat, and timing first, then explains <i>why</i> it happened and how to prevent or rescue it</li>
+            <li><b>✨ Improve it</b> — say what to change (“too sweet”, “missing something”) and it suggests specific tweaks with amounts</li>
+            <li><b>Apply changes</b> pre-fills the edit form with the rewrite — you review and save; nothing is written on its own</li>
+          </ul>
+        </section>
+
+        <section class="guide-band">
+          <p class="guide-kicker">Getting started — adding a recipe</p>
+          <h2 class="guide-h2">Two ways to add a recipe</h2>
+          <p class="guide-p">Tap <b>✨ Add with AI</b> or <b>+ Add recipe</b> at the top of your list. The AI route fills the form in for you; the manual route gives you the same form to type into. Either way, you review everything before it saves.</p>
+
+          <div class="guide-way">
+            <h3 class="guide-h3">✨ With AI <span class="guide-tag">fastest</span></h3>
+            <ol class="guide-steps">
+              <li>Tap <b>✨ Add with AI</b>.</li>
+              <li>Snap a photo of a recipe card or cookbook page, paste a link, or paste text like an Instagram caption.</li>
+              <li>AI reads it and fills in the form.</li>
+              <li>Check it over and tap <b>Save recipe</b>.</li>
+            </ol>
+          </div>
+          <div class="guide-way">
+            <h3 class="guide-h3">+ By hand <span class="guide-tag">full control</span></h3>
+            <ol class="guide-steps">
+              <li>Tap <b>+ Add recipe</b>.</li>
+              <li>Enter a name, pick Kitchen or Bar, and set servings.</li>
+              <li>Add ingredient rows and method steps, and choose any tags.</li>
+              <li>Tap <b>Save recipe</b> — it's in your book.</li>
+            </ol>
+          </div>
+        </section>
+
+        <div class="guide-closer">
+          <p>That's the whole app. Add a few recipes, build a grocery list, and try Cook mode the next time you're at the stove. Questions? Just ask — and welcome to the House Index.</p>
+        </div>
+
+      </div>
     </div>
   </div>
 

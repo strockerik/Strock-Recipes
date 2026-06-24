@@ -56,6 +56,7 @@
   const groceryPanel = $("#grocery-panel");
   const groceryContent = $("#grocery-content");
   const backupPanel = $("#backup-panel");
+  const guidePanel = $("#guide-panel");
   const mealPlanPanel = $("#meal-plan-panel");
   const mealPlanContent = $("#meal-plan-content");
   const authGate = $("#auth-gate");
@@ -2567,6 +2568,16 @@
     if (e.target === backupPanel) backupPanel.hidden = true;
   });
 
+  // ---------- Feature guide ----------
+  $("#open-guide").addEventListener("click", () => {
+    guidePanel.querySelector(".grocery-panel-inner").scrollTop = 0;
+    guidePanel.hidden = false;
+  });
+  $("#close-guide").addEventListener("click", () => (guidePanel.hidden = true));
+  guidePanel.addEventListener("click", (e) => {
+    if (e.target === guidePanel) guidePanel.hidden = true;
+  });
+
   $("#copy-backup").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(exportRecipesJSON());
@@ -2617,6 +2628,7 @@
     if (e.key !== "Escape" || !cookPanel.hidden) return;
     if (!groceryPanel.hidden) groceryPanel.hidden = true;
     if (!backupPanel.hidden) backupPanel.hidden = true;
+    if (!guidePanel.hidden) guidePanel.hidden = true;
     if (!accountPanel.hidden) accountPanel.hidden = true;
     if (!mealPlanPanel.hidden) mealPlanPanel.hidden = true;
     if (!recipeFormPanel.hidden) closeRecipeForm();
