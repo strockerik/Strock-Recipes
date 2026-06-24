@@ -498,6 +498,20 @@ If either SQL block hasn't been run yet (or an RPC call errors for any reason),
 that Edge Function fails open — the request proceeds without a cap rather than
 breaking.
 
+**Verifying setup:** don't call the RPCs directly from the SQL editor — they run
+there as `postgres` with no signed-in user, so `auth.uid()` is null and the insert
+fails with a not-null error (that error means the function exists, not that it's
+broken). Just confirm the objects exist:
+
+```sql
+select count(*) from public.coach_usage;                              -- table exists → 0
+select proname from pg_proc where proname = 'increment_coach_usage';  -- function exists
+```
+
+The caps only increment with a real user's JWT, so the true test is in the app:
+use the feature and watch the count climb (the 21st same-day call returns the
+"used today's 20…" message). The same applies to `increment_extraction_usage`.
+
 ## Edge Function deployment (AI)
 
 There are **two** Edge Functions, each deployed via the Supabase dashboard (Edge
