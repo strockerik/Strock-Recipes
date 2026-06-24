@@ -2057,12 +2057,13 @@
           extra += `<ul class="coach-suggestions">${sugg.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`;
         }
         const concluded = !coachLastResult.needs_more_info;
+        // Action buttons get their own line under the reply (the wrapper is block).
         if (concluded && coachLastResult.revised_recipe && mine) {
           // A revised recipe is ready (a tweak, or a troubleshoot emphasis) → review & save.
-          extra += `<button type="button" class="solid-btn small coach-apply-btn">Apply changes to recipe</button>`;
+          extra += `<div class="coach-actions"><button type="button" class="solid-btn small coach-apply-btn">Apply changes to recipe</button></div>`;
         } else if (concluded && coachMode === "troubleshoot" && mine) {
           // Diagnosis is in — offer to bake the lesson into the recipe's steps.
-          extra += `<button type="button" class="ghost-btn small coach-emphasize-btn">✍️ Update recipe to emphasize this</button>`;
+          extra += `<div class="coach-actions"><button type="button" class="ghost-btn small coach-emphasize-btn">✍️ Update recipe to emphasize this</button></div>`;
         }
       }
       return `<div class="coach-msg ${m.role === "user" ? "user" : "ai"}">${esc(m.content).replace(/\n/g, "<br>")}${extra}</div>`;

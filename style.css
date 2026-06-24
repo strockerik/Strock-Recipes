@@ -1217,7 +1217,8 @@ button:focus-visible, input:focus-visible {
   padding-left: 20px;
 }
 .coach-suggestions li { margin: 3px 0; }
-.coach-msg.ai .coach-apply-btn { margin-top: 10px; }
+/* Put action buttons on their own line under the reply text. */
+.coach-actions { margin-top: 12px; }
 .coach-reply-row {
   display: flex;
   gap: 8px;
