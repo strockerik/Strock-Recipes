@@ -319,15 +319,19 @@ test them against saved HTML fixtures with no spend:
    `text`, an `images` array longer than `MAX_IMAGES` (4), a disallowed
    `mediaType`, and an unknown `type` each return an `{error}` **before** any
    fetch to Anthropic.
-4. **Daily cap** — logic-review `increment_extraction_usage`: 21st call same
-   UTC day returns `-1` (→ "used today's 20…" error); first call next UTC day
-   resets to 1. To verify live without the app, in the Supabase SQL editor as
-   the test user:
+4. **Daily caps** — two independent buckets: imports via
+   `increment_extraction_usage` (20/day, `extract-recipe`) and coaching via
+   `increment_coach_usage` (20/day, `recipe-coach`, each ✨ Ask AI message incl. an
+   emphasize request). For each, the 21st call same UTC day returns `-1` (→ "used
+   today's 20…" error) and the first call next UTC day resets to 1; the two never
+   draw down each other. To verify live without the app, in the Supabase SQL
+   editor as the test user:
    ```sql
    select public.increment_extraction_usage(20);  -- returns running count, or -1 at the cap
+   select public.increment_coach_usage(20);        -- separate counter
    ```
-   Confirm the function **fails open**: if the RPC errors (migration missing),
-   the Edge Function logs and proceeds — extraction must not break.
+   Confirm each **fails open**: if its RPC errors (migration missing), the Edge
+   Function logs and proceeds — the request must not break.
 
 ## 6. AI extraction tests — the sample recipe photos  ⚠️ spends quota
 

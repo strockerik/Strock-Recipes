@@ -9,8 +9,8 @@
 //
 // Mirrors extract-recipe: structured output via a forced tool_choice, the
 // Anthropic key stays server-side, the caller's Supabase JWT is verified, and
-// the shared per-user daily AI cap (increment_extraction_usage) is enforced
-// before any paid call.
+// a per-user daily cap is enforced before any paid call — in the coach's OWN
+// bucket (increment_coach_usage), separate from the import cap.
 //
 // Request body (JSON):
 //   { mode: "troubleshoot" | "tweak",
@@ -26,8 +26,11 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 // Reasoning quality is the whole point here (real culinary diagnosis), and these
 // calls are low-volume + short, so the stronger model costs little in practice.
 const MODEL_COACH = "claude-sonnet-4-6";
-// Shared per-user daily cap on paid Anthropic calls (same RPC as extract-recipe).
-const DAILY_EXTRACTION_LIMIT = 20;
+// Per-user daily cap on paid coach calls, tracked in its OWN bucket
+// (increment_coach_usage) so coaching and recipe imports are limited separately.
+// Each conversational turn — including an "emphasize this in the recipe" request —
+// counts as one. A typical troubleshooting session is a few turns.
+const DAILY_COACH_LIMIT = 20;
 const ANTHROPIC_VERSION = "2023-06-01";
 // Defensive caps on conversational input so a runaway client can't send a novel.
 const MAX_MESSAGES = 24;
@@ -188,14 +191,14 @@ Deno.serve(async (req) => {
     const messages = sanitizeMessages(body.messages);
     if (!messages) return json({ error: "No question was received." });
 
-    // Enforce the shared per-user daily cap right before the paid call. Fails
-    // open (logs and proceeds) if the SQL migration hasn't been run yet.
+    // Enforce the coach's own per-user daily cap right before the paid call.
+    // Fails open (logs and proceeds) if the SQL migration hasn't been run yet.
     const { data: usageResult, error: usageError } = await supabaseClient
-      .rpc("increment_extraction_usage", { daily_limit: DAILY_EXTRACTION_LIMIT });
+      .rpc("increment_coach_usage", { daily_limit: DAILY_COACH_LIMIT });
     if (!usageError && usageResult === -1) {
-      return json({ error: `You’ve used today’s ${DAILY_EXTRACTION_LIMIT} AI requests — it resets at midnight UTC. Try again tomorrow.` });
+      return json({ error: `You’ve used today’s ${DAILY_COACH_LIMIT} AI coaching requests — it resets at midnight UTC. Try again tomorrow.` });
     }
-    if (usageError) console.error("extraction_usage check failed:", usageError);
+    if (usageError) console.error("coach_usage check failed:", usageError);
 
     const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

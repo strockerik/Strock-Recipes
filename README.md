@@ -166,8 +166,9 @@ Use the app — no editing JS files:
   It's a real back-and-forth (type a reply, press Enter to send; Shift+Enter for a
   newline). Each recipe's conversation is **kept for 24 hours** (per mode, in the
   browser's local storage) so you can close the panel and revisit the coaching
-  later; after 24 hours it's cleared automatically. Coaching shares the same
-  **20/day** AI budget as extraction, and each message in a conversation counts as
+  later; after 24 hours it's cleared automatically. Coaching has its **own
+  20/day cap** (separate from the 20/day import cap), where each message in a
+  conversation — including an "emphasize this in the recipe" request — counts as
   one request.
 
 Every open recipe has a **servings stepper** at the top: scale a recipe written
@@ -400,13 +401,21 @@ create index meal_plan_entries_user_date on public.meal_plan_entries (user_id, p
 
 Until this runs, the planner just shows up empty (it fails open).
 
-## AI extraction limit
+## AI usage limits
 
-Each account can run at most **20 AI extractions/day** (any mix of photo,
-text, or link), enforced server-side so it can't be bypassed from the
-browser. The count resets at midnight UTC.
+Two independent per-user daily caps, both enforced server-side (in the Edge
+Functions, via `SECURITY DEFINER` RPCs) so they can't be bypassed from the
+browser, and both resetting at midnight UTC:
 
-**One-time setup (Supabase SQL editor)** — run once:
+- **20 AI extractions/day** — `extract-recipe` (any mix of photo, text, or link).
+- **20 AI coaching requests/day** — `recipe-coach` (each ✨ Ask AI message,
+  including an "emphasize this in the recipe" request, counts as one).
+
+Each limit is a single constant in its Edge Function (`DAILY_EXTRACTION_LIMIT` /
+`DAILY_COACH_LIMIT`) — change the number and redeploy that function. Each uses its
+own table + RPC, so they never starve each other.
+
+**One-time setup (Supabase SQL editor)** — run once for extractions:
 
 ```sql
 create table public.extraction_usage (
@@ -446,8 +455,47 @@ $$;
 grant execute on function public.increment_extraction_usage(int) to authenticated;
 ```
 
-If this SQL hasn't been run yet (or the RPC call errors for any reason), the
-Edge Function fails open — extraction proceeds without a cap rather than
+**And once for coaching** — the same pattern in its own bucket, so coaching and
+imports are counted separately:
+
+```sql
+create table public.coach_usage (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  usage_date date not null,
+  count int not null default 0,
+  primary key (user_id, usage_date)
+);
+alter table public.coach_usage enable row level security;
+-- No policies on purpose: reachable only via the SECURITY DEFINER function below.
+
+create or replace function public.increment_coach_usage(daily_limit int)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  updated_count int;
+begin
+  insert into public.coach_usage as cu (user_id, usage_date, count)
+  values (auth.uid(), (now() at time zone 'utc')::date, 1)
+  on conflict (user_id, usage_date) do update
+    set count = cu.count + 1
+    where cu.count < daily_limit
+  returning cu.count into updated_count;
+
+  if updated_count is null then
+    return -1; -- already at/over the limit, not incremented
+  end if;
+  return updated_count;
+end;
+$$;
+
+grant execute on function public.increment_coach_usage(int) to authenticated;
+```
+
+If either SQL block hasn't been run yet (or an RPC call errors for any reason),
+that Edge Function fails open — the request proceeds without a cap rather than
 breaking.
 
 ## Edge Function deployment (AI)
@@ -466,8 +514,10 @@ Requirements (apply to **both** functions):
 - Secret `ANTHROPIC_API_KEY` set under Edge Functions → Secrets (shared).
 - **Verify JWT: OFF** for each (they do their own auth check and handle the CORS
   preflight; leaving it on breaks browser calls).
-- Both share the per-user daily cap via the `increment_extraction_usage` RPC, so
-  no extra migration is needed for `recipe-coach`.
+- Each has its **own** per-user daily cap: `extract-recipe` uses
+  `increment_extraction_usage` (20/day) and `recipe-coach` uses
+  `increment_coach_usage` (20/day) — both fail open if their migration hasn't run.
+  See "AI usage limits" for the one-time SQL.
 - Set a monthly spend limit on the Anthropic account as a runaway-cost guard.
 - After editing a repo `index.ts`, paste the new contents into that function's
   dashboard editor and hit Deploy — pushing to GitHub does **not** redeploy it.
