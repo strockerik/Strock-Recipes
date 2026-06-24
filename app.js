@@ -1917,6 +1917,8 @@
   // A conversational assistant scoped to one recipe. The full thread is held
   // client-side and resent each turn (the Edge Function is stateless); in
   // troubleshoot mode the AI asks clarifying questions before diagnosing.
+  // Each recipe's conversation (per mode) is cached in localStorage for 24h so
+  // the cook can close the panel and revisit the coaching later.
   let coachRecipeId = null;
   let coachMode = "troubleshoot";
   let coachMessages = [];          // [{ role:"user"|"assistant", content }]
@@ -1928,6 +1930,61 @@
     troubleshoot: "Describe what happened — e.g. “the caramel turned out grainy and the apples were watery.”",
     tweak: "What would you like changed? e.g. “it’s too sweet” or “the sauce feels like it’s missing something.”"
   };
+
+  // --- 24h conversation persistence (per recipe, per mode) ---
+  const COACH_STORE_PREFIX = "coach:v1:";
+  const COACH_TTL_MS = 24 * 60 * 60 * 1000;
+  const COACH_MAX_STORED_MESSAGES = 40;
+  const coachStoreKey = (recipeId) => COACH_STORE_PREFIX + recipeId;
+
+  // Read a recipe's stored conversations, dropping any mode older than 24h.
+  function loadCoachStore(recipeId) {
+    try {
+      const raw = localStorage.getItem(coachStoreKey(recipeId));
+      if (!raw) return {};
+      const store = JSON.parse(raw) || {};
+      let changed = false;
+      for (const mode of Object.keys(store)) {
+        if (!store[mode] || Date.now() - (store[mode].updatedAt || 0) > COACH_TTL_MS) {
+          delete store[mode];
+          changed = true;
+        }
+      }
+      if (changed) {
+        if (Object.keys(store).length) localStorage.setItem(coachStoreKey(recipeId), JSON.stringify(store));
+        else localStorage.removeItem(coachStoreKey(recipeId));
+      }
+      return store;
+    } catch {
+      return {}; // storage unavailable (e.g. Safari private mode) — in-memory only
+    }
+  }
+
+  // Persist the current conversation; called after every turn.
+  function saveCoachState() {
+    if (!coachRecipeId) return;
+    try {
+      const store = loadCoachStore(coachRecipeId);
+      if (coachMessages.length) {
+        store[coachMode] = {
+          messages: coachMessages.slice(-COACH_MAX_STORED_MESSAGES),
+          result: coachLastResult,
+          updatedAt: Date.now()
+        };
+      } else {
+        delete store[coachMode];
+      }
+      if (Object.keys(store).length) localStorage.setItem(coachStoreKey(coachRecipeId), JSON.stringify(store));
+      else localStorage.removeItem(coachStoreKey(coachRecipeId));
+    } catch { /* storage unavailable — the in-memory thread still works this session */ }
+  }
+
+  // Load the saved thread for the current recipe + mode into memory (or empty).
+  function restoreCoachState() {
+    const saved = loadCoachStore(coachRecipeId)[coachMode];
+    coachMessages = saved && Array.isArray(saved.messages) ? saved.messages.slice() : [];
+    coachLastResult = saved && saved.result ? saved.result : null;
+  }
 
   function coachRecipe() {
     return coachRecipeId ? byId[coachRecipeId] : null;
@@ -1955,10 +2012,9 @@
     coachModeTweakBtn.classList.toggle("is-active", coachMode === "tweak");
     coachModeTweakBtn.setAttribute("aria-selected", String(coachMode === "tweak"));
     coachInput.placeholder = COACH_PLACEHOLDERS[coachMode];
-    // Switching mode starts a fresh conversation.
-    coachMessages = [];
-    coachLastResult = null;
+    // Restore this mode's saved conversation (within 24h), else start fresh.
     coachStatus.textContent = "";
+    restoreCoachState();
     renderCoachThread();
   }
 
@@ -1994,15 +2050,19 @@
     const parts = coachMessages.map((m, i) => {
       const last = i === coachMessages.length - 1;
       let extra = "";
-      // Attach suggestions / Apply to the final assistant turn only.
+      // Attach suggestions / Apply / Emphasize to the final assistant turn only.
       if (m.role === "assistant" && last && coachLastResult) {
         const sugg = coachLastResult.suggestions || [];
         if (sugg.length) {
           extra += `<ul class="coach-suggestions">${sugg.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`;
         }
-        const canApply = coachMode === "tweak" && coachLastResult.revised_recipe && !coachLastResult.needs_more_info && mine;
-        if (canApply) {
+        const concluded = !coachLastResult.needs_more_info;
+        if (concluded && coachLastResult.revised_recipe && mine) {
+          // A revised recipe is ready (a tweak, or a troubleshoot emphasis) → review & save.
           extra += `<button type="button" class="solid-btn small coach-apply-btn">Apply changes to recipe</button>`;
+        } else if (concluded && coachMode === "troubleshoot" && mine) {
+          // Diagnosis is in — offer to bake the lesson into the recipe's steps.
+          extra += `<button type="button" class="ghost-btn small coach-emphasize-btn">✍️ Update recipe to emphasize this</button>`;
         }
       }
       return `<div class="coach-msg ${m.role === "user" ? "user" : "ai"}">${esc(m.content).replace(/\n/g, "<br>")}${extra}</div>`;
@@ -2011,16 +2071,17 @@
     coachThread.scrollTop = coachThread.scrollHeight;
   }
 
-  async function sendCoach() {
+  async function sendCoach(textOverride) {
     if (coachBusy) return;
     const it = coachRecipe();
     if (!it) return;
-    const text = coachInput.value.trim();
+    const text = (textOverride != null ? textOverride : coachInput.value).trim();
     if (!text) return;
 
     coachMessages.push({ role: "user", content: text });
-    coachInput.value = "";
+    if (textOverride == null) coachInput.value = "";
     coachLastResult = null;
+    saveCoachState();
     renderCoachThread();
 
     coachBusy = true;
@@ -2055,8 +2116,17 @@
 
     coachLastResult = data.result;
     coachMessages.push({ role: "assistant", content: data.result.reply });
+    saveCoachState();
     renderCoachThread();
     coachInput.focus();
+  }
+
+  // Ask the coach to fold the diagnosis into the recipe's steps, then route the
+  // returned revised recipe through the normal review-before-save flow.
+  const COACH_EMPHASIZE_PROMPT =
+    "Based on what we figured out, please update my recipe to emphasize the step(s) I got wrong — make the critical detail (the exact amount, temperature, timing, or technique that caused the problem) clear and hard to miss in the method, so I don't repeat the mistake. Keep everything else the same.";
+  function requestCoachEmphasis() {
+    sendCoach(COACH_EMPHASIZE_PROMPT);
   }
 
   function applyCoachRevision() {
@@ -2071,7 +2141,7 @@
 
   coachModeTroubleshootBtn.addEventListener("click", () => setCoachMode("troubleshoot"));
   coachModeTweakBtn.addEventListener("click", () => setCoachMode("tweak"));
-  coachSendBtn.addEventListener("click", sendCoach);
+  coachSendBtn.addEventListener("click", () => sendCoach());
   coachInput.addEventListener("keydown", (e) => {
     // Enter sends; Shift+Enter inserts a newline.
     if (e.key === "Enter" && !e.shiftKey) {
@@ -2081,6 +2151,7 @@
   });
   coachThread.addEventListener("click", (e) => {
     if (e.target.closest(".coach-apply-btn")) applyCoachRevision();
+    else if (e.target.closest(".coach-emphasize-btn")) requestCoachEmphasis();
   });
   $("#close-coach").addEventListener("click", closeCoachPanel);
   coachPanel.addEventListener("click", (e) => {

@@ -110,7 +110,7 @@ const COACH_SCHEMA = {
       type: ["object", "null"],
       properties: RECIPE_PROPERTIES,
       required: RECIPE_REQUIRED,
-      description: "TWEAK MODE ONLY: a COMPLETE revised recipe (every field) with the changes applied and everything else carried over unchanged, when a rewrite genuinely helps. null otherwise — and ALWAYS null in troubleshoot mode."
+      description: "A COMPLETE revised recipe (every field) with the changes applied and everything else carried over unchanged, when a rewrite genuinely helps OR the cook asks you to update/emphasize the recipe. null otherwise (and null while still diagnosing)."
     }
   },
   required: ["reply", "needs_more_info", "suggestions", "revised_recipe"]
@@ -123,7 +123,8 @@ You are in a back-and-forth conversation. Your job is to reach the REAL cause, n
 - If the cause is at all ambiguous, ASK 1-3 short, specific clarifying questions BEFORE concluding — about pan size and material, heat level, exact oven/stovetop temperatures, timings, the visual or textural cues they saw, ingredient brands or substitutions, and which step they were on. Put the questions in \`reply\`, set \`needs_more_info\` true, and leave \`suggestions\` empty.
 - Once you're confident, give your diagnosis in \`reply\`: the most likely cause(s), a brief explanation of WHY (the underlying food science), and how to do it right next time — plus a rescue if one exists. Set \`needs_more_info\` false and put the concrete fixes as short bullets in \`suggestions\`.
 - Keep replies warm, concise, and jargon-light. One idea at a time; don't dump everything at once.
-- This is troubleshooting, not rewriting — ALWAYS set \`revised_recipe\` to null.`;
+- Default to NOT rewriting the recipe — keep \`revised_recipe\` null while you diagnose.
+- BUT if the cook asks you to update or emphasize the recipe based on what went wrong, set \`revised_recipe\` to a COMPLETE revised recipe (every field) that rewrites the relevant METHOD step(s) to emphasize the critical detail(s) they missed — the exact measurement, temperature, timing, or technique cue that caused the failure — wording it so the mistake won't recur (a short "Important:" or "Be precise:" lead-in within the step text is good; do NOT use markdown like ** **). Change only what's needed to make those steps clear; carry everything else over unchanged, and append one line to \`notes\` starting "AI tweaked: " naming what you emphasized. In \`reply\`, briefly say what you changed. Keep \`needs_more_info\` false.`;
 
 const TWEAK_PROMPT = `You are an expert cook helping someone improve a recipe they already have — making it less sweet or salty, fixing balance, adding what's missing, or improving technique. You answer by calling the \`respond\` tool every turn.
 
@@ -240,7 +241,7 @@ Deno.serve(async (req) => {
         reply: result.reply,
         needs_more_info: !!result.needs_more_info,
         suggestions: Array.isArray(result.suggestions) ? result.suggestions.filter((s: unknown) => typeof s === "string" && s.trim()) : [],
-        revised_recipe: mode === "tweak" && result.revised_recipe && typeof result.revised_recipe === "object"
+        revised_recipe: result.revised_recipe && typeof result.revised_recipe === "object"
           ? result.revised_recipe
           : null
       }

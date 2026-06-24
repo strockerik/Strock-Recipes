@@ -150,7 +150,11 @@ Use the app — no editing JS files:
   - **🛟 What went wrong?** — describe a dish that flopped ("the caramel burned
     and there was too much liquid"); the coach **asks a clarifying question or two
     first** (pan, heat, timing) to pin down the real cause, then explains *why* it
-    happened and how to prevent or rescue it.
+    happened and how to prevent or rescue it. Once it's diagnosed the problem, an
+    **✍️ Update recipe to emphasize this** button (your own recipes) asks the coach
+    to rewrite the relevant method step(s) to call out the critical detail you
+    missed — exact amount, temperature, timing, or technique — then routes through
+    the same review-before-save flow.
   - **✨ Improve it** — say what you want changed ("too sweet", "too salty",
     "missing something"); the coach suggests specific changes with amounts and
     technique. When a rewrite helps, an **Apply changes to recipe** button opens
@@ -160,8 +164,11 @@ Use the app — no editing JS files:
     "AI tweaked:" line.
 
   It's a real back-and-forth (type a reply, press Enter to send; Shift+Enter for a
-  newline). Coaching shares the same **20/day** AI budget as extraction, and each
-  message in a conversation counts as one request.
+  newline). Each recipe's conversation is **kept for 24 hours** (per mode, in the
+  browser's local storage) so you can close the panel and revisit the coaching
+  later; after 24 hours it's cleared automatically. Coaching shares the same
+  **20/day** AI budget as extraction, and each message in a conversation counts as
+  one request.
 
 Every open recipe has a **servings stepper** at the top: scale a recipe written
 for 4 up to 8 (it shows "×2 of 4") and the ingredient amounts rescale live. The

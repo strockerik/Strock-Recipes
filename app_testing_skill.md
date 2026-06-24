@@ -221,10 +221,20 @@ Smoke tests worth having (each its own `test_*.html` or one with sub-cases):
   mutated after the call); a `needs_more_info:true` reply renders an AI question
   with **no** suggestions/Apply and keeps the reply box; a second Send posts
   `messages.length === 3` (history kept) and a `needs_more_info:false` reply
-  renders `suggestions`; switching to **Improve it** clears the thread; a tweak
-  result with `revised_recipe` shows **Apply changes to recipe** (owned only),
-  whose click closes the panel and opens the edit form with `#rf-name` ===
-  the revised name. (Known-good: a 23-assertion harness passed 23/23.)
+  renders `suggestions`; a tweak result with `revised_recipe` shows **Apply
+  changes to recipe** (owned only), whose click closes the panel and opens the
+  edit form with `#rf-name` === the revised name.
+  - **24h persistence** — after a turn, `localStorage["coach:v1:<recipeId>"]` holds
+    the thread (per mode) with an `updatedAt`; closing and reopening the panel
+    restores it; a pre-seeded entry with `updatedAt` older than 24h is pruned on
+    open (thread comes back empty, the key is removed). Storage access is wrapped
+    in try/catch (Safari private mode falls back to in-memory).
+  - **Emphasize → apply** (troubleshoot) — once a troubleshoot turn concludes on an
+    owned recipe, an **✍️ Update recipe to emphasize this** button appears; clicking
+    it sends a canned "emphasize the step I got wrong" turn (still `mode:
+    "troubleshoot"`), and a reply carrying `revised_recipe` swaps the emphasize
+    button for **Apply changes to recipe** → the edit form shows the rewritten step.
+  (Known-good: an 18-assertion harness covering all of the above passed 18/18.)
 - **Servings round-trip** — open a recipe, tap the detail `＋` stepper, assert
   the ingredient amounts re-render scaled; check the row into the grocery
   basket and assert the grocery total reflects the same scale (and stepping in
