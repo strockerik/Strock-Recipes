@@ -121,6 +121,15 @@
   const aiLinkArea = $("#ai-link-area");
   const aiLinkInput = $("#ai-link-input");
   const aiLinkSubmitBtn = $("#ai-link-submit");
+  const coachPanel = $("#coach-panel");
+  const coachRecipeName = $("#coach-recipe-name");
+  const coachThread = $("#coach-thread");
+  const coachLoading = $("#coach-loading");
+  const coachStatus = $("#coach-status");
+  const coachInput = $("#coach-input");
+  const coachSendBtn = $("#coach-send");
+  const coachModeTroubleshootBtn = $("#coach-mode-troubleshoot");
+  const coachModeTweakBtn = $("#coach-mode-tweak");
   const cookPanel = $("#cook-panel");
   const cookTitle = $("#cook-title");
   const cookCloseBtn = $("#cook-close");
@@ -950,6 +959,7 @@
       <div class="detail-actions-row">
         ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
         <button class="ghost-btn small add-to-plan-btn" data-id="${esc(it.id)}">📅 Add to Weekly Meal Plan</button>
+        <button class="ghost-btn small coach-btn" data-id="${esc(it.id)}">✨ Ask AI</button>
       </div>
       <div class="detail-actions-row">
         ${mine ? `
@@ -1903,6 +1913,180 @@
     renderAiPhotoQueue();
   });
 
+  // ---------- AI recipe coach (troubleshoot / improve) ----------
+  // A conversational assistant scoped to one recipe. The full thread is held
+  // client-side and resent each turn (the Edge Function is stateless); in
+  // troubleshoot mode the AI asks clarifying questions before diagnosing.
+  let coachRecipeId = null;
+  let coachMode = "troubleshoot";
+  let coachMessages = [];          // [{ role:"user"|"assistant", content }]
+  let coachBusy = false;
+  let coachToken = 0;              // guards stale responses
+  let coachLastResult = null;      // the latest assistant result (for Apply)
+
+  const COACH_PLACEHOLDERS = {
+    troubleshoot: "Describe what happened — e.g. “the caramel turned out grainy and the apples were watery.”",
+    tweak: "What would you like changed? e.g. “it’s too sweet” or “the sauce feels like it’s missing something.”"
+  };
+
+  function coachRecipe() {
+    return coachRecipeId ? byId[coachRecipeId] : null;
+  }
+
+  // The recipe shape the Edge Function (and a revised_recipe round-trip) expects.
+  function serializeRecipeForCoach(it) {
+    return {
+      name: it.name,
+      subtitle: it.subtitle,
+      section: it.section,
+      tags: it.tags,
+      base_servings: it.baseServings,
+      servings_label: it.servingsLabel,
+      ingredients: it.ingredients,
+      method: it.method,
+      notes: it.notes
+    };
+  }
+
+  function setCoachMode(mode) {
+    coachMode = mode === "tweak" ? "tweak" : "troubleshoot";
+    coachModeTroubleshootBtn.classList.toggle("is-active", coachMode === "troubleshoot");
+    coachModeTroubleshootBtn.setAttribute("aria-selected", String(coachMode === "troubleshoot"));
+    coachModeTweakBtn.classList.toggle("is-active", coachMode === "tweak");
+    coachModeTweakBtn.setAttribute("aria-selected", String(coachMode === "tweak"));
+    coachInput.placeholder = COACH_PLACEHOLDERS[coachMode];
+    // Switching mode starts a fresh conversation.
+    coachMessages = [];
+    coachLastResult = null;
+    coachStatus.textContent = "";
+    renderCoachThread();
+  }
+
+  function openCoachPanel(id) {
+    const it = byId[id];
+    if (!it) return;
+    coachRecipeId = id;
+    coachToken++;
+    coachLoading.hidden = true;
+    coachInput.value = "";
+    coachRecipeName.textContent = `· ${it.name}`;
+    setCoachMode("troubleshoot");
+    coachPanel.hidden = false;
+    coachInput.focus();
+  }
+
+  function closeCoachPanel() {
+    coachToken++;             // abandon any in-flight response
+    coachBusy = false;
+    coachPanel.hidden = true;
+  }
+
+  function renderCoachThread() {
+    const it = coachRecipe();
+    const mine = it && it.userId === session?.user?.id;
+    if (!coachMessages.length) {
+      const hint = coachMode === "tweak"
+        ? "Tell me what to improve and I’ll suggest specific changes — and can rewrite the recipe for you to review."
+        : "Tell me what went wrong and I’ll help you figure out why. I may ask a couple of questions first.";
+      coachThread.innerHTML = `<p class="coach-empty">${esc(hint)}</p>`;
+      return;
+    }
+    const parts = coachMessages.map((m, i) => {
+      const last = i === coachMessages.length - 1;
+      let extra = "";
+      // Attach suggestions / Apply to the final assistant turn only.
+      if (m.role === "assistant" && last && coachLastResult) {
+        const sugg = coachLastResult.suggestions || [];
+        if (sugg.length) {
+          extra += `<ul class="coach-suggestions">${sugg.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`;
+        }
+        const canApply = coachMode === "tweak" && coachLastResult.revised_recipe && !coachLastResult.needs_more_info && mine;
+        if (canApply) {
+          extra += `<button type="button" class="solid-btn small coach-apply-btn">Apply changes to recipe</button>`;
+        }
+      }
+      return `<div class="coach-msg ${m.role === "user" ? "user" : "ai"}">${esc(m.content).replace(/\n/g, "<br>")}${extra}</div>`;
+    });
+    coachThread.innerHTML = parts.join("");
+    coachThread.scrollTop = coachThread.scrollHeight;
+  }
+
+  async function sendCoach() {
+    if (coachBusy) return;
+    const it = coachRecipe();
+    if (!it) return;
+    const text = coachInput.value.trim();
+    if (!text) return;
+
+    coachMessages.push({ role: "user", content: text });
+    coachInput.value = "";
+    coachLastResult = null;
+    renderCoachThread();
+
+    coachBusy = true;
+    coachSendBtn.disabled = true;
+    coachLoading.hidden = false;
+    coachStatus.textContent = "";
+    const token = ++coachToken;
+
+    const invokePromise = supabaseClient.functions.invoke("recipe-coach", {
+      body: { mode: coachMode, recipe: serializeRecipeForCoach(it), messages: coachMessages }
+    }).catch((error) => ({ error }));
+    const timeoutPromise = new Promise((resolve) =>
+      setTimeout(() => resolve(EXTRACTION_TIMEOUT), EXTRACTION_TIMEOUT_MS)
+    );
+    const raced = await Promise.race([invokePromise, timeoutPromise]);
+
+    // Stale: panel closed, mode switched, or a newer turn started.
+    if (token !== coachToken || coachPanel.hidden) return;
+    coachBusy = false;
+    coachSendBtn.disabled = false;
+    coachLoading.hidden = true;
+
+    if (raced === EXTRACTION_TIMEOUT) {
+      coachStatus.textContent = "That’s taking too long — check your connection and try again.";
+      return;
+    }
+    const { data, error } = raced;
+    if (error || data?.error) {
+      coachStatus.textContent = `Error: ${data?.error || error.message}`;
+      return;
+    }
+
+    coachLastResult = data.result;
+    coachMessages.push({ role: "assistant", content: data.result.reply });
+    renderCoachThread();
+    coachInput.focus();
+  }
+
+  function applyCoachRevision() {
+    const it = coachRecipe();
+    const revised = coachLastResult?.revised_recipe;
+    if (!it || !revised) return;
+    closeCoachPanel();
+    openRecipeForm(it);
+    fillRecipeFormFromExtraction(revised);
+    recipeFormStatus.textContent = "AI suggested these changes — please review before saving.";
+  }
+
+  coachModeTroubleshootBtn.addEventListener("click", () => setCoachMode("troubleshoot"));
+  coachModeTweakBtn.addEventListener("click", () => setCoachMode("tweak"));
+  coachSendBtn.addEventListener("click", sendCoach);
+  coachInput.addEventListener("keydown", (e) => {
+    // Enter sends; Shift+Enter inserts a newline.
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendCoach();
+    }
+  });
+  coachThread.addEventListener("click", (e) => {
+    if (e.target.closest(".coach-apply-btn")) applyCoachRevision();
+  });
+  $("#close-coach").addEventListener("click", closeCoachPanel);
+  coachPanel.addEventListener("click", (e) => {
+    if (e.target === coachPanel) closeCoachPanel();
+  });
+
   // ---------- Events ----------
   // Tabs
   document.querySelectorAll(".tab").forEach((btn) => {
@@ -2004,6 +2188,11 @@
 
     if (e.target.closest(".cook-btn")) {
       openCookMode(byId[id], chosenServings(byId[id]));
+      return;
+    }
+
+    if (e.target.closest(".coach-btn")) {
+      openCoachPanel(id);
       return;
     }
 
@@ -2360,6 +2549,7 @@
     if (!mealPlanPanel.hidden) mealPlanPanel.hidden = true;
     if (!recipeFormPanel.hidden) closeRecipeForm();
     if (!aiImportPanel.hidden) closeAiImport();
+    if (!coachPanel.hidden) closeCoachPanel();
   });
 
   // ---------- Init ----------

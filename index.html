@@ -375,6 +375,36 @@
     </div>
   </div>
 
+  <!-- AI recipe coach: troubleshoot a flop / suggest + apply tweaks -->
+  <div id="coach-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Ask AI about this recipe" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Ask AI <span id="coach-recipe-name" class="coach-recipe-name"></span></h2>
+        <button id="close-coach" class="ghost-btn small" aria-label="Close AI coach">Close</button>
+      </div>
+
+      <div class="coach-mode-toggle" role="tablist" aria-label="Coach mode">
+        <button type="button" id="coach-mode-troubleshoot" class="coach-mode-btn is-active" role="tab" aria-selected="true">🛟 What went wrong?</button>
+        <button type="button" id="coach-mode-tweak" class="coach-mode-btn" role="tab" aria-selected="false">✨ Improve it</button>
+      </div>
+
+      <div id="coach-thread" class="coach-thread" aria-live="polite"></div>
+
+      <div id="coach-loading" class="ai-import-loading" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Thinking…</p>
+      </div>
+
+      <p id="coach-status" class="auth-status" aria-live="polite"></p>
+
+      <div class="coach-reply-row">
+        <textarea id="coach-input" class="search" rows="3" maxlength="6000"
+                  aria-label="Your message to the AI coach"></textarea>
+        <button type="button" id="coach-send" class="solid-btn">Send</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Cook mode (full-screen, one step at a time, keeps the screen awake) -->
   <div id="cook-panel" class="cook-panel" role="dialog" aria-modal="true" aria-labelledby="cook-title" hidden>
     <div class="cook-head wrap">

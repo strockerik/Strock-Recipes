@@ -47,6 +47,7 @@ app.js                                  all client logic
 config.js                               Supabase project URL + anon key (safe to commit)
 manifest.json / icons/                  iPhone home-screen PWA support
 supabase/functions/extract-recipe/      Edge Function source (Deno/TS) for AI extraction
+supabase/functions/recipe-coach/        Edge Function source (Deno/TS) for the AI recipe coach
 data/recipes.js, data/cocktails.js      pre-migration backup of the original static data (unused)
 ```
 
@@ -144,6 +145,23 @@ Use the app — no editing JS files:
 - Open any recipe to **Edit** or **Delete** it — or tap **▶ Cook** for a
   full-screen guided mode: one step at a time, tap to advance, an ingredients
   toggle scaled to your servings, and the screen stays awake while you cook.
+- **✨ Ask AI** (on any open recipe) — a conversational AI coach with two modes,
+  powered by Claude Sonnet 4.6 via the `recipe-coach` Edge Function:
+  - **🛟 What went wrong?** — describe a dish that flopped ("the caramel burned
+    and there was too much liquid"); the coach **asks a clarifying question or two
+    first** (pan, heat, timing) to pin down the real cause, then explains *why* it
+    happened and how to prevent or rescue it.
+  - **✨ Improve it** — say what you want changed ("too sweet", "too salty",
+    "missing something"); the coach suggests specific changes with amounts and
+    technique. When a rewrite helps, an **Apply changes to recipe** button opens
+    the edit form pre-filled with the revised recipe — you always review and Save
+    yourself; nothing is written automatically (and Apply only appears on your own
+    recipes). The change it made is noted in the recipe's Notes as an
+    "AI tweaked:" line.
+
+  It's a real back-and-forth (type a reply, press Enter to send; Shift+Enter for a
+  newline). Coaching shares the same **20/day** AI budget as extraction, and each
+  message in a conversation counts as one request.
 
 Every open recipe has a **servings stepper** at the top: scale a recipe written
 for 4 up to 8 (it shows "×2 of 4") and the ingredient amounts rescale live. The
@@ -427,15 +445,24 @@ breaking.
 
 ## Edge Function deployment (AI)
 
-`extract-recipe` is deployed via the Supabase dashboard (Edge Functions → the
-in-browser editor), with the repo file as the source of truth — keep them in
-sync when editing. Requirements:
+There are **two** Edge Functions, each deployed via the Supabase dashboard (Edge
+Functions → the in-browser editor), with the repo files as the source of truth —
+keep them in sync when editing:
 
-- Secret `ANTHROPIC_API_KEY` set under Edge Functions → Secrets.
-- **Verify JWT: OFF** for this function (it does its own auth check and handles
-  the CORS preflight; leaving it on breaks browser calls).
+- **`extract-recipe`** — AI import (photo / text / link → recipe).
+- **`recipe-coach`** — the AI coach (troubleshoot / improve an existing recipe).
+  Deploy it the same way: create the function, paste in
+  `supabase/functions/recipe-coach/index.ts`, Deploy.
+
+Requirements (apply to **both** functions):
+
+- Secret `ANTHROPIC_API_KEY` set under Edge Functions → Secrets (shared).
+- **Verify JWT: OFF** for each (they do their own auth check and handle the CORS
+  preflight; leaving it on breaks browser calls).
+- Both share the per-user daily cap via the `increment_extraction_usage` RPC, so
+  no extra migration is needed for `recipe-coach`.
 - Set a monthly spend limit on the Anthropic account as a runaway-cost guard.
-- After editing the repo's `index.ts`, paste the new contents into the
+- After editing a repo `index.ts`, paste the new contents into that function's
   dashboard editor and hit Deploy — pushing to GitHub does **not** redeploy it.
 
 VSCode shows errors in `index.ts` ("Cannot find name 'Deno'", "Cannot find

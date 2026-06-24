@@ -1153,6 +1153,80 @@ button:focus-visible, input:focus-visible {
   to { transform: rotate(360deg); }
 }
 
+/* ===== AI recipe coach ===== */
+.coach-recipe-name {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: var(--faint);
+}
+.coach-mode-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.coach-mode-btn {
+  flex: 1;
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--faint);
+}
+.coach-mode-btn.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.coach-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+.coach-empty {
+  color: var(--faint);
+  font-size: 0.9rem;
+  margin: 8px 2px;
+}
+.coach-msg {
+  max-width: 88%;
+  padding: 10px 13px;
+  border-radius: 14px;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+.coach-msg.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.coach-msg.ai {
+  align-self: flex-start;
+  background: var(--chip);
+  color: var(--ink);
+  border-bottom-left-radius: 4px;
+}
+.coach-suggestions {
+  margin: 8px 0 2px;
+  padding-left: 20px;
+}
+.coach-suggestions li { margin: 3px 0; }
+.coach-msg.ai .coach-apply-btn { margin-top: 10px; }
+.coach-reply-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 12px;
+}
+.coach-reply-row .search { flex: 1; resize: vertical; }
+.coach-reply-row .solid-btn { white-space: nowrap; }
+
 /* ===== Cook mode — full-screen guided cooking ===== */
 .cook-panel {
   position: fixed;

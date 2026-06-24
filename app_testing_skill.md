@@ -28,9 +28,10 @@ Architecture recap (so you test the right boundary):
 - **Frontend** — `index.html`, `style.css`, `app.js` (all client logic, wrapped
   so element wiring runs after load), `config.js` (Supabase URL + anon key).
   Static, no build step, hosted on GitHub Pages.
-- **Backend** — Supabase: Postgres + RLS, Auth, and the `extract-recipe` Edge
-  Function (`supabase/functions/extract-recipe/index.ts`, Deno/TS), deployed
-  **manually via the dashboard** — pushing to GitHub does *not* redeploy it.
+- **Backend** — Supabase: Postgres + RLS, Auth, and two Edge Functions
+  (`supabase/functions/extract-recipe/` for AI import and
+  `supabase/functions/recipe-coach/` for the AI coach, Deno/TS), each deployed
+  **manually via the dashboard** — pushing to GitHub does *not* redeploy them.
   Tables: `recipes`, `profiles` (display names for share attribution),
   `recipe_shares` (per-user shares — the *only* cross-user read), and
   `meal_plan_entries` (dated B/L/D assignments). RLS-only helpers `owns_recipe`
@@ -103,7 +104,7 @@ references, before doing anything dynamic.
    ```bash
    grep -nE 'console\.(log|debug)' app.js                 # leftover debug logging
    grep -nE 'innerHTML *=' app.js                         # every one must be esc()'d
-   grep -nE 'TODO|FIXME|XXX|HACK' app.js index.html supabase/functions/extract-recipe/index.ts
+   grep -nE 'TODO|FIXME|XXX|HACK' app.js index.html supabase/functions/*/index.ts
    grep -n 'is_shared\|household' app.js index.html style.css   # retired sharing model
    ```
    `innerHTML` assignments that interpolate recipe data **must** route user text
@@ -209,6 +210,21 @@ Smoke tests worth having (each its own `test_*.html` or one with sub-cases):
   20/20 — build it the same way: stub `window.supabase.createClient`, drive the
   **real** `index.html` DOM + `app.js`, write results into a `#result` div, run
   with `python3 -m http.server` + Chrome `--headless=new --dump-dom`.)
+- **AI recipe coach** (`recipe-coach` Edge Function; conversational, two modes) —
+  stub `functions.invoke("recipe-coach", …)` to return a canned `{ result: {
+  reply, needs_more_info, suggestions, revised_recipe } }`, and stub `auth.getUser`
+  + `.from("recipes")` so one **owned** recipe loads. Expand it (click `.item-head`)
+  so `.coach-btn` renders, then assert: the button opens `#coach-panel` in
+  troubleshoot mode; **Send** calls invoke with `{ mode, recipe, messages }` (the
+  recipe carries the name; `messages` ends with the user turn — snapshot the body
+  via `JSON.parse(JSON.stringify(...))` in the stub, since the live array is
+  mutated after the call); a `needs_more_info:true` reply renders an AI question
+  with **no** suggestions/Apply and keeps the reply box; a second Send posts
+  `messages.length === 3` (history kept) and a `needs_more_info:false` reply
+  renders `suggestions`; switching to **Improve it** clears the thread; a tweak
+  result with `revised_recipe` shows **Apply changes to recipe** (owned only),
+  whose click closes the panel and opens the edit form with `#rf-name` ===
+  the revised name. (Known-good: a 23-assertion harness passed 23/23.)
 - **Servings round-trip** — open a recipe, tap the detail `＋` stepper, assert
   the ingredient amounts re-render scaled; check the row into the grocery
   basket and assert the grocery total reflects the same scale (and stepping in
