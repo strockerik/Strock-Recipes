@@ -73,6 +73,9 @@ while a request is in flight.
 - **Account ▾** (top-right, once signed in) opens a small menu with your email,
   **Change password** (the same inline form), **⬇ Back up recipes**, and
   **Sign out**.
+- **Guide** (next to Account ▾) opens an in-app **Feature guide** — a quick tour
+  of the recipe book, Cook mode, the grocery list, meal planning, and Ask AI, plus
+  the two ways to add a recipe.
 
 Errors are mapped to plain, recoverable guidance instead of raw Supabase strings:
 a wrong password points you at "reset your password"; an **unconfirmed email**
