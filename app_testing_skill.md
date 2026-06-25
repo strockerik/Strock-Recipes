@@ -1,14 +1,16 @@
 ---
 name: app-testing
-description: Full QA pass for the House Index recipe app — static analysis, cleanup, optimization, headless-browser smoke tests, Edge Function checks, and live AI-extraction tests against the sample recipe photos. Use before committing a feature, after a refactor, or when something "doesn't work."
+description: Full QA pass for the House Index recipe app — static analysis, cleanup, a circular-reference & efficiency audit, headless-browser smoke tests, Edge Function checks, an AI prompt-contract audit, and live AI tests (photo/text/URL extraction plus coach & tweak acceptance). Use before committing a feature, after a refactor, or when something "doesn't work."
 ---
 
 # App Testing Skill — The House Index (Recipes & Cocktails)
 
 A repeatable QA playbook for this specific app. It mirrors what a professional
-would do before shipping: read for bugs, clean up dead code, optimize, then
-exercise the app end-to-end — including the AI photo extraction against the
-local calibration photo set.
+would do before shipping: read for bugs, dead code, **circular references, and
+inefficiencies**, clean those up, then exercise the app end-to-end — including the
+**AI features** (photo/text/URL extraction, and the coach's troubleshoot/tweak
+flows) against the local calibration set, and an audit that the AI features still
+ship their **standard focusing prompts**.
 
 Work top to bottom. Each phase says **what to run**, **what to look for**, and
 **how to record the result**. Don't skip the cheap static phases just because the
@@ -112,7 +114,7 @@ references, before doing anything dynamic.
 
 Record: PASS/FAIL per item, with the file:line of anything flagged.
 
-## 2. Cleanup pass (dead code, duplication, stale comments)
+## 2. Cleanup, circular references & efficiency
 
 A human reviewer's job — be systematic, don't eyeball:
 
@@ -149,6 +151,72 @@ A human reviewer's job — be systematic, don't eyeball:
   production — the sandbox blocks prod writes). Never invoke it from here. It is
   idempotent and dry-run by default; `scripts/__pycache__/` is build cruft and
   should be gitignored, not committed.
+
+### Circular references & runaway loops
+
+A circular reference here shows up two ways — a data structure that can't be
+serialized, or control flow that re-triggers itself. Check both:
+
+- **`JSON.stringify` targets must be acyclic.** A self-referential object (or a
+  DOM node, which has cyclic parent/child links) throws
+  `TypeError: Converting circular structure to JSON`. List every call and confirm
+  its argument is plain data, never a DOM node or something holding one:
+  ```bash
+  grep -nE 'JSON\.stringify' app.js
+  ```
+  Known targets and what each must hold: `saveCoachState` (→ `coachMessages`
+  `{role,content}` + `coachLastResult`, both plain), `serializeRecipeForCoach`
+  and the `functions.invoke({body})` payloads (plain recipe + `{role,content}`
+  messages — **never** the live in-memory recipe object if it ever gains a back-
+  reference), `exportRecipesJSON`/`toBackupRow` (plain rows). Confirm each
+  `localStorage.setItem(... JSON.stringify ...)` is inside a `try/catch`
+  (`saveCoachState`, the meal-plan/grocery persistence) so a serialize failure
+  degrades instead of throwing.
+- **Recursion needs a base case.** Grep for self- and mutual-recursion and verify
+  each terminates:
+  ```bash
+  for fn in $(grep -oE 'function ([a-zA-Z0-9_]+)' app.js | awk '{print $2}'); do
+    grep -qE "\b$fn\b\s*\(" <(grep -A40 "function $fn(" app.js | tail -n +2) && echo "self-call? $fn"; done
+  ```
+  (Coarse — confirm by reading. The app is largely flat; flag anything that calls
+  itself, e.g. a tree walk, without a terminating branch.)
+- **Render / event loops must not re-enter themselves.** Confirm no render
+  function calls `renderList()`/`refreshViews()` synchronously from inside its own
+  render (would loop); confirm `onAuthStateChange` can't recurse — repeat loads
+  are guarded by `loadedUserId` + the `TOKEN_REFRESHED` short-circuit, and data
+  calls are deferred with `setTimeout(...,0)` to dodge the supabase auth-lock
+  deadlock. A handler that writes the same input it listens on (e.g. an `input`
+  listener that sets `.value`) is the classic loop — there should be none.
+- **RLS policy recursion.** The `recipes` ↔ `recipe_shares` policies and the
+  `private`-schema helpers (`owns_recipe`, `recipe_shared_with_me`) must not
+  reference each other in a way that recurses (a prior bug). A policy that selects
+  from a table whose policy selects back is the smell; the helpers live in
+  `private` precisely to break that cycle.
+
+### Inefficiencies (a quick efficiency pass)
+
+Not micro-optimization — just catch the things that bite at ~200 recipes or on a
+slow phone:
+
+- **Algorithmic hot paths:** `combinedGroceryItems` and the filter→`renderList`
+  path run over every recipe/ingredient — confirm they're roughly linear, not
+  nested O(n²) scans (e.g. a `.find()` inside a `.map()` over the same list).
+- **Re-render scope:** a full `renderList()` where only one row changed is
+  wasteful — favorites/share/unit toggles should re-render the minimum. Note any
+  handler that calls `renderList()` when a targeted DOM update would do.
+- **DOM queries in loops:** `$()`/`querySelector` or listener attachment **inside**
+  a loop or per-render is a smell — the app uses event **delegation** (one
+  listener on the list, `e.target.closest(...)`); verify new code follows suit
+  rather than binding per row.
+- **Redundant awaits:** independent reads should be issued together
+  (`loadData` already fires recipes + profiles + shares concurrently and awaits
+  after — keep that shape; flag any new serial `await` chain that didn't need to
+  be).
+- **Unbounded growth:** `coachMessages` is capped to the last 40 on save
+  (`COACH_MAX_STORED_MESSAGES`) — verify it; watch that `openItems`, `basket`,
+  `servingsByRecipe`, and the meal-plan window are pruned (`pruneStaleState`) and
+  don't grow without bound. `localStorage` writes should be small and not on every
+  keystroke.
 
 Record: list each removal/edit; re-run Phase 1 after editing.
 
@@ -332,6 +400,30 @@ test them against saved HTML fixtures with no spend:
    ```
    Confirm each **fails open**: if its RPC errors (migration missing), the Edge
    Function logs and proceeds — the request must not break.
+5. **AI prompt-contract audit** (free, static — read the two Edge Functions). The
+   AI features must keep their **standard built-in focusing prompts + forced
+   structured output**, so a future edit can't silently turn them into open-ended
+   chat. Assert:
+   - **extract-recipe:** a non-empty `SYSTEM_PROMPT` is passed as `system`;
+     `tool_choice` is `{type:"tool", name:"save_recipe"}` (forced, not "auto"); the
+     `RECIPE_SCHEMA.required` list is complete (name, section, ingredients, method,
+     tags, …). One Anthropic call per request.
+   - **recipe-coach:** both `TROUBLESHOOT_PROMPT` and `TWEAK_PROMPT` exist and are
+     selected per mode in `buildSystemPrompt(mode, recipe)` (which also injects the
+     recipe into the system prompt); `tool_choice` forces the `respond` tool; and
+     `COACH_SCHEMA` requires all four focusing fields. Grep the focusing rules so
+     they can't be dropped unnoticed:
+     ```bash
+     f=supabase/functions/recipe-coach/index.ts
+     grep -nq 'tool_choice.*respond'                  "$f" && echo "forced tool ✓"
+     grep -nq 'TROUBLESHOOT_PROMPT'                    "$f" && grep -nq 'TWEAK_PROMPT' "$f" && echo "both prompts ✓"
+     grep -niq 'clarifying questions BEFORE concluding' "$f" && echo "asks-first rule ✓"
+     grep -nq 'needs_more_info'                        "$f" && echo "gating field ✓"
+     grep -niq 'suggestions.*empty\|leave .suggestions. empty' "$f" && echo "empty-while-asking ✓"
+     ```
+     These four behaviors — *forced tool, mode prompt, ask-clarifying-first,
+     needs_more_info gating* — are what make the coach focus the user quickly. The
+     **live** proof that the model actually obeys them is Phase 6b.
 
 ## 6. AI extraction tests — the sample recipe photos  ⚠️ spends quota
 
@@ -391,6 +483,53 @@ method from the other), not two recipes.
 
 Record a table: photo → PASS/PARTIAL/FAIL + the specific rule violated. Track
 results over time; a prompt change that fixes one card shouldn't regress another.
+
+## 6b. AI coach & tweak acceptance (live)  ⚠️ spends coach quota
+
+Phase 5's prompt audit proves the focusing prompt *exists*; this proves the model
+*obeys* it. Each call counts against the **coach** cap (`increment_coach_usage`,
+separate from extraction) — say so before running. Drive it through the **✨ Ask
+AI** UI (preferred — true end-to-end) or by `curl` with a signed-in token:
+
+```bash
+# USER_JWT from the app console:
+#   (await supabaseClient.auth.getSession()).data.session.access_token
+REC='{"name":"Apple Tarte Tatin","section":"kitchen","tags":["french","dessert"],
+  "base_servings":8,"servings_label":"servings",
+  "ingredients":[{"amount":125,"unit":"g","item":"butter","group":null},
+                 {"amount":200,"unit":"g","item":"sugar","group":null},
+                 {"amount":6,"unit":null,"item":"apples","group":null}],
+  "method":[{"text":"Make a caramel with the sugar and butter.","group":null},
+            {"text":"Add apples and bake.","group":null}],"notes":null}'
+curl -s -X POST "$SUPABASE_URL/functions/v1/recipe-coach" \
+  -H "Authorization: Bearer $USER_JWT" -H "Content-Type: application/json" \
+  -d "{\"mode\":\"troubleshoot\",\"recipe\":$REC,
+       \"messages\":[{\"role\":\"user\",\"content\":\"my caramel burned and the tart was watery\"}]}" \
+  | jq '.result | {needs_more_info, reply, suggestions, has_revised: (.revised_recipe!=null)}'
+```
+
+**Scenarios & must-pass assertions** (assert the model honored the prompt):
+
+| Scenario | Input | Must-pass |
+|---|---|---|
+| Troubleshoot — vague | `troubleshoot`, one vague flop message | **Turn 1 asks first:** `needs_more_info:true`, `reply` is a specific question (pan/heat/temp/timing), `suggestions:[]`, `revised_recipe:null`. This is the proof the prompt focuses the user. |
+| Troubleshoot — conclude | add an answer turn, send again | `needs_more_info:false`; `reply` names the likely cause + a brief *why*; `suggestions` are concrete fixes; still `revised_recipe:null` (not asked to rewrite). |
+| Troubleshoot — emphasize | after concluding, send the "update my recipe to emphasize the step I got wrong" turn | `revised_recipe` non-null and rewrites the relevant **method** step to call out the exact amount/temp/timing; `notes` gains an `AI tweaked:` line; every other field carried over unchanged; valid `RECIPE_SCHEMA`. |
+| Tweak — specific | `tweak`, "it's too sweet" | `suggestions` give concrete changes **with amounts**; if `revised_recipe` is returned it carries everything unchanged except the fix + an `AI tweaked:` note; `section`/tags preserved. |
+| Tweak — vague | `tweak`, "it's missing something" | One focused clarifying question first (`needs_more_info:true`, `suggestions:[]`). |
+
+**Cross-cutting (every coach result):**
+- Valid against `COACH_SCHEMA`: `reply` a non-empty string, `needs_more_info` a
+  boolean, `suggestions` an array of strings, `revised_recipe` an object or null.
+- Any `revised_recipe` is valid `RECIPE_SCHEMA` and pre-fills the edit form
+  without error (the UI feeds it straight to `fillRecipeFormFromExtraction`).
+- A `troubleshoot` reply **never** carries `revised_recipe` unless the user asked
+  to update the recipe; `tweak` only when a rewrite genuinely helps.
+- The call increments the **coach** counter, not the extraction one.
+
+Record a small table: scenario → PASS/PARTIAL/FAIL + the rule violated. If the
+model stops asking clarifying questions or starts rewriting unprompted, that's a
+prompt regression — flag it for a prompt fix (separate from this test run).
 
 ## 7. Security & regression checks
 
