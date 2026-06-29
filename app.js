@@ -961,6 +961,7 @@
         ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
         <button class="ghost-btn small add-to-plan-btn" data-id="${esc(it.id)}">📅 Add to Weekly Meal Plan</button>
         <button class="ghost-btn small coach-btn" data-id="${esc(it.id)}">✨ Ask AI</button>
+        <button class="ghost-btn small send-recipe-btn" data-id="${esc(it.id)}">📤 Send</button>
       </div>
       <div class="detail-actions-row">
         ${mine ? `
@@ -972,6 +973,173 @@
       </div>
       ${mine && openShareIds.has(it.id) ? renderSharePanel(it) : ""}
     </div>`;
+  }
+
+  // ---------- Send a recipe outside the app ----------
+  // One self-contained .html file in the "Features Guide" design language (the
+  // same Claude Design system the in-app guide mirrors), handed to the native
+  // share sheet so the user can text or email it. No backend, no library.
+  const GUIDE_FONTS = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap";
+  const APP_URL = "https://strockerik.github.io/Strock-Recipes/";
+
+  function recipeFilename(it) {
+    const slug = String(it.name).toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50) || "recipe";
+    return slug + ".html";
+  }
+
+  function recipeShareHtml(it, servings, system) {
+    const accent = it.section === "bar" ? "#B5402A" : "#3E6B3A";
+    const kicker = it.section === "bar" ? "Bar" : "Kitchen";
+
+    const ingHtml = groupRuns(scaledIngredients(it, servings)).map((run) => {
+      const items = run.items.map((ing) => {
+        const l = ingLine(ing, true, system);
+        const amt = l.amtStr && l.amtStr !== "—" ? `<b>${esc(l.amtStr)}</b> ` : "";
+        return `<li>${amt}${esc(l.item)}</li>`;
+      }).join("");
+      return `${run.group ? `<h3 class="grp">${esc(run.group)}</h3>` : ""}<ul class="pts">${items}</ul>`;
+    }).join("");
+
+    const specHtml = it.specs
+      ? Object.entries(it.specs).filter(([, v]) => v)
+          .map(([k, v]) => `<li><b>${esc(k[0].toUpperCase() + k.slice(1))}:</b> ${esc(v)}</li>`).join("")
+      : "";
+
+    const hasMethod = it.method && it.method.length;
+    const methodHtml = hasMethod ? groupRuns(it.method).map((run) => {
+      const steps = run.items.map((s) => `<li>${esc(s.text)}</li>`).join("");
+      return `${run.group ? `<h3 class="grp">${esc(run.group)}</h3>` : ""}<ol class="steps">${steps}</ol>`;
+    }).join("") : "";
+
+    const tags = (Array.isArray(it.tags) ? it.tags : []).filter(Boolean);
+    const tagHtml = tags.length
+      ? `<p class="tags">${tags.map((t) => `<span>${esc(t)}</span>`).join("")}</p>` : "";
+    const subLine = [it.source ? `Source: ${it.source}` : "", `${servings} ${it.servingsLabel}`]
+      .filter(Boolean).join("  ·  ");
+
+    return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(it.name)} — The House Index</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="${GUIDE_FONTS}" rel="stylesheet">
+<style>
+  :root { --paper:#FCFBF8; --ink:#2A2520; --lede:#463f37; --faint:#8A8276; --line:#E8E3D9; --accent:${accent}; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink);
+         font-family:"Public Sans",-apple-system,system-ui,sans-serif; }
+  .doc { max-width:40em; margin:0 auto; padding:40px clamp(20px,5vw,40px) 64px; }
+  .kicker { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; font-weight:500;
+            letter-spacing:.14em; text-transform:uppercase; color:var(--accent);
+            margin:0 0 10px; display:flex; align-items:center; gap:10px; }
+  .kicker::before { content:""; width:22px; height:2px; background:var(--accent); display:inline-block; }
+  h1 { font-family:"Fraunces",Georgia,serif; font-weight:700; font-size:34px; line-height:1.05;
+       letter-spacing:-.015em; margin:0 0 12px; text-wrap:balance; }
+  .lede { font-size:17px; line-height:1.55; color:var(--lede); margin:0 0 8px; }
+  .sub { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--faint); margin:0; }
+  .hero { border-bottom:1px solid var(--line); padding-bottom:24px; margin-bottom:28px; }
+  h2 { font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:22px; margin:30px 0 12px; }
+  h3.grp { font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:16px; margin:18px 0 8px; color:var(--lede); }
+  .pts { list-style:none; margin:0; padding:0; }
+  .pts li { position:relative; padding-left:20px; font-size:15px; line-height:1.5; margin-bottom:8px; color:var(--lede); }
+  .pts li::before { content:""; position:absolute; left:0; top:8px; width:7px; height:7px; border-radius:50%; background:var(--accent); }
+  .pts li b { font-weight:600; color:var(--ink); }
+  .steps { counter-reset:step; list-style:none; margin:0; padding:0; }
+  .steps li { position:relative; padding-left:34px; margin-bottom:12px; font-size:15px; line-height:1.55; min-height:24px; }
+  .steps li::before { counter-increment:step; content:counter(step); position:absolute; left:0; top:0;
+       width:23px; height:23px; border-radius:50%; background:var(--accent); color:#fff;
+       font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px;
+       display:flex; align-items:center; justify-content:center; }
+  .notes { font-size:14.5px; line-height:1.6; color:var(--lede); background:#fff;
+           border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin:18px 0 0; }
+  .tags { display:flex; flex-wrap:wrap; gap:6px; margin:18px 0 0; padding:0; }
+  .tags span { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--faint);
+               border:1px solid var(--line); border-radius:999px; padding:3px 10px; }
+  .closer { border-top:1px solid var(--line); margin-top:34px; padding-top:18px;
+            font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--faint); }
+  .closer a { color:var(--accent); text-decoration:none; }
+  @media print { @page { margin:1.4cm; } body { background:#fff; } .closer a { color:var(--ink); } }
+</style>
+</head><body>
+<main class="doc">
+  <section class="hero">
+    <p class="kicker">${kicker}</p>
+    <h1>${esc(it.name)}</h1>
+    ${it.subtitle ? `<p class="lede">${esc(it.subtitle)}</p>` : ""}
+    <p class="sub">${esc(subLine)}</p>
+  </section>
+  <h2>Ingredients</h2>
+  ${ingHtml}
+  ${specHtml ? `<ul class="pts">${specHtml}</ul>` : ""}
+  ${hasMethod ? `<h2>Method</h2>${methodHtml}` : ""}
+  ${it.notes ? `<p class="notes">${esc(it.notes)}</p>` : ""}
+  ${tagHtml}
+  <p class="closer">Made with <a href="${APP_URL}">The House Index</a></p>
+</main>
+</body></html>`;
+  }
+
+  // Plain-text fallback for share targets that can't take a file attachment.
+  function recipeShareText(it, servings, system) {
+    const lines = [it.name];
+    if (it.subtitle) lines.push(it.subtitle);
+    const meta = [it.source ? `Source: ${it.source}` : "", `${servings} ${it.servingsLabel}`]
+      .filter(Boolean).join("  ·  ");
+    if (meta) lines.push(meta);
+    lines.push("", "INGREDIENTS");
+    groupRuns(scaledIngredients(it, servings)).forEach((run) => {
+      if (run.group) lines.push(`[${run.group}]`);
+      run.items.forEach((ing) => {
+        const l = ingLine(ing, true, system);
+        lines.push(`- ${l.amtStr && l.amtStr !== "—" ? l.amtStr + " " : ""}${l.item}`);
+      });
+    });
+    if (it.method && it.method.length) {
+      lines.push("", "METHOD");
+      groupRuns(it.method).forEach((run) => {
+        let n = 0;
+        if (run.group) lines.push(`[${run.group}]`);
+        run.items.forEach((s) => { n++; lines.push(`${n}. ${s.text}`); });
+      });
+    }
+    if (it.notes) lines.push("", `Notes: ${it.notes}`);
+    lines.push("", `Made with The House Index — ${APP_URL}`);
+    return lines.join("\n");
+  }
+
+  async function shareRecipeFile(it) {
+    const servings = chosenServings(it);
+    const html = recipeShareHtml(it, servings, unitSystem);
+    const name = recipeFilename(it);
+    // Prefer sharing the actual .html file so it lands as a saveable attachment.
+    if (navigator.canShare) {
+      try {
+        const file = new File([html], name, { type: "text/html" });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: it.name });
+          return;
+        }
+      } catch { /* fall through to text / download */ }
+    }
+    if (navigator.share) {
+      try { await navigator.share({ title: it.name, text: recipeShareText(it, servings, unitSystem) }); return; }
+      catch { /* user cancelled or unsupported — fall through */ }
+    }
+    // Last resort (desktop): download the file so it can be attached manually.
+    try {
+      const blob = new Blob([html], { type: "text/html" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("Saved the recipe file — attach it to a text or email");
+    } catch {
+      toast("Sharing isn’t available on this device");
+    }
   }
 
   // Recipients a recipe is currently shared with, by user id.
@@ -2266,6 +2434,11 @@
 
     if (e.target.closest(".coach-btn")) {
       openCoachPanel(id);
+      return;
+    }
+
+    if (e.target.closest(".send-recipe-btn")) {
+      shareRecipeFile(byId[id]);
       return;
     }
 

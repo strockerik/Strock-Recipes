@@ -210,6 +210,23 @@ across sections and recipes by name. Internally each ingredient and step carries
 an optional `group` label; **method steps are stored as `{text, group}` objects**
 (older recipes' plain-string steps are read transparently and upgraded on edit).
 
+## Send a recipe to anyone
+
+For sending a recipe to someone **outside the app** (no account needed), open any
+recipe and tap **📤 Send**. The app builds a single **self-contained `.html` file**
+— styled to match the in-app Feature guide (Fraunces headings, the mono kicker,
+dot-bullet ingredients, numbered steps; green for Kitchen, red for Bar) — and hands
+it to your device's **share sheet**, so you pick **Messages** or **Mail** and address
+it yourself. The recipient just taps the attachment and it opens in any browser.
+
+- It exports **what you're looking at**: the currently chosen **servings** and
+  **unit system** (Original / US / Metric).
+- The file is tiny (~5–7 KB), built instantly in the browser — no server, no PDF
+  library. Where the share sheet can't take a file it shares plain text instead;
+  on desktop it downloads the `.html` to attach manually.
+- This is distinct from **Share** below, which grants another *signed-in* account
+  live access inside the app.
+
 ## Recipe sharing
 
 Sharing is explicit and per-recipient — a recipe is visible only to its owner

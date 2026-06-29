@@ -317,6 +317,21 @@ Smoke tests worth having (each its own `test_*.html` or one with sub-cases):
   Weekly Meal Plan` (tray gains the recipe), open the planner, arm the tray chip,
   tap a day/slot `＋` and assert an `insert` fired; click "Create grocery list"
   and assert the basket fills from planned servings + entries get `purchased_at`.
+- **Send a recipe (HTML export)** — stub `navigator.share`/`canShare` (use
+  `Object.defineProperty`, both are read-only/absent in headless Chrome) to capture
+  the arg; open an owned recipe and click `.send-recipe-btn`. Assert `navigator.share`
+  gets a **`File`** whose name ends `.html`, `type === "text/html"`; read it with
+  `await file.text()` and assert it starts with `<!DOCTYPE html>`, contains the
+  `esc`'d name + **every** ingredient item and method step + the footer/app link, and
+  has **no** `undefined`/`[object Object]`, < ~9 KB. **Design match:** the Fraunces/
+  Public Sans/IBM Plex Mono fonts `<link>` and the `kicker`/`pts`/`steps`/`closer`
+  classes; accent `#3E6B3A` for a Kitchen recipe, `#B5402A` for a **Bar** recipe.
+  Also: a method-less cocktail omits `<h2>Method</h2>`; switching the unit toggle to
+  US before sending changes amounts (30 ml → tbsp) via `convertForDisplay`; with
+  `canShare`→false the fallback shares plain `text` (no `files`, contains
+  "INGREDIENTS"). NB: the fixture session **must include `user.email`** —
+  `ensureProfile()` splits it, and a missing email throws inside `loadData` so the
+  list never renders. (Known-good: a 22-assertion harness passed 22/22.)
 
 ## 4. Functional / business-logic test matrix
 
