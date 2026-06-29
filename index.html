@@ -59,24 +59,41 @@
         <button class="tab tab-bar" role="tab" aria-selected="false" data-section="cocktails">Bar</button>
       </nav>
       <div id="account-area" class="account-area" hidden>
-        <button id="open-guide" class="ghost-btn small">Guide</button>
-        <button id="account-btn" class="ghost-btn small" aria-haspopup="dialog">Account ▾</button>
+        <button id="open-guide" class="icon-btn" title="Guide" aria-label="Open the feature guide">?</button>
+        <button id="account-btn" class="avatar-btn" aria-haspopup="dialog" aria-label="Account">•</button>
       </div>
     </div>
   </header>
 
   <main class="wrap">
 
-    <div class="controls">
-      <div class="search-row">
-        <input id="search" class="search" type="search"
-               placeholder="Search by name, tag, or ingredient…"
-               aria-label="Search recipes and cocktails">
-        <button id="toggle-filters" class="ghost-btn" aria-expanded="false">Filter by tag</button>
-        <button id="toggle-favorites" class="ghost-btn" aria-pressed="false">★ Favorites</button>
-        <button id="toggle-shared" class="ghost-btn" aria-pressed="false">👥 Shared with me</button>
-        <button id="open-meal-plan" class="ghost-btn">📅 Meal Plan</button>
+    <nav class="mode-tabs" role="tablist" aria-label="View">
+      <button id="mode-recipes" class="mode-tab is-active" role="tab" aria-selected="true">Recipes</button>
+      <button id="mode-mealplan" class="mode-tab" role="tab" aria-selected="false">
+        📅 Meal plan <span id="mealplan-count" class="mode-tab-badge" hidden></span>
+      </button>
+    </nav>
+
+    <div class="controls" id="recipes-controls">
+      <div class="scope-bar">
+        <div class="scope" role="tablist" aria-label="Which recipes">
+          <button id="scope-all" class="scope-btn is-on" aria-selected="true">All</button>
+          <button id="toggle-favorites" class="scope-btn" aria-pressed="false">★ Favorites</button>
+          <button id="toggle-shared" class="scope-btn" aria-pressed="false">👥 Shared</button>
+        </div>
       </div>
+
+      <div class="search-row">
+        <div class="search-wrap">
+          <span class="search-ico" aria-hidden="true">🔍</span>
+          <input id="search" class="search" type="search"
+                 placeholder="Search by name, tag, or ingredient…"
+                 aria-label="Search recipes and cocktails">
+          <button id="toggle-filters" class="search-filter-btn" aria-expanded="false"
+                  title="Filter by tag" aria-label="Filter by tag">🏷</button>
+        </div>
+      </div>
+
       <div id="tag-filters" class="tag-filters" hidden></div>
       <div id="active-filters" class="active-filters" hidden></div>
     </div>
@@ -84,14 +101,19 @@
     <div class="result-row">
       <p id="result-count" class="result-count" aria-live="polite"></p>
       <div class="result-row-actions">
-        <button id="add-recipe-ai" class="ghost-btn small">✨ Add with AI</button>
-        <button id="add-recipe" class="ghost-btn small">+ Add recipe</button>
+        <div class="add-wrap">
+          <button id="add-toggle" class="solid-btn small" aria-haspopup="menu" aria-expanded="false">
+            ＋ Add <span class="caret">▾</span>
+          </button>
+        </div>
       </div>
     </div>
 
     <ul id="item-list" class="item-list"></ul>
 
     <p id="empty-state" class="empty-state" hidden></p>
+
+    <section id="meal-plan-view" class="meal-plan-view" hidden aria-label="Weekly meal plan"></section>
 
   </main>
 
@@ -534,6 +556,20 @@
   <footer class="site-footer wrap">
     <p>Recipes are stored in your account. Sign in with the same email on any device to see them.</p>
   </footer>
+
+  <!-- Add recipe menu — shared by desktop ＋ Add button and mobile FAB -->
+  <div id="add-menu" class="add-menu" role="menu" hidden>
+    <button id="add-recipe-ai" role="menuitem">
+      <span class="am-ico">✨</span>
+      <span>Add with AI<small>Photo, link, or pasted text</small></span>
+    </button>
+    <button id="add-recipe" role="menuitem">
+      <span class="am-ico">✏️</span>
+      <span>Add by hand<small>Fill in the form yourself</small></span>
+    </button>
+  </div>
+
+  <button id="add-fab" class="add-fab" aria-label="Add a recipe">＋</button>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="config.js"></script>

@@ -4,6 +4,7 @@
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
+  let viewMode = "recipes"; // "recipes" | "mealplan"
   let searchTerm = "";
   let activeTags = new Set();
   let favoritesOnly = false;
@@ -100,6 +101,17 @@
   const rfAddIngredientBtn = $("#rf-add-ingredient");
   const rfAddStepBtn = $("#rf-add-step");
   const rfReorderStepsBtn = $("#rf-reorder-steps");
+
+  // B2 header / toolbar elements
+  const modeRecipesBtn = $("#mode-recipes");
+  const modeMealplanBtn = $("#mode-mealplan");
+  const recipesControlsEl = $("#recipes-controls");
+  const mealPlanView = $("#meal-plan-view");
+  const scopeAllBtn = $("#scope-all");
+  const addToggle = $("#add-toggle");
+  const addMenu = $("#add-menu");
+  const addFab = $("#add-fab");
+  const resultRowEl = $(".result-row");
 
   const addRecipeAiBtn = $("#add-recipe-ai");
   const aiImportPanel = $("#ai-import-panel");
@@ -539,11 +551,22 @@
   }
 
   // ---------- Auth ----------
+  function initialsFrom(email) {
+    const local = (email || "").split("@")[0];
+    const parts = local.split(/[._\-+]+/).filter(Boolean);
+    if (!parts.length) return "•";
+    const first = parts[0][0];
+    const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+    return (first + last).toUpperCase();
+  }
+
   function updateAuthUI() {
     authGate.hidden = !!session;
     accountArea.hidden = !session;
-    if (session) accountEmailEl.textContent = session.user.email;
-    else if (!accountPanel.hidden) accountPanel.hidden = true; // signed out → close menu
+    if (session) {
+      accountEmailEl.textContent = session.user.email;
+      accountBtn.textContent = initialsFrom(session.user.email);
+    } else if (!accountPanel.hidden) accountPanel.hidden = true;
   }
 
   let loadedUserId = null; // whose data is currently loaded
@@ -1364,7 +1387,7 @@
     const ids = upcoming.map((e) => e.id);
     await supabaseClient.from("meal_plan_entries").update({ purchased_at: now }).in("id", ids);
     upcoming.forEach((e) => { e.purchasedAt = now; });
-    mealPlanPanel.hidden = true;
+    setViewMode("recipes");
     renderList();
     renderGroceryBar();
     renderGroceryPanel();
@@ -1413,7 +1436,7 @@
     const upcoming = [0, 1, 2, 3, 4, 5, 6].map((i) => mealDayCard(addDays(midnight(), i), false)).join("");
     const history = [1, 2, 3, 4, 5, 6, 7].map((i) => mealDayCard(addDays(midnight(), -i), true)).join("");
 
-    mealPlanContent.innerHTML = `
+    mealPlanView.innerHTML = `
       <section class="mp-section">
         <h3 class="detail-h">Recipes to plan</h3>
         <div class="mp-tray">${tray}</div>
@@ -1430,6 +1453,42 @@
         <h3 class="detail-h">History \u2014 last 7 days</h3>
         ${history}
       </section>`;
+
+    // Update the tab badge with the count of upcoming planned meals
+    const todayStr = isoDate(midnight());
+    const endStr = isoDate(addDays(midnight(), 6));
+    updateMealplanBadge(mealPlan.filter((e) => e.date >= todayStr && e.date <= endStr).length);
+  }
+
+  function updateMealplanBadge(n) {
+    const b = $("#mealplan-count");
+    b.textContent = n;
+    b.hidden = !n;
+  }
+
+  function setViewMode(mode) {
+    viewMode = mode;
+    const recipes = mode === "recipes";
+    modeRecipesBtn.classList.toggle("is-active", recipes);
+    modeMealplanBtn.classList.toggle("is-active", !recipes);
+    modeRecipesBtn.setAttribute("aria-selected", String(recipes));
+    modeMealplanBtn.setAttribute("aria-selected", String(!recipes));
+    recipesControlsEl.hidden = !recipes;
+    listEl.hidden = !recipes;
+    resultRowEl.hidden = !recipes;
+    mealPlanView.hidden = recipes;
+    if (!recipes) {
+      if (!session) { toast("Sign in to plan meals."); setViewMode("recipes"); return; }
+      loadMealPlan().then(() => renderMealPlan());
+    }
+  }
+
+  function syncScope() {
+    const all = !favoritesOnly && !sharedOnly;
+    scopeAllBtn.classList.toggle("is-on", all);
+    toggleFavoritesBtn.classList.toggle("is-on", favoritesOnly);
+    toggleSharedBtn.classList.toggle("is-on", sharedOnly);
+    scopeAllBtn.setAttribute("aria-selected", String(all));
   }
 
   function toast(msg) {
@@ -2365,6 +2424,7 @@
       sharedOnly = false;
       toggleSharedBtn.setAttribute("aria-pressed", "false");
     }
+    syncScope();
     // refreshViews (not just renderList): turning this on clears sharedOnly,
     // which swaps the active pool, so the tag-filter bar must rebuild too.
     refreshViews();
@@ -2378,7 +2438,17 @@
       favoritesOnly = false;
       toggleFavoritesBtn.setAttribute("aria-pressed", "false");
     }
+    syncScope();
     refreshViews(); // pool changed — tag filters + active filters need refresh too
+  });
+
+  // Scope-all resets both filters
+  scopeAllBtn.addEventListener("click", () => {
+    favoritesOnly = false; sharedOnly = false;
+    toggleFavoritesBtn.setAttribute("aria-pressed", "false");
+    toggleSharedBtn.setAttribute("aria-pressed", "false");
+    syncScope();
+    refreshViews();
   });
 
   // Tag chips (filter panel + active-filter row)
@@ -2625,18 +2695,12 @@
     if (e.target === groceryPanel) groceryPanel.hidden = true;
   });
 
-  // Weekly meal plan: open/close + all in-panel interactions (delegated).
-  $("#open-meal-plan").addEventListener("click", async () => {
-    if (!session) { toast("Sign in to plan meals."); return; }
-    await loadMealPlan();
-    renderMealPlan();
-    mealPlanPanel.hidden = false;
-  });
+  // Mode tabs: Recipes ↔ Meal plan
+  modeRecipesBtn.addEventListener("click", () => setViewMode("recipes"));
+  modeMealplanBtn.addEventListener("click", () => setViewMode("mealplan"));
+  // Keep close button on the legacy modal in case it ever surfaces
   $("#close-meal-plan").addEventListener("click", () => (mealPlanPanel.hidden = true));
-  mealPlanPanel.addEventListener("click", (e) => {
-    if (e.target === mealPlanPanel) mealPlanPanel.hidden = true;
-  });
-  mealPlanContent.addEventListener("click", (e) => {
+  mealPlanView.addEventListener("click", (e) => {
     if (e.target.closest("#mp-make-grocery")) { groceryFromPlan(); return; }
     const trayRemove = e.target.closest("[data-tray-remove]");
     if (trayRemove) { removeFromTray(trayRemove.dataset.trayRemove); return; }
@@ -2741,6 +2805,46 @@
     if (e.target === backupPanel) backupPanel.hidden = true;
   });
 
+  // ---------- ＋ Add dropdown + mobile FAB ----------
+  function closeAddMenu() {
+    addMenu.hidden = true;
+    addToggle.setAttribute("aria-expanded", "false");
+  }
+  function openAddMenu(triggerBtn) {
+    addMenu.hidden = false;
+    addToggle.setAttribute("aria-expanded", "true");
+    // Position the fixed menu relative to the trigger
+    const r = triggerBtn.getBoundingClientRect();
+    if (window.innerWidth > 560) {
+      // Below the desktop toggle, right-aligned
+      addMenu.style.top = (r.bottom + 8) + "px";
+      addMenu.style.right = (window.innerWidth - r.right) + "px";
+      addMenu.style.bottom = "";
+      addMenu.style.left = "";
+    } else {
+      // Above the FAB on mobile
+      addMenu.style.bottom = (window.innerHeight - r.top + 8) + "px";
+      addMenu.style.right = (window.innerWidth - r.right) + "px";
+      addMenu.style.top = "";
+      addMenu.style.left = "";
+    }
+  }
+  addToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    addMenu.hidden ? openAddMenu(addToggle) : closeAddMenu();
+  });
+  addFab.addEventListener("click", (e) => {
+    e.stopPropagation();
+    addMenu.hidden ? openAddMenu(addFab) : closeAddMenu();
+  });
+  document.addEventListener("click", (e) => {
+    if (!addMenu.hidden && !e.target.closest("#add-menu") && e.target !== addToggle && e.target !== addFab) {
+      closeAddMenu();
+    }
+  });
+  // Close menu after either action opens its panel
+  [addRecipeAiBtn, addRecipeBtn].forEach((b) => b.addEventListener("click", closeAddMenu));
+
   // ---------- Feature guide ----------
   $("#open-guide").addEventListener("click", () => {
     guidePanel.querySelector(".grocery-panel-inner").scrollTop = 0;
@@ -2799,6 +2903,7 @@
   // don't also close the panels underneath it on the same keypress.
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !cookPanel.hidden) return;
+    if (!addMenu.hidden) { closeAddMenu(); return; }
     if (!groceryPanel.hidden) groceryPanel.hidden = true;
     if (!backupPanel.hidden) backupPanel.hidden = true;
     if (!guidePanel.hidden) guidePanel.hidden = true;
@@ -2810,6 +2915,7 @@
   });
 
   // ---------- Init ----------
+  syncScope();
   renderTagFilters();
   renderList();
   renderGroceryBar();

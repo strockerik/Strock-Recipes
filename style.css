@@ -1395,3 +1395,121 @@ button:focus-visible, input:focus-visible {
   opacity: 0.4;
   cursor: default;
 }
+
+/* ---------- Header redesign (B2) ---------- */
+
+/* Round icon button (Guide "?") */
+.icon-btn {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--card);
+  color: var(--faint); font-size: 1rem; font-weight: 700;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  transition: .15s;
+}
+.icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Avatar button (initials) */
+.avatar-btn {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 0; background: var(--accent); color: #fff;
+  font-size: .82rem; font-weight: 700; letter-spacing: .02em;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* Mode tabs (Recipes / Meal plan) */
+.mode-tabs { display: flex; gap: 26px; border-bottom: 1px solid var(--line); margin-top: 20px; }
+.mode-tab {
+  border: 0; background: transparent; padding: 13px 2px; margin-bottom: -1px;
+  font-family: var(--font-body); font-size: 1.02rem; font-weight: 600; color: var(--faint);
+  cursor: pointer; border-bottom: 2.5px solid transparent;
+  display: inline-flex; align-items: center; gap: 8px; transition: .15s;
+}
+.mode-tab.is-active { color: var(--ink); border-bottom-color: var(--accent); }
+.mode-tab-badge {
+  font-family: var(--font-mono); font-size: .68rem; font-weight: 500;
+  background: var(--accent); color: #fff; border-radius: 999px; padding: 2px 8px;
+}
+
+/* Scope selector (All / Favorites / Shared) */
+.scope-bar { margin-top: 18px; }
+.scope {
+  display: inline-flex; background: var(--chip); border-radius: 999px; padding: 4px; gap: 2px;
+}
+.scope-btn {
+  border: 0; background: transparent; border-radius: 999px; padding: 8px 16px;
+  font-family: var(--font-body); font-size: .88rem; font-weight: 600; color: var(--faint);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  transition: .15s; white-space: nowrap;
+}
+.scope-btn.is-on { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+
+/* Search field with inline icons */
+.search-wrap { position: relative; display: flex; align-items: center; width: 100%; }
+.search-wrap .search { flex: 1; padding-left: 38px; padding-right: 46px; }
+.search-ico {
+  position: absolute; left: 13px; font-size: .95rem; color: var(--faint); pointer-events: none;
+}
+.search-filter-btn {
+  position: absolute; right: 7px; border: 0; background: transparent; color: var(--faint);
+  font-size: 1rem; cursor: pointer; padding: 6px 8px; border-radius: 7px; line-height: 1;
+}
+.search-filter-btn:hover { color: var(--accent); background: var(--accent-soft); }
+.search-filter-btn[aria-expanded="true"] { color: var(--accent); background: var(--accent-soft); }
+
+/* ＋ Add split button */
+.add-wrap { display: inline-block; }
+.caret { font-size: .7rem; opacity: .85; }
+
+/* Add menu — position:fixed; coordinates set by JS on open */
+.add-menu {
+  position: fixed; z-index: 50; min-width: 212px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0,0,0,.16); padding: 6px;
+}
+.add-menu[hidden] { display: none; }
+.add-menu button {
+  display: flex; width: 100%; align-items: center; gap: 10px;
+  border: 0; background: transparent; padding: 11px 12px; border-radius: 8px;
+  font-family: var(--font-body); font-size: .92rem; color: var(--ink);
+  cursor: pointer; text-align: left;
+}
+.add-menu button:hover { background: var(--accent-soft); }
+.am-ico { font-size: 1.05rem; width: 22px; text-align: center; }
+.add-menu small { display: block; font-size: .76rem; color: var(--faint); font-weight: 400; margin-top: 1px; }
+
+/* Meal plan inline view */
+.meal-plan-view { margin-top: 18px; }
+
+/* Mobile FAB */
+.add-fab {
+  position: fixed; right: 18px; bottom: 20px; z-index: 40;
+  width: 58px; height: 58px; border-radius: 50%;
+  border: 0; background: var(--accent); color: #fff;
+  font-size: 1.7rem; line-height: 1; cursor: pointer;
+  box-shadow: 0 10px 24px rgba(0,0,0,.26);
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* ---------- Mobile (≤560px) ---------- */
+@media (max-width: 560px) {
+  /* Section toggle + mode tabs full width */
+  .section-tabs { display: flex; width: 100%; }
+  .section-tabs .tab { flex: 1; text-align: center; }
+  .mode-tabs { gap: 0; }
+  .mode-tab { flex: 1; justify-content: center; }
+
+  /* Scope → horizontally-scrollable chip row */
+  .scope {
+    display: flex; width: 100%; overflow-x: auto;
+    border-radius: 0; background: transparent; padding: 2px 0; gap: 8px;
+  }
+  .scope::-webkit-scrollbar { display: none; }
+  .scope-btn {
+    flex: 0 0 auto; border: 1px solid var(--line); background: var(--card); border-radius: 999px;
+  }
+  .scope-btn.is-on { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: none; }
+
+  /* Hide the desktop ＋ Add button row; FAB takes over */
+  .result-row-actions { display: none; }
+}
+@media (min-width: 561px) { .add-fab { display: none; } }
