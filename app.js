@@ -154,6 +154,7 @@
   const cookPrevBtn = $("#cook-prev");
   const cookNextBtn = $("#cook-next");
   const cookIngToggle = $("#cook-ing-toggle");
+  const cookSectionsEl = $("#cook-sections");
 
   // ---------- Helpers ----------
   function esc(s) {
@@ -1534,10 +1535,15 @@
 
   // A section divider in the form: every ingredient/step row below it belongs to
   // this section until the next divider. Leaving the field blank = ungrouped.
+  // In reorder mode the ↑↓ buttons are shown (CSS-controlled) to move the whole section.
   function sectionHeadingRow(label) {
     return `
       <div class="rf-section-row">
         <input type="text" class="rf-section-input" placeholder="Section (e.g. Dough)" value="${esc(label || "")}">
+        <div class="rf-section-move">
+          <button type="button" class="rf-section-up" aria-label="Move section up">↑</button>
+          <button type="button" class="rf-section-down" aria-label="Move section down">↓</button>
+        </div>
         <button type="button" class="rf-row-remove" aria-label="Remove section">×</button>
       </div>`;
   }
@@ -1698,14 +1704,52 @@
   rfIngredients.addEventListener("click", (e) => {
     if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-ing-row, .rf-section-row").remove();
   });
+  // Collect all DOM rows belonging to this section header (header + following step rows)
+  function getSectionBlock(headerEl) {
+    const block = [headerEl];
+    let el = headerEl.nextElementSibling;
+    while (el && !el.classList.contains("rf-section-row")) {
+      block.push(el);
+      el = el.nextElementSibling;
+    }
+    return block;
+  }
+
+  // Move an entire section block up or down past the adjacent section.
+  function moveSectionBlock(headerEl, direction) {
+    const block = getSectionBlock(headerEl);
+    if (direction < 0) {
+      // Find the section header immediately before this one
+      let prevHeader = headerEl.previousElementSibling;
+      while (prevHeader && !prevHeader.classList.contains("rf-section-row")) {
+        prevHeader = prevHeader.previousElementSibling;
+      }
+      if (!prevHeader) return; // already first section
+      // Insert each row of our block before the previous section header, in order
+      block.forEach((el) => rfMethod.insertBefore(el, prevHeader));
+    } else {
+      // Find the next section header (first element after our block)
+      const nextHeader = block[block.length - 1].nextElementSibling;
+      if (!nextHeader || !nextHeader.classList.contains("rf-section-row")) return;
+      // Collect the next section's block, then insert it before our block
+      const nextBlock = getSectionBlock(nextHeader);
+      nextBlock.forEach((el) => rfMethod.insertBefore(el, block[0]));
+    }
+  }
+
   rfMethod.addEventListener("click", (e) => {
     if (e.target.classList.contains("rf-row-remove")) {
       e.target.closest(".rf-step-row, .rf-section-row").remove();
       return;
     }
-    // Reorder mode: nudge a step up or down one position. The save handler
-    // reads order (and re-derives each step's group) from the DOM, so moving
-    // rows is all that's needed — moving across a section divider re-groups it.
+    // Section reorder (reorder mode): move the whole section block up or down
+    const secUp = e.target.closest(".rf-section-up");
+    if (secUp) { moveSectionBlock(secUp.closest(".rf-section-row"), -1); return; }
+    const secDown = e.target.closest(".rf-section-down");
+    if (secDown) { moveSectionBlock(secDown.closest(".rf-section-row"), 1); return; }
+    // Step reorder (reorder mode): nudge a single step up or down one position.
+    // The save handler reads order (and re-derives each step's group) from the DOM,
+    // so moving rows is all that's needed — moving across a section divider re-groups it.
     const up = e.target.closest(".rf-move-up");
     if (up) {
       const r = up.closest(".rf-step-row");
@@ -2617,6 +2661,26 @@
     requestWakeLock();
   }
 
+  function renderCookSectionBar() {
+    // Build a deduplicated list of sections [{group, firstIdx}] from cookSteps
+    const sections = [];
+    let lastGroup;
+    cookSteps.forEach((s, i) => {
+      const g = s.group || null;
+      if (g !== lastGroup) { sections.push({ group: g, firstIdx: i }); lastGroup = g; }
+    });
+    if (sections.length < 2) { cookSectionsEl.hidden = true; return; }
+    const currentGroup = cookSteps[cookIdx].group || null;
+    cookSectionsEl.innerHTML = sections.map((sec) =>
+      `<button class="cook-sec-chip${sec.group === currentGroup ? " is-active" : ""}"
+               data-cook-idx="${sec.firstIdx}">${esc(sec.group || "Intro")}</button>`
+    ).join("");
+    cookSectionsEl.hidden = false;
+    // Scroll the active chip into view
+    const active = cookSectionsEl.querySelector(".cook-sec-chip.is-active");
+    if (active) active.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
+  }
+
   function renderCookStep() {
     const total = cookSteps.length;
     const step = cookSteps[cookIdx];
@@ -2627,6 +2691,7 @@
     cookPrevBtn.disabled = cookIdx === 0;
     cookNextBtn.textContent = cookIdx === total - 1 ? "Done ✓" : "Next →";
     cookBody.scrollTop = 0;
+    renderCookSectionBar();
   }
 
   function renderCookIngredients() {
@@ -2664,7 +2729,33 @@
     releaseWakeLock();
   }
 
-  cookBody.addEventListener("click", cookNext); // tap the step to advance, one-handed
+  // Section bookmark chips — tap to jump to the first step of that section
+  cookSectionsEl.addEventListener("click", (e) => {
+    const chip = e.target.closest(".cook-sec-chip");
+    if (chip) { cookIdx = parseInt(chip.dataset.cookIdx, 10); renderCookStep(); }
+  });
+
+  // Swipe left/right to advance/go back
+  let swipeStartX = 0, swipeStartY = 0, cookSwiped = false;
+  cookBody.addEventListener("touchstart", (e) => {
+    swipeStartX = e.touches[0].clientX;
+    swipeStartY = e.touches[0].clientY;
+    cookSwiped = false;
+  }, { passive: true });
+  cookBody.addEventListener("touchend", (e) => {
+    const dx = e.changedTouches[0].clientX - swipeStartX;
+    const dy = e.changedTouches[0].clientY - swipeStartY;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      cookSwiped = true;
+      if (dx < 0) cookNext(); else cookPrev(); // swipe left = forward, right = back
+    }
+  }, { passive: true });
+
+  // Tap the step body to advance (suppress if a swipe just fired)
+  cookBody.addEventListener("click", () => {
+    if (cookSwiped) { cookSwiped = false; return; }
+    cookNext();
+  });
   cookNextBtn.addEventListener("click", cookNext);
   cookPrevBtn.addEventListener("click", cookPrev);
   cookCloseBtn.addEventListener("click", closeCookMode);

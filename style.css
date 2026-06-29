@@ -1289,6 +1289,17 @@ button:focus-visible, input:focus-visible {
 .guide-closer { border-top: 1px solid var(--line); margin-top: 26px; padding-top: 20px; }
 .guide-closer p { color: #463F37; font-size: 15px; line-height: 1.6; margin: 0; }
 
+/* Section-move buttons on rf-section-row (visible in reorder mode only) */
+.rf-section-move { display: none; gap: 2px; }
+.rf-section-move button {
+  border: 1px solid var(--line); background: var(--card);
+  border-radius: 6px; width: 32px; line-height: 1; padding: 3px 0;
+  font-size: 0.7rem; color: var(--faint); cursor: pointer;
+}
+.rf-section-move button:hover { border-color: var(--accent); color: var(--accent); }
+#rf-method.reordering .rf-section-row { grid-template-columns: 1fr auto auto; }
+#rf-method.reordering .rf-section-move { display: flex; }
+
 /* ===== Cook mode — full-screen guided cooking ===== */
 .cook-panel {
   position: fixed;
@@ -1394,6 +1405,48 @@ button:focus-visible, input:focus-visible {
 .cook-nav #cook-prev:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* ✕ Exit button — replaces the old "Done" ghost-btn in the cook head */
+.cook-close-btn {
+  border: 1px solid rgba(255,255,255,0.25);
+  background: transparent;
+  color: var(--faint);
+  border-radius: var(--radius);
+  padding: 7px 13px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.cook-close-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Section bookmark bar in cook mode */
+.cook-sections {
+  display: flex;
+  overflow-x: auto;
+  gap: 8px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--line);
+  -webkit-overflow-scrolling: touch;
+}
+.cook-sections::-webkit-scrollbar { display: none; }
+.cook-sec-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--faint);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cook-sec-chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 /* ---------- Header redesign (B2) ---------- */
