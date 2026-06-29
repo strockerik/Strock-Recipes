@@ -2657,6 +2657,7 @@
     cookIngredients.hidden = true;
     cookIngToggle.setAttribute("aria-expanded", "false");
     cookPanel.hidden = false;
+    document.body.style.overflow = "hidden";
     renderCookStep();
     requestWakeLock();
   }
@@ -2726,6 +2727,7 @@
   }
   function closeCookMode() {
     cookPanel.hidden = true;
+    document.body.style.overflow = "";
     releaseWakeLock();
   }
 
