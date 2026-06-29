@@ -1309,6 +1309,7 @@ button:focus-visible, input:focus-visible {
   display: flex;
   flex-direction: column;
   padding-top: env(safe-area-inset-top);
+  touch-action: manipulation; /* disables double-tap zoom; pinch-zoom still works */
 }
 .cook-head {
   display: flex;
