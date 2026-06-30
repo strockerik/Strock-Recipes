@@ -204,6 +204,8 @@ button:focus-visible, input:focus-visible {
 .account-who { margin: 0; color: var(--faint); font-size: 0.95rem; }
 .account-who strong { color: var(--ink); font-family: var(--font-mono); font-size: 0.9rem; }
 #account-reset .account-who { margin-bottom: 4px; }
+.account-household { display: flex; align-items: center; gap: 10px; font-size: 0.95rem; color: var(--faint); }
+.account-household input { width: 70px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; color: var(--ink); }
 
 /* ---------- Controls ---------- */
 .controls { margin-top: 26px; }
@@ -308,6 +310,19 @@ button:focus-visible, input:focus-visible {
 .result-row-actions {
   display: flex;
   gap: 8px;
+}
+
+.pick-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--paper-soft, #F6F2E9);
+  font-size: 0.85rem;
+  color: var(--faint);
 }
 
 /* ---------- Item list ---------- */
@@ -491,6 +506,9 @@ button:focus-visible, input:focus-visible {
   white-space: nowrap;
   min-width: 64px;
 }
+#cook-ingredients .ing-row { cursor: pointer; user-select: none; }
+#cook-ingredients .ing-row.is-checked { opacity: 0.5; text-decoration: line-through; }
+
 .step-list { margin: 0; padding-left: 20px; font-size: 0.93rem; }
 .step-list li { margin-bottom: 8px; }
 .step-list li::marker { font-family: var(--font-mono); color: var(--accent); font-size: 0.85em; }
@@ -816,9 +834,24 @@ button:focus-visible, input:focus-visible {
   height: 28px;
 }
 .grocery-panel.shopping .g-by-recipe,
+.grocery-panel.shopping .g-reorder,
 .grocery-panel.shopping .grocery-actions {
   display: none;
 }
+
+.g-reorder { margin-top: 14px; }
+.g-reorder summary { cursor: pointer; font-size: 0.9rem; color: var(--faint); }
+.g-reorder-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.g-reorder-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 8px; border-radius: 8px; background: var(--paper-soft, #F6F2E9); font-size: 0.9rem;
+}
+.g-reorder-btns { display: flex; gap: 4px; }
+.g-reorder-btns button {
+  border: 1px solid var(--line); background: #fff; border-radius: 6px;
+  width: 26px; height: 26px; line-height: 1; cursor: pointer; color: var(--ink); font-size: 0.75rem;
+}
+.g-reorder-btns button:disabled { opacity: 0.35; cursor: default; }
 
 /* ---------- Weekly meal plan ---------- */
 .meal-plan-content { display: flex; flex-direction: column; gap: 22px; }
@@ -1402,6 +1435,34 @@ button:focus-visible, input:focus-visible {
   width: 0;
   background: var(--accent);
   transition: width 0.25s ease;
+}
+
+/* Step rail — one dot per step, tap to jump */
+.cook-rail {
+  display: flex;
+  overflow-x: auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+  -webkit-overflow-scrolling: touch;
+}
+.cook-rail::-webkit-scrollbar { display: none; }
+.cook-rail-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--card);
+  padding: 0;
+  cursor: pointer;
+}
+.cook-rail-dot.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  width: 10px;
+  height: 10px;
 }
 .cook-body {
   flex: 1;

@@ -28,6 +28,9 @@
   let shoppingModeOn = false; // big-tap, screen-awake grocery view
   let manualGroceryItems = []; // user-typed items not tied to a recipe: {key,name}; checked state lives in checkedGroceryItems
   let unitSystem = "original"; // recipe-detail display: "original" | "us" | "metric"
+  let householdServings = null; // "we usually cook for N" default, applied only when first adding a recipe to the grocery list or meal plan
+  let aisleOrder = null; // user-customized store-walk order for grocery categories; set in loadUserLocalState
+  let seenPickHint = false; // dismissed the "check recipes to build a grocery list" hint
 
   // ---------- Per-user local persistence ----------
   // Namespaced by user id so two accounts on one device don't collide.
@@ -47,6 +50,9 @@
     skipPantryStaples = loadLocal("skipStaples", false);
     manualGroceryItems = loadLocal("manualItems", []);
     loadLocal("mealTray", []).forEach((id) => mealPlanTray.add(id));
+    householdServings = loadLocal("household", null);
+    aisleOrder = loadStoredAisleOrder();
+    seenPickHint = loadLocal("seenPickHint", false);
   }
   function persistGrocery() {
     saveLocal("basket", [...basket.entries()]);
@@ -113,6 +119,7 @@
   const accountNewPass = $("#account-newpass");
   const accountNewPass2 = $("#account-newpass2");
   const accountResetStatus = $("#account-reset-status");
+  const accountHouseholdInput = $("#account-household-servings");
   const addRecipeBtn = $("#add-recipe");
   const recipeFormPanel = $("#recipe-form-panel");
   const recipeForm = $("#recipe-form");
@@ -146,6 +153,8 @@
   const detailMoreMenu = $("#detail-more-menu");
   const addFab = $("#add-fab");
   const resultRowEl = $(".result-row");
+  const pickHintEl = $("#pick-hint");
+  const pickHintDismissBtn = $("#pick-hint-dismiss");
 
   const addRecipeAiBtn = $("#add-recipe-ai");
   const aiImportPanel = $("#ai-import-panel");
@@ -181,6 +190,7 @@
   const cookTitle = $("#cook-title");
   const cookCloseBtn = $("#cook-close");
   const cookProgressBar = $("#cook-progress-bar");
+  const cookRailEl = $("#cook-rail");
   const cookBody = $("#cook-body");
   const cookStepNum = $("#cook-step-num");
   const cookStepText = $("#cook-step-text");
@@ -432,9 +442,22 @@
     re: new RegExp(`\\b(?:${c.terms.join("|")})\\b`, "i")
   }));
   const OTHER_CATEGORY = "Other";
-  // Store-walk order for display (independent of the match-priority order
-  // above); empty sections are skipped, "Other" is always last.
+  // Default store-walk order for display (independent of the match-priority
+  // order above); empty sections are skipped, "Other" is always last. The
+  // user can customize this via "Reorder aisles" — see aisleOrder/loadStoredAisleOrder.
   const GROCERY_CATEGORY_ORDER = ["Produce", "Bakery", "Meat & Seafood", "Dairy & Eggs", "Frozen", "Canned & Jarred", "Dry Goods & Baking", "Condiments, Sauces & Spices", "Beverages", OTHER_CATEGORY];
+
+  // Merge a stored aisle order with the current category list, so a category
+  // added to the app after the user last reordered still shows up (appended,
+  // before "Other") instead of silently vanishing from the grocery panel.
+  function loadStoredAisleOrder() {
+    const stored = loadLocal("aisleOrder", null);
+    if (!stored) return GROCERY_CATEGORY_ORDER.slice();
+    const known = GROCERY_CATEGORY_ORDER.filter((c) => c !== OTHER_CATEGORY);
+    const kept = stored.filter((c) => known.includes(c));
+    const missing = known.filter((c) => !kept.includes(c));
+    return [...kept, ...missing, OTHER_CATEGORY];
+  }
 
   function categorizeGrocery(nameLower) {
     for (const c of GROCERY_CATEGORY_RE) {
@@ -443,8 +466,8 @@
     return OTHER_CATEGORY;
   }
 
-  // Group a flat combined-grocery list into store sections, in walk order,
-  // skipping any section with no items.
+  // Group a flat combined-grocery list into store sections, in the user's
+  // aisle-walk order, skipping any section with no items.
   function groceryByCategory(items) {
     const buckets = new Map();
     items.forEach((it) => {
@@ -452,7 +475,7 @@
       if (!buckets.has(cat)) buckets.set(cat, []);
       buckets.get(cat).push(it);
     });
-    return GROCERY_CATEGORY_ORDER
+    return (aisleOrder || GROCERY_CATEGORY_ORDER)
       .filter((cat) => buckets.has(cat))
       .map((cat) => ({ category: cat, items: buckets.get(cat) }));
   }
@@ -586,6 +609,9 @@
     skipPantryStaples = false;
     shoppingModeOn = false;
     manualGroceryItems = [];
+    householdServings = null;
+    aisleOrder = GROCERY_CATEGORY_ORDER.slice();
+    seenPickHint = false;
     mealPlan = [];
     mealPlanTray.clear();
     closePlaceSheet();
@@ -824,10 +850,23 @@
       ? "Welcome back — choose a new password to finish."
       : "Choose a new password.";
     showAccountView(view || "menu");
+    accountHouseholdInput.value = householdServings || "";
     accountPanel.hidden = false;
   }
   accountBtn.addEventListener("click", () => openAccountPanel("menu"));
+  accountHouseholdInput.addEventListener("change", () => {
+    const n = parseInt(accountHouseholdInput.value, 10);
+    householdServings = n > 0 ? n : null;
+    accountHouseholdInput.value = householdServings || "";
+    saveLocal("household", householdServings);
+  });
   $("#close-account").addEventListener("click", () => (accountPanel.hidden = true));
+
+  pickHintDismissBtn.addEventListener("click", () => {
+    seenPickHint = true;
+    saveLocal("seenPickHint", true);
+    pickHintEl.hidden = true;
+  });
   accountPanel.addEventListener("click", (e) => {
     if (e.target === accountPanel) accountPanel.hidden = true;
   });
@@ -916,6 +955,15 @@
       : (servingsByRecipe.get(it.id) ?? it.baseServings);
   }
 
+  // The servings to use the *first* time a recipe lands in the grocery list or
+  // meal plan: an explicit per-recipe override still wins, otherwise fall back
+  // to the household default rather than always the recipe's own base. Once
+  // placed, the stored value is just edited via setRecipeServings (a full
+  // override) — this only shapes the initial number.
+  function defaultAddServings(it) {
+    return servingsByRecipe.get(it.id) ?? householdServings ?? it.baseServings;
+  }
+
   // Set a recipe's servings from any +/- control, keeping the grocery basket in
   // sync so the combined shopping list reflects the new scale immediately.
   function setRecipeServings(id, n) {
@@ -933,6 +981,7 @@
     resultCountEl.textContent =
       `${items.length} ${section === "recipes" ? "recipe" : "cocktail"}${items.length === 1 ? "" : "s"}`;
     emptyEl.hidden = items.length > 0;
+    pickHintEl.hidden = seenPickHint || items.length === 0;
     if (items.length === 0) {
       const noun = section === "recipes" ? "recipes" : "cocktails";
       const hasFilter = !!(searchTerm.trim() || activeTags.size);
@@ -1295,6 +1344,24 @@
     return [...combinedGroceryItems(), ...manualAsGroceryItems()];
   }
 
+  // "Other" is always pinned last and isn't part of the reorderable list.
+  function renderAisleReorder() {
+    const order = (aisleOrder || GROCERY_CATEGORY_ORDER).filter((c) => c !== OTHER_CATEGORY);
+    return `<details class="g-reorder">
+      <summary>Reorder aisles</summary>
+      <ul class="g-reorder-list">
+        ${order.map((cat, i) => `
+          <li class="g-reorder-row">
+            <span>${esc(cat)}</span>
+            <span class="g-reorder-btns">
+              <button type="button" class="g-reorder-up" data-cat="${esc(cat)}" ${i === 0 ? "disabled" : ""} aria-label="Move ${esc(cat)} up">▲</button>
+              <button type="button" class="g-reorder-down" data-cat="${esc(cat)}" ${i === order.length - 1 ? "disabled" : ""} aria-label="Move ${esc(cat)} down">▼</button>
+            </span>
+          </li>`).join("")}
+      </ul>
+    </details>`;
+  }
+
   function renderGroceryPanel() {
     const sections = groceryByCategory(allGroceryItems());
     const itemsHtml = sections.length
@@ -1323,6 +1390,7 @@
         Skip pantry staples (salt, pepper, oil, water, sugar, butter, flour)
       </label>
       <ul class="g-combined">${itemsHtml}</ul>
+      ${renderAisleReorder()}
       <details class="g-by-recipe">
         <summary>By recipe</summary>
         ${groceryGroups().map((g) => `
@@ -1424,7 +1492,7 @@
   async function assignMealEntry(recipeId, date, slot) {
     if (!session) { toast("You've been signed out \u2014 sign in again."); return; }
     const it = byId[recipeId];
-    const servings = it ? chosenServings(it) : null;
+    const servings = it ? defaultAddServings(it) : null;
     const { data, error } = await supabaseClient
       .from("meal_plan_entries")
       .insert({ recipe_id: recipeId, plan_date: date, slot, servings })
@@ -1619,6 +1687,8 @@
     recipesControlsEl.hidden = !recipes;
     listEl.hidden = !recipes;
     resultRowEl.hidden = !recipes;
+    if (!recipes) pickHintEl.hidden = true;
+    else pickHintEl.hidden = seenPickHint || currentItems().length === 0;
     mealPlanView.hidden = recipes;
     if (!recipes) {
       if (!session) { toast("Sign in to plan meals."); setViewMode("recipes"); return; }
@@ -2667,7 +2737,7 @@
 
     if (e.target.classList.contains("pick")) {
       // Carry any scale chosen in the detail view into the grocery list.
-      if (e.target.checked) basket.set(id, { servings: chosenServings(byId[id]) });
+      if (e.target.checked) basket.set(id, { servings: defaultAddServings(byId[id]) });
       else basket.delete(id);
       persistGrocery();
       renderList();
@@ -2678,7 +2748,7 @@
 
     if (e.target.closest(".detail-grocery-btn")) {
       if (basket.has(id)) basket.delete(id);
-      else basket.set(id, { servings: chosenServings(byId[id]) });
+      else basket.set(id, { servings: defaultAddServings(byId[id]) });
       persistGrocery();
       renderList();
       renderGroceryBar();
@@ -2752,6 +2822,7 @@
   let cookServings = 0;
   let cookIdx = 0;
   let cookSteps = [];
+  let cookCheckedIngs = new Set(); // session-only, reset each time cook mode opens
   let wakeLock = null;
 
   async function requestWakeLock() {
@@ -2783,6 +2854,7 @@
     cookItem = item;
     cookServings = servings;
     cookIdx = 0;
+    cookCheckedIngs = new Set();
     stopCookTimer();
     cookTitle.textContent = item.name;
     renderCookIngredients();
@@ -2827,6 +2899,19 @@
     cookNextBtn.textContent = cookIdx === total - 1 ? "Done ✓" : "Next →";
     cookBody.scrollTop = 0;
     renderCookSectionBar();
+    renderCookRail();
+  }
+
+  function renderCookRail() {
+    const total = cookSteps.length;
+    if (total < 2) { cookRailEl.hidden = true; return; }
+    cookRailEl.innerHTML = cookSteps.map((_, i) =>
+      `<button type="button" class="cook-rail-dot${i === cookIdx ? " is-active" : ""}"
+               data-cook-idx="${i}" aria-label="Go to step ${i + 1}"></button>`
+    ).join("");
+    cookRailEl.hidden = false;
+    const active = cookRailEl.querySelector(".cook-rail-dot.is-active");
+    if (active) active.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
   }
 
   // Surface the relevant ingredient amounts inline with each step, so the cook
@@ -2932,7 +3017,9 @@
         <ul class="ing-list">
           ${run.items.map((ing) => {
             const l = ingLine(ing, true);
-            return `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
+            const key = normalizeItemName(ing.item);
+            const checked = cookCheckedIngs.has(key);
+            return `<li class="ing-row${checked ? " is-checked" : ""}" data-ing="${esc(key)}"><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
           }).join("")}
         </ul>`).join("")}`;
   }
@@ -2963,6 +3050,12 @@
     if (chip) { cookIdx = parseInt(chip.dataset.cookIdx, 10); renderCookStep(); }
   });
 
+  // Step rail — tap a dot to jump straight to that step
+  cookRailEl.addEventListener("click", (e) => {
+    const dot = e.target.closest(".cook-rail-dot");
+    if (dot) { cookIdx = parseInt(dot.dataset.cookIdx, 10); renderCookStep(); }
+  });
+
   // Swipe left/right to advance/go back
   let swipeStartX = 0, swipeStartY = 0, cookSwiped = false;
   cookBody.addEventListener("touchstart", (e) => {
@@ -2990,6 +3083,14 @@
   cookIngToggle.addEventListener("click", () => {
     cookIngredients.hidden = !cookIngredients.hidden;
     cookIngToggle.setAttribute("aria-expanded", String(!cookIngredients.hidden));
+  });
+  cookIngredients.addEventListener("click", (e) => {
+    const row = e.target.closest(".ing-row");
+    if (!row) return;
+    const key = row.dataset.ing;
+    if (cookCheckedIngs.has(key)) cookCheckedIngs.delete(key);
+    else cookCheckedIngs.add(key);
+    row.classList.toggle("is-checked");
   });
   document.addEventListener("keydown", (e) => {
     if (cookPanel.hidden) return;
@@ -3060,12 +3161,29 @@
   });
   groceryContent.addEventListener("click", (e) => {
     const removeBtn = e.target.closest(".g-manual-remove");
-    if (!removeBtn) return;
-    const key = removeBtn.dataset.key;
-    manualGroceryItems = manualGroceryItems.filter((m) => m.key !== key);
-    checkedGroceryItems.delete(key);
-    persistGrocery();
-    renderGroceryPanel();
+    if (removeBtn) {
+      const key = removeBtn.dataset.key;
+      manualGroceryItems = manualGroceryItems.filter((m) => m.key !== key);
+      checkedGroceryItems.delete(key);
+      persistGrocery();
+      renderGroceryPanel();
+      return;
+    }
+    const upBtn = e.target.closest(".g-reorder-up");
+    const downBtn = e.target.closest(".g-reorder-down");
+    if (upBtn || downBtn) {
+      const cat = (upBtn || downBtn).dataset.cat;
+      const order = (aisleOrder || GROCERY_CATEGORY_ORDER).slice();
+      const i = order.indexOf(cat);
+      const j = upBtn ? i - 1 : i + 1;
+      if (i < 0 || j < 0 || j >= order.length || order[j] === OTHER_CATEGORY) return;
+      [order[i], order[j]] = [order[j], order[i]];
+      aisleOrder = order;
+      saveLocal("aisleOrder", aisleOrder);
+      renderGroceryPanel();
+      const reopened = groceryContent.querySelector(".g-reorder");
+      if (reopened) reopened.open = true;
+    }
   });
 
   // Grocery panel: pantry-staples toggle + per-item check-off

@@ -109,6 +109,11 @@
       </div>
     </div>
 
+    <p id="pick-hint" class="pick-hint" hidden>
+      Check recipes to build a grocery list.
+      <button type="button" id="pick-hint-dismiss" class="ghost-btn small">Got it</button>
+    </p>
+
     <ul id="item-list" class="item-list"></ul>
 
     <p id="empty-state" class="empty-state" hidden></p>
@@ -180,6 +185,10 @@
       <!-- Menu view -->
       <div id="account-menu" class="account-menu">
         <p class="account-who">Signed in as <strong id="account-email"></strong></p>
+        <label class="account-household" for="account-household-servings">
+          We usually cook for
+          <input type="number" id="account-household-servings" min="1" step="1" inputmode="numeric" placeholder="e.g. 4">
+        </label>
         <div class="grocery-actions">
           <button id="account-change-pw" class="ghost-btn">Change password</button>
           <button id="account-backup" class="ghost-btn">⬇ Back up recipes</button>
@@ -550,6 +559,7 @@
       <button id="cook-close" class="cook-close-btn" aria-label="Exit cook mode">✕ Exit</button>
     </div>
     <div class="cook-progress" aria-hidden="true"><div id="cook-progress-bar"></div></div>
+    <div id="cook-rail" class="cook-rail" hidden></div>
     <div id="cook-sections" class="cook-sections" hidden></div>
     <div id="cook-body" class="cook-body">
       <div class="cook-step wrap">
