@@ -102,8 +102,6 @@
   const shoppingModeToggle = $("#shopping-mode-toggle");
   const backupPanel = $("#backup-panel");
   const guidePanel = $("#guide-panel");
-  const mealPlanPanel = $("#meal-plan-panel");
-  const mealPlanContent = $("#meal-plan-content");
   const placeSheet = $("#place-sheet");
   const placeSheetTitle = $("#place-sheet-title");
   const placeSheetBody = $("#place-sheet-body");
@@ -3152,8 +3150,6 @@
   // Mode tabs: Recipes ↔ Meal plan
   modeRecipesBtn.addEventListener("click", () => setViewMode("recipes"));
   modeMealplanBtn.addEventListener("click", () => setViewMode("mealplan"));
-  // Keep close button on the legacy modal in case it ever surfaces
-  $("#close-meal-plan").addEventListener("click", () => (mealPlanPanel.hidden = true));
   mealPlanView.addEventListener("click", (e) => {
     if (e.target.closest("#mp-make-grocery")) { groceryFromPlan(); return; }
     const viewBtn = e.target.closest("[data-plan-view]");
@@ -3181,7 +3177,6 @@
     if (cook) {
       const it = byId[cook.dataset.cook];
       if (!it) { toast("That recipe is no longer available."); return; }
-      mealPlanPanel.hidden = true;
       openCookMode(it, cook.dataset.serv ? Number(cook.dataset.serv) : it.baseServings);
     }
   });
@@ -3483,7 +3478,6 @@
     if (!backupPanel.hidden) backupPanel.hidden = true;
     if (!guidePanel.hidden) guidePanel.hidden = true;
     if (!accountPanel.hidden) accountPanel.hidden = true;
-    if (!mealPlanPanel.hidden) mealPlanPanel.hidden = true;
     if (!placeSheet.hidden) closePlaceSheet();
     if (!recipeFormPanel.hidden) closeRecipeForm();
     if (!aiImportPanel.hidden) closeAiImport();

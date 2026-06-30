@@ -871,7 +871,6 @@ button:focus-visible, input:focus-visible {
 .g-reorder-btns button:disabled { opacity: 0.35; cursor: default; }
 
 /* ---------- Weekly meal plan ---------- */
-.meal-plan-content { display: flex; flex-direction: column; gap: 22px; }
 .mp-section { display: flex; flex-direction: column; gap: 10px; }
 .mp-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .mp-section-head .detail-h { margin: 0; }
@@ -1762,7 +1761,7 @@ button:focus-visible, input:focus-visible {
 .add-menu small { display: block; font-size: .76rem; color: var(--faint); font-weight: 400; margin-top: 1px; }
 
 /* Meal plan inline view */
-.meal-plan-view { margin-top: 18px; }
+.meal-plan-view { margin-top: 18px; display: flex; flex-direction: column; gap: 22px; }
 
 /* Mobile FAB */
 .add-fab {
