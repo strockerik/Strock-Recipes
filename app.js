@@ -3376,10 +3376,16 @@
       detailMoreMenu.style.bottom = "";
       detailMoreMenu.style.left = "";
     } else {
+      // On a phone the action row wraps and "⋯ More" sits near the LEFT, so the
+      // Add menu's right-anchor (its trigger is on the right) pushed this menu
+      // off the left edge. Left-align to the trigger and clamp into the viewport
+      // so the whole menu is always on screen, wherever the button landed.
+      const menuW = detailMoreMenu.offsetWidth;
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - menuW - 8));
+      detailMoreMenu.style.left = left + "px";
+      detailMoreMenu.style.right = "";
       detailMoreMenu.style.bottom = (window.innerHeight - r.top + 8) + "px";
-      detailMoreMenu.style.right = (window.innerWidth - r.right) + "px";
       detailMoreMenu.style.top = "";
-      detailMoreMenu.style.left = "";
     }
   }
   detailMoreMenu.addEventListener("click", (e) => {
