@@ -33,7 +33,6 @@
   let seenPickHint = false; // dismissed the "check recipes to build a grocery list" hint
   let seenIntro = false; // dismissed the first-run Cook/Plan/Shop pointer card
   let planView = "dinners"; // meal-plan grid density: "dinners" | "all"
-  const revealedMealSlots = new Set(); // session-only "<date>:<slot>" keys manually expanded in dinners view
 
   // ---------- Per-user local persistence ----------
   // Namespaced by user id so two accounts on one device don't collide.
@@ -623,7 +622,6 @@
     seenIntro = false;
     introCardEl.hidden = true;
     planView = "dinners";
-    revealedMealSlots.clear();
     mealPlan = [];
     mealPlanTray.clear();
     closePlaceSheet();
@@ -1631,14 +1629,13 @@
     const dayPurchased = isHistory && mealPlan.some((e) => e.date === ds && e.purchasedAt);
     const slotsHtml = SLOTS.map((slot) => {
       const entries = mealPlan.filter((e) => e.date === ds && e.slot === slot);
-      // In "dinners" planner view, an empty breakfast/lunch slot collapses to
-      // a small "+ Breakfast" reveal \u2014 tapping it (or the slot already having
-      // an entry) swaps in the full row with its usual add/remove controls,
-      // so .mp-slot-add never permanently disappears, just starts hidden.
-      const collapsible = !isHistory && planView === "dinners" && slot !== "dinner";
-      const revealKey = `${ds}:${slot}`;
-      if (collapsible && !entries.length && !revealedMealSlots.has(revealKey)) {
-        return `<button type="button" class="mp-slot-reveal" data-reveal="${ds}" data-reveal-slot="${slot}">+ ${slotLabel(slot)}</button>`;
+      // In "dinners" planner view, breakfast/lunch are hidden entirely (not
+      // collapsed to a stub row, which saved no space and just read as clutter).
+      // A breakfast/lunch that already has a meal still shows, so switching to
+      // "dinners" never orphans something you scheduled in "all meals". To add a
+      // breakfast or lunch, switch to "All meals".
+      if (!isHistory && planView === "dinners" && slot !== "dinner" && !entries.length) {
+        return "";
       }
       const chips = entries.map((e) => {
         const it = byId[e.recipeId];
@@ -3156,12 +3153,6 @@
     if (viewBtn) {
       planView = viewBtn.dataset.planView;
       saveLocal("planView", planView);
-      renderMealPlan();
-      return;
-    }
-    const reveal = e.target.closest(".mp-slot-reveal");
-    if (reveal) {
-      revealedMealSlots.add(`${reveal.dataset.reveal}:${reveal.dataset.revealSlot}`);
       renderMealPlan();
       return;
     }

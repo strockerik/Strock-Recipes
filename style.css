@@ -966,22 +966,6 @@ button:focus-visible, input:focus-visible {
 }
 .mp-view-btn.is-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
-.mp-slot-reveal {
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  color: var(--faint);
-  font-size: 0.78rem;
-  padding: 4px 0;
-  cursor: pointer;
-}
-.mp-slot-reveal:hover { color: var(--accent); }
-.mp-slot-reveal + .mp-slot-reveal,
-.mp-slot-reveal + .mp-slot,
-.mp-slot + .mp-slot-reveal { border-top: 1px dotted var(--line); }
-
 /* ---------- Add-to-plan picker sheet ---------- */
 .place-sheet-body { display: flex; flex-direction: column; gap: 14px; }
 .ps-day { border-bottom: 1px dotted var(--line); padding-bottom: 12px; }
