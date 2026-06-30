@@ -3413,6 +3413,13 @@
       closeDetailMoreMenu();
     }
   });
+  // Both menus are position:fixed off the trigger's click-time rect, so they
+  // don't track the page on scroll — close them instead of letting them detach.
+  // Capture phase catches scrolls on any scrollable ancestor, not just window.
+  window.addEventListener("scroll", () => {
+    if (!addMenu.hidden) closeAddMenu();
+    if (!detailMoreMenu.hidden) closeDetailMoreMenu();
+  }, { capture: true, passive: true });
 
   // ---------- Feature guide ----------
   $("#open-guide").addEventListener("click", () => {
