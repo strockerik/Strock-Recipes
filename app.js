@@ -22,10 +22,38 @@
   // assignments (mealPlan) are persisted in Supabase (meal_plan_entries).
   const mealPlanTray = new Set();
   let mealPlan = [];           // entries in the rolling window: {id,recipeId,date,slot,servings,purchasedAt}
-  let armedTrayId = null;      // tray recipe currently armed for placement onto a day/slot
+  let placeSheetState = null;  // place-sheet dialog: {mode:"slot",recipeId} | {mode:"recipe",date,slot} | null
   let skipPantryStaples = false;
   const checkedGroceryItems = new Set(); // grocery: combined-item keys checked off
+  let shoppingModeOn = false; // big-tap, screen-awake grocery view
+  let manualGroceryItems = []; // user-typed items not tied to a recipe: {key,name}; checked state lives in checkedGroceryItems
   let unitSystem = "original"; // recipe-detail display: "original" | "us" | "metric"
+
+  // ---------- Per-user local persistence ----------
+  // Namespaced by user id so two accounts on one device don't collide.
+  function userKey(name) { return `hi:${loadedUserId || "anon"}:${name}`; }
+  function loadLocal(name, fallback) {
+    try {
+      const v = localStorage.getItem(userKey(name));
+      return v == null ? fallback : JSON.parse(v);
+    } catch { return fallback; }
+  }
+  function saveLocal(name, value) {
+    try { localStorage.setItem(userKey(name), JSON.stringify(value)); } catch {}
+  }
+  function loadUserLocalState() {
+    loadLocal("basket", []).forEach(([id, v]) => basket.set(id, v));
+    loadLocal("checked", []).forEach((k) => checkedGroceryItems.add(k));
+    skipPantryStaples = loadLocal("skipStaples", false);
+    manualGroceryItems = loadLocal("manualItems", []);
+    loadLocal("mealTray", []).forEach((id) => mealPlanTray.add(id));
+  }
+  function persistGrocery() {
+    saveLocal("basket", [...basket.entries()]);
+    saveLocal("checked", [...checkedGroceryItems]);
+    saveLocal("skipStaples", skipPantryStaples);
+    saveLocal("manualItems", manualGroceryItems);
+  }
 
   const DATA = { recipes: [], cocktails: [], sharedRecipes: [], sharedCocktails: [] };
   const POOL_KEY = { recipes: "recipes", cocktails: "cocktails" };
@@ -56,10 +84,15 @@
   const grocerySummary = $("#grocery-summary");
   const groceryPanel = $("#grocery-panel");
   const groceryContent = $("#grocery-content");
+  const groceryProgressEl = $("#grocery-progress");
+  const shoppingModeToggle = $("#shopping-mode-toggle");
   const backupPanel = $("#backup-panel");
   const guidePanel = $("#guide-panel");
   const mealPlanPanel = $("#meal-plan-panel");
   const mealPlanContent = $("#meal-plan-content");
+  const placeSheet = $("#place-sheet");
+  const placeSheetTitle = $("#place-sheet-title");
+  const placeSheetBody = $("#place-sheet-body");
   const authGate = $("#auth-gate");
   const authForm = $("#auth-form");
   const authEmailEl = $("#auth-email");
@@ -110,6 +143,7 @@
   const scopeAllBtn = $("#scope-all");
   const addToggle = $("#add-toggle");
   const addMenu = $("#add-menu");
+  const detailMoreMenu = $("#detail-more-menu");
   const addFab = $("#add-fab");
   const resultRowEl = $(".result-row");
 
@@ -150,6 +184,12 @@
   const cookBody = $("#cook-body");
   const cookStepNum = $("#cook-step-num");
   const cookStepText = $("#cook-step-text");
+  const cookStepIngredients = $("#cook-step-ingredients");
+  const cookTimerChips = $("#cook-timer-chips");
+  const cookTimerBar = $("#cook-timer-bar");
+  const cookTimerLabel = $("#cook-timer-label");
+  const cookTimerClock = $("#cook-timer-clock");
+  const cookTimerStopBtn = $("#cook-timer-stop");
   const cookIngredients = $("#cook-ingredients");
   const cookPrevBtn = $("#cook-prev");
   const cookNextBtn = $("#cook-next");
@@ -474,6 +514,7 @@
     for (const id of [...basket.keys()]) if (!byId[id]) basket.delete(id);
     for (const id of [...openItems]) if (!byId[id]) openItems.delete(id);
     for (const id of [...openShareIds]) if (!byId[id]) openShareIds.delete(id);
+    for (const id of [...mealPlanTray]) if (!byId[id]) mealPlanTray.delete(id);
     const allTags = new Set();
     Object.values(byId).forEach((it) => it.tags.forEach((t) => allTags.add(t)));
     for (const t of [...activeTags]) if (!allTags.has(t)) activeTags.delete(t);
@@ -541,9 +582,13 @@
     openItems.clear();
     openShareIds.clear();
     basket.clear();
+    checkedGroceryItems.clear();
+    skipPantryStaples = false;
+    shoppingModeOn = false;
+    manualGroceryItems = [];
     mealPlan = [];
     mealPlanTray.clear();
-    armedTrayId = null;
+    closePlaceSheet();
     favoritesOnly = false;
     toggleFavoritesBtn.setAttribute("aria-pressed", "false");
     sharedOnly = false;
@@ -591,6 +636,7 @@
         // re-render everything when the same user's token rotates.
         const userChanged = session.user.id !== loadedUserId;
         loadedUserId = session.user.id;
+        if (userChanged) loadUserLocalState();
         if (userChanged || event !== "TOKEN_REFRESHED") setTimeout(loadData, 0);
       } else if (wasSignedIn) {
         loadedUserId = null;
@@ -876,6 +922,7 @@
     const v = Math.max(1, n);
     servingsByRecipe.set(id, v);
     if (basket.has(id)) basket.get(id).servings = v;
+    persistGrocery();
     renderList();
     renderGroceryBar();
     if (!groceryPanel.hidden) renderGroceryPanel();
@@ -983,17 +1030,10 @@
       </div>
       <div class="detail-actions-row">
         ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
-        <button class="ghost-btn small add-to-plan-btn" data-id="${esc(it.id)}">📅 Add to Weekly Meal Plan</button>
+        <button class="ghost-btn small add-to-plan-btn" data-id="${esc(it.id)}">📅 Add to plan</button>
+        <button class="ghost-btn small detail-grocery-btn${basket.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${basket.has(it.id) ? "✓ In grocery list" : "🛒 Add to grocery list"}</button>
         <button class="ghost-btn small coach-btn" data-id="${esc(it.id)}">✨ Ask AI</button>
-        <button class="ghost-btn small send-recipe-btn" data-id="${esc(it.id)}">📤 Send</button>
-      </div>
-      <div class="detail-actions-row">
-        ${mine ? `
-        <button class="ghost-btn small edit-recipe" data-id="${esc(it.id)}">Edit</button>
-        <button class="ghost-btn small delete-recipe-btn" data-id="${esc(it.id)}">Delete</button>
-        <button class="ghost-btn small share-toggle-btn${openShareIds.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${shareButtonLabel(it)}</button>` : `
-        <button class="ghost-btn small copy-to-book-btn" data-id="${esc(it.id)}">📋 Copy to my book</button>
-        <button class="ghost-btn small remove-shared-btn" data-id="${esc(it.id)}">Remove</button>`}
+        <button class="ghost-btn small detail-more-btn" data-id="${esc(it.id)}" aria-haspopup="true" aria-expanded="false">⋯ More</button>
       </div>
       ${mine && openShareIds.has(it.id) ? renderSharePanel(it) : ""}
     </div>`;
@@ -1198,7 +1238,7 @@
   function renderGroceryBar() {
     const n = basket.size;
     groceryBar.hidden = n === 0;
-    if (n === 0) groceryPanel.hidden = true;
+    if (n === 0) closeGroceryPanel();
     grocerySummary.textContent = `${n} recipe${n === 1 ? "" : "s"} in your grocery list`;
   }
 
@@ -1246,8 +1286,17 @@
       .sort((a, b) => a.item.localeCompare(b.item));
   }
 
+  // Manual (non-recipe) items, shaped to slot into the same category buckets
+  // and checked-off tracking as recipe-derived items.
+  function manualAsGroceryItems() {
+    return manualGroceryItems.map((m) => ({ key: m.key, item: m.name, amount: null, unit: null, manual: true }));
+  }
+  function allGroceryItems() {
+    return [...combinedGroceryItems(), ...manualAsGroceryItems()];
+  }
+
   function renderGroceryPanel() {
-    const sections = groceryByCategory(combinedGroceryItems());
+    const sections = groceryByCategory(allGroceryItems());
     const itemsHtml = sections.length
       ? sections.map((sec) => `
           <li class="g-category">${esc(sec.category)}</li>
@@ -1259,11 +1308,16 @@
                 <input type="checkbox" class="g-item-check" data-key="${esc(it.key)}" ${checked ? "checked" : ""}>
                 <span class="ing-amt">${esc(amtStr)}</span><span>${esc(it.item)}</span>
               </label>
+              ${it.manual ? `<button type="button" class="g-manual-remove" data-key="${esc(it.key)}" aria-label="Remove ${esc(it.item)}">\u00d7</button>` : ""}
             </li>`;
           }).join("")}`).join("")
       : `<p class="g-empty">Nothing to buy \u2014 try turning off "Skip pantry staples".</p>`;
 
     groceryContent.innerHTML = `
+      <form id="grocery-add-manual" class="g-add-manual">
+        <input type="text" id="grocery-manual-input" placeholder="Add an item\u2026" autocomplete="off">
+        <button type="submit" class="ghost-btn small">Add</button>
+      </form>
       <label class="g-staples-toggle">
         <input type="checkbox" id="grocery-skip-staples" ${skipPantryStaples ? "checked" : ""}>
         Skip pantry staples (salt, pepper, oil, water, sugar, butter, flour)
@@ -1280,12 +1334,34 @@
             </ul>
           </div>`).join("")}
       </details>`;
+    renderGroceryProgress();
+  }
+
+  function renderGroceryProgress() {
+    const items = allGroceryItems();
+    const total = items.length;
+    const done = items.filter((it) => checkedGroceryItems.has(it.key)).length;
+    groceryProgressEl.hidden = !shoppingModeOn || !total;
+    groceryProgressEl.textContent = `✓ ${done} of ${total}`;
+  }
+
+  function setShoppingMode(on) {
+    shoppingModeOn = on;
+    groceryPanel.classList.toggle("shopping", on);
+    shoppingModeToggle.setAttribute("aria-pressed", String(on));
+    shoppingModeToggle.textContent = on ? "✓ Shopping mode" : "🛒 Shopping mode";
+    renderGroceryProgress();
+    if (on) requestWakeLock(); else releaseWakeLock();
+  }
+  function closeGroceryPanel() {
+    groceryPanel.hidden = true;
+    if (shoppingModeOn) setShoppingMode(false);
   }
 
   function groceryText() {
     const date = new Date().toLocaleDateString();
     let out = `Grocery list \u2014 ${date}\n\n`;
-    groceryByCategory(combinedGroceryItems()).forEach((sec) => {
+    groceryByCategory(allGroceryItems()).forEach((sec) => {
       out += `${sec.category.toUpperCase()}\n`;
       sec.items.forEach((it) => {
         const box = checkedGroceryItems.has(it.key) ? "\u2611" : "\u2610";
@@ -1336,11 +1412,12 @@
 
   function addToMealPlanTray(id) {
     mealPlanTray.add(id);
+    saveLocal("mealTray", [...mealPlanTray]);
     toast("Added to meal plan");
   }
   function removeFromTray(id) {
     mealPlanTray.delete(id);
-    if (armedTrayId === id) armedTrayId = null;
+    saveLocal("mealTray", [...mealPlanTray]);
     renderMealPlan();
   }
 
@@ -1364,6 +1441,73 @@
     mealPlan = mealPlan.filter((e) => e.id !== entryId);
     renderMealPlan();
   }
+
+  // ---------- Add-to-plan picker sheet ----------
+  // Replaces the old "arm a tray recipe, then tap a slot" two-step mode with a
+  // single tap-to-open sheet, in either direction: pick a recipe first (from
+  // the tray) and choose its day/slot, or pick a day/slot first (the "+" on
+  // the grid) and choose which tray recipe goes there.
+  function parseIsoDate(ds) {
+    const [y, m, d] = ds.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  function openPlaceSheetForRecipe(recipeId) {
+    if (!byId[recipeId]) return;
+    placeSheetState = { mode: "slot", recipeId };
+    renderPlaceSheet();
+    placeSheet.hidden = false;
+  }
+  function openPlaceSheetForSlot(date, slot) {
+    if (!mealPlanTray.size) { toast("Add a recipe to the tray first, then tap a slot."); return; }
+    placeSheetState = { mode: "recipe", date, slot };
+    renderPlaceSheet();
+    placeSheet.hidden = false;
+  }
+  function closePlaceSheet() {
+    placeSheet.hidden = true;
+    placeSheetState = null;
+  }
+  function renderPlaceSheet() {
+    if (!placeSheetState) return;
+    if (placeSheetState.mode === "slot") {
+      const it = byId[placeSheetState.recipeId];
+      placeSheetTitle.textContent = `Add "${it.name}" to…`;
+      placeSheetBody.innerHTML = [0, 1, 2, 3, 4, 5, 6].map((i) => {
+        const d = addDays(midnight(), i);
+        const ds = isoDate(d);
+        const { wd, md } = dayLabel(d);
+        return `<div class="ps-day">
+          <p class="ps-day-label">${esc(wd)} ${esc(md)}</p>
+          <div class="ps-slots">
+            ${SLOTS.map((slot) => `<button class="ps-slot-btn" data-date="${ds}" data-slot="${slot}">${slotLabel(slot)}</button>`).join("")}
+          </div>
+        </div>`;
+      }).join("");
+    } else {
+      const { wd, md } = dayLabel(parseIsoDate(placeSheetState.date));
+      placeSheetTitle.textContent = `Add to ${slotLabel(placeSheetState.slot)}, ${wd} ${md}`;
+      const recipeBtns = [...mealPlanTray].map((id) => {
+        const it = byId[id];
+        return it ? `<button class="ps-recipe-btn" data-recipe="${esc(id)}">${esc(it.name)}</button>` : "";
+      }).filter(Boolean).join("");
+      placeSheetBody.innerHTML = `<div class="ps-recipes">${recipeBtns}</div>`;
+    }
+  }
+  placeSheet.addEventListener("click", (e) => {
+    if (e.target === placeSheet) { closePlaceSheet(); return; }
+    const slotBtn = e.target.closest(".ps-slot-btn");
+    if (slotBtn) {
+      assignMealEntry(placeSheetState.recipeId, slotBtn.dataset.date, slotBtn.dataset.slot);
+      closePlaceSheet();
+      return;
+    }
+    const recipeBtn = e.target.closest(".ps-recipe-btn");
+    if (recipeBtn) {
+      assignMealEntry(recipeBtn.dataset.recipe, placeSheetState.date, placeSheetState.slot);
+      closePlaceSheet();
+    }
+  });
+  $("#place-sheet-close").addEventListener("click", closePlaceSheet);
 
   // Build a grocery list from the upcoming planned week: sum each recipe's
   // servings across the days it appears, load that into the basket, and reuse
@@ -1426,9 +1570,8 @@
       ? trayIds.map((id) => {
           const it = byId[id];
           if (!it) return "";
-          const armed = armedTrayId === id;
           return `<span class="mp-tray-item">
-            <button class="mp-tray-chip${armed ? " is-armed" : ""}" data-tray="${esc(id)}">${esc(it.name)}</button>
+            <button class="mp-tray-chip" data-tray="${esc(id)}">${esc(it.name)}</button>
             <button class="mp-tray-x" data-tray-remove="${esc(id)}" aria-label="Remove from tray">\u00d7</button>
           </span>`;
         }).join("")
@@ -1441,7 +1584,6 @@
       <section class="mp-section">
         <h3 class="detail-h">Recipes to plan</h3>
         <div class="mp-tray">${tray}</div>
-        ${armedTrayId && byId[armedTrayId] ? `<p class="mp-hint">Placing <b>${esc(byId[armedTrayId].name)}</b> \u2014 tap a meal slot below (tap the recipe again to stop).</p>` : ""}
       </section>
       <section class="mp-section">
         <div class="mp-section-head">
@@ -2527,6 +2669,17 @@
       // Carry any scale chosen in the detail view into the grocery list.
       if (e.target.checked) basket.set(id, { servings: chosenServings(byId[id]) });
       else basket.delete(id);
+      persistGrocery();
+      renderList();
+      renderGroceryBar();
+      if (!groceryPanel.hidden) renderGroceryPanel();
+      return;
+    }
+
+    if (e.target.closest(".detail-grocery-btn")) {
+      if (basket.has(id)) basket.delete(id);
+      else basket.set(id, { servings: chosenServings(byId[id]) });
+      persistGrocery();
       renderList();
       renderGroceryBar();
       if (!groceryPanel.hidden) renderGroceryPanel();
@@ -2551,40 +2704,18 @@
       return;
     }
 
-    if (e.target.closest(".send-recipe-btn")) {
-      shareRecipeFile(byId[id]);
-      return;
-    }
-
-    if (e.target.closest(".edit-recipe")) {
-      openRecipeForm(byId[id]);
-      return;
-    }
-
-    if (e.target.closest(".delete-recipe-btn")) {
-      deleteRecipe(byId[id]);
-      return;
-    }
-
-    if (e.target.closest(".share-toggle-btn")) {
-      openShareIds.has(id) ? openShareIds.delete(id) : openShareIds.add(id);
-      renderList();
-      return;
-    }
-
     const removeBtn = e.target.closest(".share-remove-btn");
     if (removeBtn) {
       unshareRecipe(byId[id], removeBtn.dataset.userId);
       return;
     }
 
-    if (e.target.closest(".copy-to-book-btn")) {
-      copyToMyBook(byId[id]);
-      return;
-    }
-
-    if (e.target.closest(".remove-shared-btn")) {
-      removeSharedWithMe(byId[id]);
+    const moreBtn = e.target.closest(".detail-more-btn");
+    if (moreBtn) {
+      const it = byId[id];
+      const mine = it.userId === session?.user?.id;
+      if (!detailMoreMenu.hidden && detailMoreMenuTrigger === moreBtn) closeDetailMoreMenu();
+      else openDetailMoreMenu(moreBtn, it, mine);
       return;
     }
 
@@ -2640,7 +2771,7 @@
   }
   // Browsers drop the lock when the tab is backgrounded; re-take it on return.
   document.addEventListener("visibilitychange", () => {
-    if (!cookPanel.hidden && document.visibilityState === "visible") requestWakeLock();
+    if ((!cookPanel.hidden || shoppingModeOn) && document.visibilityState === "visible") requestWakeLock();
   });
 
   function openCookMode(item, servings) {
@@ -2652,6 +2783,7 @@
     cookItem = item;
     cookServings = servings;
     cookIdx = 0;
+    stopCookTimer();
     cookTitle.textContent = item.name;
     renderCookIngredients();
     cookIngredients.hidden = true;
@@ -2688,12 +2820,105 @@
     const prefix = step.group ? `${step.group} · ` : "";
     cookStepNum.textContent = `${prefix}Step ${cookIdx + 1} of ${total}`;
     cookStepText.textContent = step.text;
+    renderCookStepIngredients(step);
+    renderStepTimers(step);
     cookProgressBar.style.width = `${((cookIdx + 1) / total) * 100}%`;
     cookPrevBtn.disabled = cookIdx === 0;
     cookNextBtn.textContent = cookIdx === total - 1 ? "Done ✓" : "Next →";
     cookBody.scrollTop = 0;
     renderCookSectionBar();
   }
+
+  // Surface the relevant ingredient amounts inline with each step, so the cook
+  // doesn't have to flip back to the ingredients panel mid-task. Pills are
+  // display-only (pointer-events: none in CSS) so they never intercept the
+  // tap-to-advance / swipe handling on .cook-step.
+  function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+  function renderCookStepIngredients(step) {
+    const stepLower = step.text.toLowerCase();
+    const matches = scaledIngredients(cookItem, cookServings).filter((ing) => {
+      if (!ing.item) return false;
+      const head = normalizeItemName(ing.item).split(/[,(]/)[0].trim();
+      if (!head) return false;
+      return new RegExp(`\\b${escapeRegex(head)}\\b`, "i").test(stepLower);
+    });
+    cookStepIngredients.hidden = !matches.length;
+    if (!matches.length) return;
+    cookStepIngredients.innerHTML = matches.map((ing) => {
+      const amtStr = ing.scaled == null ? "" : fmtAmount(ing.scaled) + (ing.unit ? " " + ing.unit : "");
+      return `<span class="cook-step-ing">${esc([amtStr, displayGroceryName(ing.item)].filter(Boolean).join(" "))}</span>`;
+    }).join("");
+  }
+
+  // ---------- Cook step timers ----------
+  let cookTimer = null; // {endsAt, label, intervalId} — survives step changes, cleared on open/close
+  const DURATION_RE = /(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/gi;
+  function parseDurations(text) {
+    const out = [];
+    let m;
+    DURATION_RE.lastIndex = 0;
+    while ((m = DURATION_RE.exec(text))) {
+      const value = parseFloat(m[1]);
+      const unit = m[2].toLowerCase();
+      const seconds = unit.startsWith("h") ? value * 3600 : unit.startsWith("m") ? value * 60 : value;
+      out.push({ seconds: Math.round(seconds), label: m[0] });
+    }
+    return out;
+  }
+  function renderStepTimers(step) {
+    const durations = parseDurations(step.text);
+    cookTimerChips.hidden = !durations.length;
+    if (!durations.length) return;
+    cookTimerChips.innerHTML = durations.map((d) =>
+      `<button type="button" class="cook-timer-chip" data-seconds="${d.seconds}" data-label="${esc(d.label)}">⏱ ${esc(d.label)}</button>`
+    ).join("");
+  }
+  function startCookTimer(seconds, label) {
+    if (cookTimer) clearInterval(cookTimer.intervalId);
+    cookTimer = { endsAt: Date.now() + seconds * 1000, label, intervalId: null };
+    cookTimerBar.hidden = false;
+    cookTimerLabel.textContent = label;
+    paintTimer();
+    cookTimer.intervalId = setInterval(paintTimer, 1000);
+  }
+  function paintTimer() {
+    if (!cookTimer) return;
+    const remaining = Math.round((cookTimer.endsAt - Date.now()) / 1000);
+    if (remaining <= 0) { timerDone(); return; }
+    const mm = String(Math.floor(remaining / 60)).padStart(2, "0");
+    const ss = String(remaining % 60).padStart(2, "0");
+    cookTimerClock.textContent = `${mm}:${ss}`;
+  }
+  function timerDone() {
+    if (cookTimer) clearInterval(cookTimer.intervalId);
+    cookTimerClock.textContent = "Done!";
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 200]);
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      osc.frequency.value = 880;
+      osc.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
+      osc.onended = () => ctx.close();
+    } catch {}
+    cookTimer = null;
+  }
+  function stopCookTimer() {
+    if (cookTimer) clearInterval(cookTimer.intervalId);
+    cookTimer = null;
+    cookTimerBar.hidden = true;
+  }
+  cookTimerChips.addEventListener("click", (e) => {
+    const chip = e.target.closest(".cook-timer-chip");
+    if (!chip) return;
+    e.stopPropagation();
+    startCookTimer(Number(chip.dataset.seconds), chip.dataset.label);
+  });
+  cookTimerStopBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    stopCookTimer();
+  });
 
   function renderCookIngredients() {
     const ings = scaledIngredients(cookItem, cookServings);
@@ -2729,6 +2954,7 @@
     cookPanel.hidden = true;
     document.body.style.overflow = "";
     releaseWakeLock();
+    stopCookTimer();
   }
 
   // Section bookmark chips — tap to jump to the first step of that section
@@ -2783,10 +3009,11 @@
     renderGroceryPanel();
     groceryPanel.hidden = false;
   });
-  $("#close-grocery").addEventListener("click", () => (groceryPanel.hidden = true));
+  $("#close-grocery").addEventListener("click", closeGroceryPanel);
   groceryPanel.addEventListener("click", (e) => {
-    if (e.target === groceryPanel) groceryPanel.hidden = true;
+    if (e.target === groceryPanel) closeGroceryPanel();
   });
+  shoppingModeToggle.addEventListener("click", () => setShoppingMode(!shoppingModeOn));
 
   // Mode tabs: Recipes ↔ Meal plan
   modeRecipesBtn.addEventListener("click", () => setViewMode("recipes"));
@@ -2798,18 +3025,9 @@
     const trayRemove = e.target.closest("[data-tray-remove]");
     if (trayRemove) { removeFromTray(trayRemove.dataset.trayRemove); return; }
     const trayChip = e.target.closest("[data-tray]");
-    if (trayChip) {
-      const tid = trayChip.dataset.tray;
-      armedTrayId = armedTrayId === tid ? null : tid;
-      renderMealPlan();
-      return;
-    }
+    if (trayChip) { openPlaceSheetForRecipe(trayChip.dataset.tray); return; }
     const slotAdd = e.target.closest(".mp-slot-add");
-    if (slotAdd) {
-      if (!armedTrayId) { toast("Tap a recipe in the tray first, then a slot."); return; }
-      assignMealEntry(armedTrayId, slotAdd.dataset.date, slotAdd.dataset.slot);
-      return;
-    }
+    if (slotAdd) { openPlaceSheetForSlot(slotAdd.dataset.date, slotAdd.dataset.slot); return; }
     const entryX = e.target.closest("[data-entry]");
     if (entryX) { removeMealEntry(entryX.dataset.entry); return; }
     const cook = e.target.closest("[data-cook]");
@@ -2823,14 +3041,38 @@
   $("#clear-grocery").addEventListener("click", () => {
     basket.clear();
     checkedGroceryItems.clear();
+    persistGrocery();
     renderList();
     renderGroceryBar();
+  });
+
+  // Grocery panel: manual item add/remove
+  groceryContent.addEventListener("submit", (e) => {
+    if (e.target.id !== "grocery-add-manual") return;
+    e.preventDefault();
+    const input = $("#grocery-manual-input");
+    const name = input.value.trim();
+    if (!name) return;
+    manualGroceryItems.push({ key: `manual:${Date.now()}`, name });
+    persistGrocery();
+    renderGroceryPanel();
+    $("#grocery-manual-input").focus();
+  });
+  groceryContent.addEventListener("click", (e) => {
+    const removeBtn = e.target.closest(".g-manual-remove");
+    if (!removeBtn) return;
+    const key = removeBtn.dataset.key;
+    manualGroceryItems = manualGroceryItems.filter((m) => m.key !== key);
+    checkedGroceryItems.delete(key);
+    persistGrocery();
+    renderGroceryPanel();
   });
 
   // Grocery panel: pantry-staples toggle + per-item check-off
   groceryContent.addEventListener("change", (e) => {
     if (e.target.id === "grocery-skip-staples") {
       skipPantryStaples = e.target.checked;
+      persistGrocery();
       renderGroceryPanel();
       return;
     }
@@ -2840,6 +3082,8 @@
       else checkedGroceryItems.delete(key);
       const li = e.target.closest("li");
       if (li) li.classList.toggle("is-checked", e.target.checked);
+      persistGrocery();
+      renderGroceryProgress();
     }
   });
 
@@ -2938,6 +3182,79 @@
   // Close menu after either action opens its panel
   [addRecipeAiBtn, addRecipeBtn].forEach((b) => b.addEventListener("click", closeAddMenu));
 
+  // ---------- Recipe detail "⋯ More" menu ----------
+  // A single shared floating menu (same fixed-position pattern as #add-menu),
+  // repopulated per recipe each time a row's "More" button is clicked — there
+  // can be several expanded recipe rows on screen at once, each with its own
+  // trigger button, but only ever one menu instance.
+  let detailMoreMenuTrigger = null;
+  function closeDetailMoreMenu() {
+    detailMoreMenu.hidden = true;
+    if (detailMoreMenuTrigger) detailMoreMenuTrigger.setAttribute("aria-expanded", "false");
+    detailMoreMenuTrigger = null;
+  }
+  function openDetailMoreMenu(triggerBtn, it, mine) {
+    detailMoreMenu.innerHTML = mine ? `
+      <button class="dm-item send-recipe-btn" data-id="${esc(it.id)}" role="menuitem">
+        <span class="am-ico">📤</span><span>Send</span>
+      </button>
+      <button class="dm-item edit-recipe" data-id="${esc(it.id)}" role="menuitem">
+        <span class="am-ico">✏️</span><span>Edit</span>
+      </button>
+      <button class="dm-item share-toggle-btn${openShareIds.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}" role="menuitem">
+        <span class="am-ico">🔗</span><span>${esc(shareButtonLabel(it))}</span>
+      </button>
+      <button class="dm-item delete-recipe-btn" data-id="${esc(it.id)}" role="menuitem">
+        <span class="am-ico">🗑</span><span>Delete</span>
+      </button>` : `
+      <button class="dm-item send-recipe-btn" data-id="${esc(it.id)}" role="menuitem">
+        <span class="am-ico">📤</span><span>Send</span>
+      </button>
+      <button class="dm-item copy-to-book-btn" data-id="${esc(it.id)}" role="menuitem">
+        <span class="am-ico">📋</span><span>Copy to my book</span>
+      </button>
+      <button class="dm-item remove-shared-btn" data-id="${esc(it.id)}" role="menuitem">
+        <span class="am-ico">✕</span><span>Remove</span>
+      </button>`;
+    detailMoreMenu.hidden = false;
+    detailMoreMenuTrigger = triggerBtn;
+    triggerBtn.setAttribute("aria-expanded", "true");
+    const r = triggerBtn.getBoundingClientRect();
+    if (window.innerWidth > 560) {
+      detailMoreMenu.style.top = (r.bottom + 8) + "px";
+      detailMoreMenu.style.right = (window.innerWidth - r.right) + "px";
+      detailMoreMenu.style.bottom = "";
+      detailMoreMenu.style.left = "";
+    } else {
+      detailMoreMenu.style.bottom = (window.innerHeight - r.top + 8) + "px";
+      detailMoreMenu.style.right = (window.innerWidth - r.right) + "px";
+      detailMoreMenu.style.top = "";
+      detailMoreMenu.style.left = "";
+    }
+  }
+  detailMoreMenu.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-id]");
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const it = byId[id];
+    if (e.target.closest(".send-recipe-btn")) { shareRecipeFile(it); closeDetailMoreMenu(); return; }
+    if (e.target.closest(".edit-recipe")) { openRecipeForm(it); closeDetailMoreMenu(); return; }
+    if (e.target.closest(".delete-recipe-btn")) { deleteRecipe(it); closeDetailMoreMenu(); return; }
+    if (e.target.closest(".share-toggle-btn")) {
+      openShareIds.has(id) ? openShareIds.delete(id) : openShareIds.add(id);
+      renderList();
+      closeDetailMoreMenu();
+      return;
+    }
+    if (e.target.closest(".copy-to-book-btn")) { copyToMyBook(it); closeDetailMoreMenu(); return; }
+    if (e.target.closest(".remove-shared-btn")) { removeSharedWithMe(it); closeDetailMoreMenu(); return; }
+  });
+  document.addEventListener("click", (e) => {
+    if (!detailMoreMenu.hidden && !e.target.closest("#detail-more-menu") && !e.target.closest(".detail-more-btn")) {
+      closeDetailMoreMenu();
+    }
+  });
+
   // ---------- Feature guide ----------
   $("#open-guide").addEventListener("click", () => {
     guidePanel.querySelector(".grocery-panel-inner").scrollTop = 0;
@@ -2997,11 +3314,13 @@
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !cookPanel.hidden) return;
     if (!addMenu.hidden) { closeAddMenu(); return; }
-    if (!groceryPanel.hidden) groceryPanel.hidden = true;
+    if (!detailMoreMenu.hidden) { closeDetailMoreMenu(); return; }
+    if (!groceryPanel.hidden) closeGroceryPanel();
     if (!backupPanel.hidden) backupPanel.hidden = true;
     if (!guidePanel.hidden) guidePanel.hidden = true;
     if (!accountPanel.hidden) accountPanel.hidden = true;
     if (!mealPlanPanel.hidden) mealPlanPanel.hidden = true;
+    if (!placeSheet.hidden) closePlaceSheet();
     if (!recipeFormPanel.hidden) closeRecipeForm();
     if (!aiImportPanel.hidden) closeAiImport();
     if (!coachPanel.hidden) closeCoachPanel();

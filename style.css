@@ -543,6 +543,11 @@ button:focus-visible, input:focus-visible {
   border-color: var(--accent);
   color: #fff;
 }
+.detail-grocery-btn.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
 
 /* Per-recipient sharing panel, expanded under detail-actions via the Share
    button (its open state is tracked alongside openItems). */
@@ -724,11 +729,37 @@ button:focus-visible, input:focus-visible {
 }
 .g-staples-toggle input { accent-color: var(--accent); }
 
+.g-add-manual { display: flex; gap: 8px; margin-bottom: 14px; }
+.g-add-manual input {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  background: var(--paper);
+  color: var(--ink);
+}
+
 .g-combined { list-style: none; margin: 0 0 18px; padding: 0; }
 .g-combined li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 4px 0;
   border-bottom: 1px dotted var(--line);
 }
+.g-combined .g-item { flex: 1; }
+.g-manual-remove {
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.g-manual-remove:hover { color: var(--accent); }
 .g-combined li.g-category {
   font-size: 0.72rem;
   font-weight: 700;
@@ -770,13 +801,31 @@ button:focus-visible, input:focus-visible {
 }
 .keep-hint { font-size: 0.8rem; color: var(--faint); margin-top: 12px; }
 
+.g-progress {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--accent);
+  margin: 0 0 12px;
+}
+.grocery-panel.shopping .g-combined li {
+  padding: 16px 8px;
+  font-size: 1.1rem;
+}
+.grocery-panel.shopping .g-combined .g-item input {
+  width: 28px;
+  height: 28px;
+}
+.grocery-panel.shopping .g-by-recipe,
+.grocery-panel.shopping .grocery-actions {
+  display: none;
+}
+
 /* ---------- Weekly meal plan ---------- */
 .meal-plan-content { display: flex; flex-direction: column; gap: 22px; }
 .mp-section { display: flex; flex-direction: column; gap: 10px; }
 .mp-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .mp-section-head .detail-h { margin: 0; }
 .mp-empty { font-size: 0.88rem; color: var(--faint); margin: 0; }
-.mp-hint { font-size: 0.82rem; color: var(--accent); margin: 0; }
 .mp-tray { display: flex; flex-wrap: wrap; gap: 8px; }
 .mp-tray-item { display: inline-flex; align-items: stretch; }
 .mp-tray-chip {
@@ -789,7 +838,6 @@ button:focus-visible, input:focus-visible {
   color: var(--ink);
   cursor: pointer;
 }
-.mp-tray-chip.is-armed { background: var(--accent); border-color: var(--accent); color: #fff; }
 .mp-tray-x {
   border: 1px solid var(--line);
   border-left: 0;
@@ -853,6 +901,23 @@ button:focus-visible, input:focus-visible {
   cursor: pointer;
 }
 .mp-slot-add:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- Add-to-plan picker sheet ---------- */
+.place-sheet-body { display: flex; flex-direction: column; gap: 14px; }
+.ps-day { border-bottom: 1px dotted var(--line); padding-bottom: 12px; }
+.ps-day:last-child { border-bottom: 0; padding-bottom: 0; }
+.ps-day-label { font-weight: 600; font-size: 0.9rem; margin: 0 0 8px; }
+.ps-slots, .ps-recipes { display: flex; flex-wrap: wrap; gap: 8px; }
+.ps-slot-btn, .ps-recipe-btn {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+.ps-slot-btn:hover, .ps-recipe-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- Recipe form ---------- */
 .recipe-form { display: flex; flex-direction: column; gap: 14px; }
@@ -1369,6 +1434,62 @@ button:focus-visible, input:focus-visible {
   margin-left: auto;
   margin-right: auto;
 }
+.cook-step-ings {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 18px 0 0;
+  pointer-events: none;
+}
+.cook-step-ing {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 5px 12px;
+}
+.cook-timer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+.cook-timer-chip {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.cook-timer-chip:hover { background: var(--accent-soft); }
+.cook-timer-bar {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(86px + env(safe-area-inset-bottom));
+  z-index: 65;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+}
+.cook-timer-label { flex: 1; font-size: 0.9rem; }
+.cook-timer-clock {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+.cook-timer-bar .ghost-btn { color: var(--paper); border-color: var(--paper); }
 .cook-tap-hint {
   margin: 28px 0 0;
   font-size: 0.78rem;

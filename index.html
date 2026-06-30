@@ -133,8 +133,10 @@
     <div class="grocery-panel-inner wrap">
       <div class="grocery-panel-head">
         <h2 class="panel-title">Grocery list</h2>
+        <button id="shopping-mode-toggle" class="ghost-btn small" aria-pressed="false">🛒 Shopping mode</button>
         <button id="close-grocery" class="ghost-btn small" aria-label="Close grocery list">Close</button>
       </div>
+      <p id="grocery-progress" class="g-progress" hidden></p>
       <div id="grocery-content" class="grocery-content"></div>
       <div class="grocery-actions">
         <button id="share-grocery" class="solid-btn">Send to phone / Keep</button>
@@ -315,6 +317,16 @@
         <button id="close-meal-plan" class="ghost-btn small" aria-label="Close meal plan">Close</button>
       </div>
       <div id="meal-plan-content" class="meal-plan-content"></div>
+    </div>
+  </div>
+
+  <div id="place-sheet" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Add to plan" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 id="place-sheet-title" class="panel-title">Add to plan</h2>
+        <button id="place-sheet-close" class="ghost-btn small" aria-label="Close">Close</button>
+      </div>
+      <div id="place-sheet-body" class="place-sheet-body"></div>
     </div>
   </div>
 
@@ -543,10 +555,17 @@
       <div class="cook-step wrap">
         <p id="cook-step-num" class="cook-step-num" aria-live="polite"></p>
         <p id="cook-step-text" class="cook-step-text"></p>
+        <div id="cook-step-ingredients" class="cook-step-ings" hidden></div>
+        <div id="cook-timer-chips" class="cook-timer-chips" hidden></div>
         <p class="cook-tap-hint">tap to advance</p>
       </div>
     </div>
     <div id="cook-ingredients" class="cook-ingredients wrap" hidden></div>
+    <div id="cook-timer-bar" class="cook-timer-bar" hidden>
+      <span id="cook-timer-label" class="cook-timer-label"></span>
+      <span id="cook-timer-clock" class="cook-timer-clock"></span>
+      <button id="cook-timer-stop" class="ghost-btn small" aria-label="Stop timer">Stop</button>
+    </div>
     <div class="cook-nav wrap">
       <button id="cook-prev" class="ghost-btn">← Back</button>
       <button id="cook-ing-toggle" class="ghost-btn" aria-expanded="false">Ingredients</button>
@@ -571,6 +590,10 @@
   </div>
 
   <button id="add-fab" class="add-fab" aria-label="Add a recipe">＋</button>
+
+  <!-- Recipe detail "⋯ More" menu — one shared floating menu, repositioned and
+       repopulated per recipe each time a row's More button is clicked. -->
+  <div id="detail-more-menu" class="add-menu" role="menu" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="config.js"></script>
