@@ -146,6 +146,7 @@
   const rfAddIngredientBtn = $("#rf-add-ingredient");
   const rfAddStepBtn = $("#rf-add-step");
   const rfReorderStepsBtn = $("#rf-reorder-steps");
+  const rfReorderIngredientsBtn = $("#rf-reorder-ingredients");
 
   // B2 header / toolbar elements
   const modeRecipesBtn = $("#mode-recipes");
@@ -1750,11 +1751,17 @@
     const amount = ing && ing.amount != null ? ing.amount : "";
     const unit = ing && ing.unit != null ? ing.unit : "";
     const item = ing ? ing.item : "";
+    // The ▲▼ control only shows in reorder mode (CSS-gated, like the step rows);
+    // the save read-back ignores everything but the three inputs, so it's inert.
     return `
       <div class="rf-ing-row">
         <input type="number" step="any" class="rf-ing-amount" placeholder="amt" value="${esc(amount)}">
         <input type="text" class="rf-ing-unit" placeholder="unit" value="${esc(unit)}">
         <input type="text" class="rf-ing-item" placeholder="ingredient" value="${esc(item)}" required>
+        <div class="rf-ing-move">
+          <button type="button" class="rf-move-up" aria-label="Move ingredient up">▲</button>
+          <button type="button" class="rf-move-down" aria-label="Move ingredient down">▼</button>
+        </div>
         <button type="button" class="rf-row-remove" aria-label="Remove ingredient">×</button>
       </div>`;
   }
@@ -1857,6 +1864,9 @@
     rfMethod.classList.remove("reordering");
     rfReorderStepsBtn.setAttribute("aria-pressed", "false");
     rfReorderStepsBtn.textContent = "↕ Reorder";
+    rfIngredients.classList.remove("reordering");
+    rfReorderIngredientsBtn.setAttribute("aria-pressed", "false");
+    rfReorderIngredientsBtn.textContent = "↕ Reorder";
     updateTagGroupsVisibility();
     recipeFormPanel.hidden = false;
   }
@@ -1942,7 +1952,29 @@
     rfMethod.insertAdjacentHTML("beforeend", sectionHeadingRow(""));
   });
   rfIngredients.addEventListener("click", (e) => {
-    if (e.target.classList.contains("rf-row-remove")) e.target.closest(".rf-ing-row, .rf-section-row").remove();
+    if (e.target.classList.contains("rf-row-remove")) {
+      e.target.closest(".rf-ing-row, .rf-section-row").remove();
+      return;
+    }
+    // Section reorder (reorder mode): move the whole section block up or down.
+    const secUp = e.target.closest(".rf-section-up");
+    if (secUp) { moveSectionBlock(secUp.closest(".rf-section-row"), -1); return; }
+    const secDown = e.target.closest(".rf-section-down");
+    if (secDown) { moveSectionBlock(secDown.closest(".rf-section-row"), 1); return; }
+    // Single-ingredient reorder: nudge a row up or down one position. The save
+    // handler re-derives each ingredient's group from its DOM position relative
+    // to the section dividers, so crossing a divider re-groups it automatically.
+    const up = e.target.closest(".rf-move-up");
+    if (up) {
+      const r = up.closest(".rf-ing-row");
+      if (r.previousElementSibling) rfIngredients.insertBefore(r, r.previousElementSibling);
+      return;
+    }
+    const down = e.target.closest(".rf-move-down");
+    if (down) {
+      const r = down.closest(".rf-ing-row");
+      if (r.nextElementSibling) rfIngredients.insertBefore(r.nextElementSibling, r);
+    }
   });
   // Collect all DOM rows belonging to this section header (header + following step rows)
   function getSectionBlock(headerEl) {
@@ -1955,8 +1987,10 @@
     return block;
   }
 
-  // Move an entire section block up or down past the adjacent section.
+  // Move an entire section block up or down past the adjacent section. Works in
+  // whichever container the header lives in (ingredients or method).
   function moveSectionBlock(headerEl, direction) {
+    const container = headerEl.parentElement;
     const block = getSectionBlock(headerEl);
     if (direction < 0) {
       // Find the section header immediately before this one
@@ -1966,14 +2000,14 @@
       }
       if (!prevHeader) return; // already first section
       // Insert each row of our block before the previous section header, in order
-      block.forEach((el) => rfMethod.insertBefore(el, prevHeader));
+      block.forEach((el) => container.insertBefore(el, prevHeader));
     } else {
       // Find the next section header (first element after our block)
       const nextHeader = block[block.length - 1].nextElementSibling;
       if (!nextHeader || !nextHeader.classList.contains("rf-section-row")) return;
       // Collect the next section's block, then insert it before our block
       const nextBlock = getSectionBlock(nextHeader);
-      nextBlock.forEach((el) => rfMethod.insertBefore(el, block[0]));
+      nextBlock.forEach((el) => container.insertBefore(el, block[0]));
     }
   }
 
@@ -2006,6 +2040,11 @@
     const on = rfMethod.classList.toggle("reordering");
     rfReorderStepsBtn.setAttribute("aria-pressed", String(on));
     rfReorderStepsBtn.textContent = on ? "✓ Done" : "↕ Reorder";
+  });
+  rfReorderIngredientsBtn.addEventListener("click", () => {
+    const on = rfIngredients.classList.toggle("reordering");
+    rfReorderIngredientsBtn.setAttribute("aria-pressed", String(on));
+    rfReorderIngredientsBtn.textContent = on ? "✓ Done" : "↕ Reorder";
   });
 
   addRecipeBtn.addEventListener("click", () => openRecipeForm(null));

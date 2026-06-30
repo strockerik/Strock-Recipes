@@ -1115,10 +1115,10 @@ button:focus-visible, input:focus-visible {
 }
 .rf-row-remove:hover { border-color: var(--accent); color: var(--accent); }
 
-/* Step reorder: the ▲▼ control is hidden until "Reorder" mode is toggled on,
-   at which point the step row grows a third column to hold it. */
-.rf-step-move { display: none; flex-direction: column; gap: 2px; }
-.rf-step-move button {
+/* Step/ingredient reorder: the ▲▼ control is hidden until "Reorder" mode is
+   toggled on, at which point the row grows an extra column to hold it. */
+.rf-step-move, .rf-ing-move { display: none; flex-direction: column; gap: 2px; }
+.rf-step-move button, .rf-ing-move button {
   border: 1px solid var(--line);
   background: var(--card);
   border-radius: 6px;
@@ -1129,10 +1129,18 @@ button:focus-visible, input:focus-visible {
   color: var(--faint);
   cursor: pointer;
 }
-.rf-step-move button:hover { border-color: var(--accent); color: var(--accent); }
+.rf-step-move button:hover, .rf-ing-move button:hover { border-color: var(--accent); color: var(--accent); }
 #rf-method.reordering .rf-step-row { grid-template-columns: 1fr auto auto; }
 #rf-method.reordering .rf-step-move { display: flex; }
-#rf-reorder-steps[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+#rf-ingredients.reordering .rf-ing-row { grid-template-columns: 70px 90px 1fr auto auto; }
+#rf-ingredients.reordering .rf-ing-move { display: flex; }
+/* On phones the ingredient field is on its own line; keep that and add the
+   move column to the amount/unit/remove row. */
+@media (max-width: 480px) {
+  #rf-ingredients.reordering .rf-ing-row { grid-template-columns: 1fr 1fr auto auto; }
+}
+#rf-reorder-steps[aria-pressed="true"],
+#rf-reorder-ingredients[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 
 /* Section divider row in the recipe form — rows below it belong to this
    section. Visually distinct from ingredient/step rows so the grouping reads. */
@@ -1427,8 +1435,10 @@ button:focus-visible, input:focus-visible {
   font-size: 0.7rem; color: var(--faint); cursor: pointer;
 }
 .rf-section-move button:hover { border-color: var(--accent); color: var(--accent); }
-#rf-method.reordering .rf-section-row { grid-template-columns: 1fr auto auto; }
-#rf-method.reordering .rf-section-move { display: flex; }
+#rf-method.reordering .rf-section-row,
+#rf-ingredients.reordering .rf-section-row { grid-template-columns: 1fr auto auto; }
+#rf-method.reordering .rf-section-move,
+#rf-ingredients.reordering .rf-section-move { display: flex; }
 
 /* ===== Cook mode — full-screen guided cooking ===== */
 .cook-panel {
