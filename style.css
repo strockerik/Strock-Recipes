@@ -18,6 +18,7 @@
   --chip: #F3F0E8;
   --accent: #3E6B3A;            /* swapped to campari when Bar tab is active */
   --accent-soft: #EDF3EC;
+  --paper-soft: #F6F2E9;        /* tinted paper for hint/reorder rows */
   --radius: 10px;
   --font-display: "Fraunces", Georgia, serif;
   --font-body: "Public Sans", -apple-system, system-ui, sans-serif;
@@ -857,7 +858,7 @@ button:focus-visible, input:focus-visible {
 }
 
 .g-reorder { margin-top: 14px; }
-.g-reorder summary { cursor: pointer; font-size: 0.9rem; color: var(--faint); }
+.g-reorder summary { cursor: pointer; font-family: var(--font-mono); font-size: 0.78rem; color: var(--faint); }
 .g-reorder-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .g-reorder-row {
   display: flex; align-items: center; justify-content: space-between;
