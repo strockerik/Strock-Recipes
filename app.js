@@ -31,6 +31,9 @@
   let householdServings = null; // "we usually cook for N" default, applied only when first adding a recipe to the grocery list or meal plan
   let aisleOrder = null; // user-customized store-walk order for grocery categories; set in loadUserLocalState
   let seenPickHint = false; // dismissed the "check recipes to build a grocery list" hint
+  let seenIntro = false; // dismissed the first-run Cook/Plan/Shop pointer card
+  let planView = "dinners"; // meal-plan grid density: "dinners" | "all"
+  const revealedMealSlots = new Set(); // session-only "<date>:<slot>" keys manually expanded in dinners view
 
   // ---------- Per-user local persistence ----------
   // Namespaced by user id so two accounts on one device don't collide.
@@ -53,6 +56,11 @@
     householdServings = loadLocal("household", null);
     aisleOrder = loadStoredAisleOrder();
     seenPickHint = loadLocal("seenPickHint", false);
+    seenIntro = loadLocal("seenIntro", false);
+    planView = loadLocal("planView", "dinners");
+  }
+  function maybeShowIntro() {
+    introCardEl.hidden = seenIntro;
   }
   function persistGrocery() {
     saveLocal("basket", [...basket.entries()]);
@@ -155,6 +163,8 @@
   const resultRowEl = $(".result-row");
   const pickHintEl = $("#pick-hint");
   const pickHintDismissBtn = $("#pick-hint-dismiss");
+  const introCardEl = $("#intro-card");
+  const introDismissBtn = $("#intro-dismiss");
 
   const addRecipeAiBtn = $("#add-recipe-ai");
   const aiImportPanel = $("#ai-import-panel");
@@ -612,6 +622,10 @@
     householdServings = null;
     aisleOrder = GROCERY_CATEGORY_ORDER.slice();
     seenPickHint = false;
+    seenIntro = false;
+    introCardEl.hidden = true;
+    planView = "dinners";
+    revealedMealSlots.clear();
     mealPlan = [];
     mealPlanTray.clear();
     closePlaceSheet();
@@ -663,6 +677,7 @@
         const userChanged = session.user.id !== loadedUserId;
         loadedUserId = session.user.id;
         if (userChanged) loadUserLocalState();
+        if (userChanged && event !== "PASSWORD_RECOVERY") setTimeout(maybeShowIntro, 0);
         if (userChanged || event !== "TOKEN_REFRESHED") setTimeout(loadData, 0);
       } else if (wasSignedIn) {
         loadedUserId = null;
@@ -866,6 +881,11 @@
     seenPickHint = true;
     saveLocal("seenPickHint", true);
     pickHintEl.hidden = true;
+  });
+  introDismissBtn.addEventListener("click", () => {
+    seenIntro = true;
+    saveLocal("seenIntro", true);
+    introCardEl.hidden = true;
   });
   accountPanel.addEventListener("click", (e) => {
     if (e.target === accountPanel) accountPanel.hidden = true;
@@ -1613,6 +1633,15 @@
     const dayPurchased = isHistory && mealPlan.some((e) => e.date === ds && e.purchasedAt);
     const slotsHtml = SLOTS.map((slot) => {
       const entries = mealPlan.filter((e) => e.date === ds && e.slot === slot);
+      // In "dinners" planner view, an empty breakfast/lunch slot collapses to
+      // a small "+ Breakfast" reveal \u2014 tapping it (or the slot already having
+      // an entry) swaps in the full row with its usual add/remove controls,
+      // so .mp-slot-add never permanently disappears, just starts hidden.
+      const collapsible = !isHistory && planView === "dinners" && slot !== "dinner";
+      const revealKey = `${ds}:${slot}`;
+      if (collapsible && !entries.length && !revealedMealSlots.has(revealKey)) {
+        return `<button type="button" class="mp-slot-reveal" data-reveal="${ds}" data-reveal-slot="${slot}">+ ${slotLabel(slot)}</button>`;
+      }
       const chips = entries.map((e) => {
         const it = byId[e.recipeId];
         const name = it ? esc(it.name) : "(recipe unavailable)";
@@ -1643,7 +1672,7 @@
             <button class="mp-tray-x" data-tray-remove="${esc(id)}" aria-label="Remove from tray">\u00d7</button>
           </span>`;
         }).join("")
-      : `<p class="mp-empty">Open a recipe and tap <b>\ud83d\udcc5 Add to Weekly Meal Plan</b> to stage it here, then tap it and a day below to schedule it.</p>`;
+      : `<p class="mp-empty">Open a recipe and tap <b>\ud83d\udcc5 Add to plan</b> to stage it here, then tap it and a day below to schedule it.</p>`;
 
     const upcoming = [0, 1, 2, 3, 4, 5, 6].map((i) => mealDayCard(addDays(midnight(), i), false)).join("");
     const history = [1, 2, 3, 4, 5, 6, 7].map((i) => mealDayCard(addDays(midnight(), -i), true)).join("");
@@ -1657,6 +1686,10 @@
         <div class="mp-section-head">
           <h3 class="detail-h">Upcoming 7 days</h3>
           <button id="mp-make-grocery" class="solid-btn small">\ud83d\uded2 Create grocery list</button>
+        </div>
+        <div class="mp-view-toggle" role="group" aria-label="Planner view">
+          <button type="button" class="mp-view-btn${planView === "dinners" ? " is-active" : ""}" data-plan-view="dinners">Dinners</button>
+          <button type="button" class="mp-view-btn${planView === "all" ? " is-active" : ""}" data-plan-view="all">All meals</button>
         </div>
         ${upcoming}
       </section>
@@ -3123,6 +3156,19 @@
   $("#close-meal-plan").addEventListener("click", () => (mealPlanPanel.hidden = true));
   mealPlanView.addEventListener("click", (e) => {
     if (e.target.closest("#mp-make-grocery")) { groceryFromPlan(); return; }
+    const viewBtn = e.target.closest("[data-plan-view]");
+    if (viewBtn) {
+      planView = viewBtn.dataset.planView;
+      saveLocal("planView", planView);
+      renderMealPlan();
+      return;
+    }
+    const reveal = e.target.closest(".mp-slot-reveal");
+    if (reveal) {
+      revealedMealSlots.add(`${reveal.dataset.reveal}:${reveal.dataset.revealSlot}`);
+      renderMealPlan();
+      return;
+    }
     const trayRemove = e.target.closest("[data-tray-remove]");
     if (trayRemove) { removeFromTray(trayRemove.dataset.trayRemove); return; }
     const trayChip = e.target.closest("[data-tray]");

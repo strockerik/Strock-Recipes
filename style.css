@@ -325,6 +325,23 @@ button:focus-visible, input:focus-visible {
   color: var(--faint);
 }
 
+.intro-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 0 0;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+}
+.intro-text { margin: 0; font-size: 0.92rem; color: var(--ink); line-height: 1.45; }
+.intro-card .ghost-btn { flex: 0 0 auto; }
+@media (max-width: 560px) {
+  .intro-card { flex-direction: column; align-items: stretch; }
+}
+
 /* ---------- Item list ---------- */
 .item-list { list-style: none; margin: 0 0 40px; padding: 0; }
 
@@ -934,6 +951,37 @@ button:focus-visible, input:focus-visible {
   cursor: pointer;
 }
 .mp-slot-add:hover { border-color: var(--accent); color: var(--accent); }
+
+.mp-view-toggle { display: flex; gap: 6px; }
+.mp-view-btn {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--faint);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.mp-view-btn.is-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+.mp-slot-reveal {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  font-size: 0.78rem;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.mp-slot-reveal:hover { color: var(--accent); }
+.mp-slot-reveal + .mp-slot-reveal,
+.mp-slot-reveal + .mp-slot,
+.mp-slot + .mp-slot-reveal { border-top: 1px dotted var(--line); }
 
 /* ---------- Add-to-plan picker sheet ---------- */
 .place-sheet-body { display: flex; flex-direction: column; gap: 14px; }
@@ -1728,6 +1776,13 @@ button:focus-visible, input:focus-visible {
 
 /* ---------- Mobile (≤560px) ---------- */
 @media (max-width: 560px) {
+  /* Keep the title and the Guide/Account buttons on one top row; let the
+     full-width Kitchen/Bar tabs wrap to their own row below instead of
+     pushing the account buttons down to a row of their own. */
+  .site-title { order: 1; }
+  .account-area { order: 2; }
+  .section-tabs { order: 3; }
+
   /* Section toggle + mode tabs full width */
   .section-tabs { display: flex; width: 100%; }
   .section-tabs .tab { flex: 1; text-align: center; }
