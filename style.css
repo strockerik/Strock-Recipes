@@ -1714,7 +1714,7 @@ button:focus-visible, input:focus-visible {
 }
 
 /* Scope selector (All / Favorites / Shared) */
-.scope-bar { margin-top: 18px; }
+.scope-bar { margin: 18px 0 16px; }
 .scope {
   display: inline-flex; background: var(--chip); border-radius: 999px; padding: 5px; gap: 4px;
 }
