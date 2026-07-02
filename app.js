@@ -1951,91 +1951,42 @@
   $("#rf-add-step-section").addEventListener("click", () => {
     rfMethod.insertAdjacentHTML("beforeend", sectionHeadingRow(""));
   });
-  rfIngredients.addEventListener("click", (e) => {
-    if (e.target.classList.contains("rf-row-remove")) {
-      e.target.closest(".rf-ing-row, .rf-section-row").remove();
-      return;
+  // Nudge a single form row (ingredient, step, or section divider) up or down
+  // one position within its container. A section divider slides through the
+  // rows like any other row — so moving a divider leaves the ingredients/steps
+  // in place and just re-groups the one it passes (the save handler derives
+  // each row's group from its position relative to the dividers). This is what
+  // "move the section, keep the ingredients still" means.
+  function nudgeRow(rowEl, dir) {
+    const c = rowEl.parentElement;
+    if (dir < 0) {
+      if (rowEl.previousElementSibling) c.insertBefore(rowEl, rowEl.previousElementSibling);
+    } else if (rowEl.nextElementSibling) {
+      c.insertBefore(rowEl.nextElementSibling, rowEl);
     }
-    // Section reorder (reorder mode): move the whole section block up or down.
-    const secUp = e.target.closest(".rf-section-up");
-    if (secUp) { moveSectionBlock(secUp.closest(".rf-section-row"), -1); return; }
-    const secDown = e.target.closest(".rf-section-down");
-    if (secDown) { moveSectionBlock(secDown.closest(".rf-section-row"), 1); return; }
-    // Single-ingredient reorder: nudge a row up or down one position. The save
-    // handler re-derives each ingredient's group from its DOM position relative
-    // to the section dividers, so crossing a divider re-groups it automatically.
-    const up = e.target.closest(".rf-move-up");
-    if (up) {
-      const r = up.closest(".rf-ing-row");
-      if (r.previousElementSibling) rfIngredients.insertBefore(r, r.previousElementSibling);
-      return;
-    }
-    const down = e.target.closest(".rf-move-down");
-    if (down) {
-      const r = down.closest(".rf-ing-row");
-      if (r.nextElementSibling) rfIngredients.insertBefore(r.nextElementSibling, r);
-    }
-  });
-  // Collect all DOM rows belonging to this section header (header + following step rows)
-  function getSectionBlock(headerEl) {
-    const block = [headerEl];
-    let el = headerEl.nextElementSibling;
-    while (el && !el.classList.contains("rf-section-row")) {
-      block.push(el);
-      el = el.nextElementSibling;
-    }
-    return block;
   }
 
-  // Move an entire section block up or down past the adjacent section. Works in
-  // whichever container the header lives in (ingredients or method).
-  function moveSectionBlock(headerEl, direction) {
-    const container = headerEl.parentElement;
-    const block = getSectionBlock(headerEl);
-    if (direction < 0) {
-      // Find the section header immediately before this one
-      let prevHeader = headerEl.previousElementSibling;
-      while (prevHeader && !prevHeader.classList.contains("rf-section-row")) {
-        prevHeader = prevHeader.previousElementSibling;
+  // One delegated reorder handler shape, shared by ingredients and method:
+  // ✕ removes a row; section ↑↓ and per-row ▲▼ both nudge one position.
+  function bindReorderHandler(container, rowSelector) {
+    container.addEventListener("click", (e) => {
+      if (e.target.classList.contains("rf-row-remove")) {
+        e.target.closest(`${rowSelector}, .rf-section-row`).remove();
+        return;
       }
-      if (!prevHeader) return; // already first section
-      // Insert each row of our block before the previous section header, in order
-      block.forEach((el) => container.insertBefore(el, prevHeader));
-    } else {
-      // Find the next section header (first element after our block)
-      const nextHeader = block[block.length - 1].nextElementSibling;
-      if (!nextHeader || !nextHeader.classList.contains("rf-section-row")) return;
-      // Collect the next section's block, then insert it before our block
-      const nextBlock = getSectionBlock(nextHeader);
-      nextBlock.forEach((el) => container.insertBefore(el, block[0]));
-    }
+      const secMove = e.target.closest(".rf-section-up, .rf-section-down");
+      if (secMove) {
+        nudgeRow(secMove.closest(".rf-section-row"), secMove.classList.contains("rf-section-up") ? -1 : 1);
+        return;
+      }
+      const rowMove = e.target.closest(".rf-move-up, .rf-move-down");
+      if (rowMove) {
+        nudgeRow(rowMove.closest(rowSelector), rowMove.classList.contains("rf-move-up") ? -1 : 1);
+      }
+    });
   }
-
-  rfMethod.addEventListener("click", (e) => {
-    if (e.target.classList.contains("rf-row-remove")) {
-      e.target.closest(".rf-step-row, .rf-section-row").remove();
-      return;
-    }
-    // Section reorder (reorder mode): move the whole section block up or down
-    const secUp = e.target.closest(".rf-section-up");
-    if (secUp) { moveSectionBlock(secUp.closest(".rf-section-row"), -1); return; }
-    const secDown = e.target.closest(".rf-section-down");
-    if (secDown) { moveSectionBlock(secDown.closest(".rf-section-row"), 1); return; }
-    // Step reorder (reorder mode): nudge a single step up or down one position.
-    // The save handler reads order (and re-derives each step's group) from the DOM,
-    // so moving rows is all that's needed — moving across a section divider re-groups it.
-    const up = e.target.closest(".rf-move-up");
-    if (up) {
-      const r = up.closest(".rf-step-row");
-      if (r.previousElementSibling) rfMethod.insertBefore(r, r.previousElementSibling);
-      return;
-    }
-    const down = e.target.closest(".rf-move-down");
-    if (down) {
-      const r = down.closest(".rf-step-row");
-      if (r.nextElementSibling) rfMethod.insertBefore(r.nextElementSibling, r);
-    }
-  });
+  bindReorderHandler(rfIngredients, ".rf-ing-row");
+  bindReorderHandler(rfMethod, ".rf-step-row");
   rfReorderStepsBtn.addEventListener("click", () => {
     const on = rfMethod.classList.toggle("reordering");
     rfReorderStepsBtn.setAttribute("aria-pressed", String(on));
