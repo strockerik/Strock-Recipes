@@ -260,12 +260,12 @@ function pageMeta(html: string): { title: string; description: string } {
 // Cooking videos carry the recipe in the description (usually the ingredient
 // list) and the spoken captions (the method) — not in page text or JSON-LD.
 // The reliable pipeline (verified against YouTube's current bot hardening):
-//   1. GET the watch page (browser UA + consent cookie) → INNERTUBE_API_KEY,
-//      plus shortDescription/author as a scrape fallback.
-//   2. POST youtubei/v1/player?key=… with the ANDROID client context — this is
-//      the one client that still returns BOTH videoDetails and working
-//      captionTracks (the WEB client withholds captions, and caption baseUrls
-//      embedded in the page HTML are proof-of-origin-gated and return empty).
+//   1. GET the watch page (browser UA + consent cookie) for shortDescription/
+//      author/captionTracks as a scrape fallback if the Innertube call fails.
+//   2. POST youtubei/v1/player with the ANDROID client context (no API key
+//      needed) — this is the one client that still returns BOTH videoDetails
+//      and working captionTracks (the WEB client withholds captions, and
+//      caption baseUrls embedded in the page HTML are proof-of-origin-gated).
 //   3. GET the chosen track's baseUrl (with &fmt=srv3 stripped) → XML → text.
 function isYouTube(url: URL): boolean {
   const h = url.hostname.toLowerCase().replace(/^www\./, "");
@@ -299,10 +299,6 @@ function extractYouTube(html: string): { title: string; description: string; aut
   };
 }
 
-// YouTube's long-stable public web API key — used only if the watch page (the
-// canonical source for it) couldn't be fetched or didn't contain one.
-const YT_FALLBACK_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
-
 type YtCaptionTrack = { baseUrl?: string; languageCode?: string; kind?: string };
 type YtVideo = {
   title: string;
@@ -312,13 +308,13 @@ type YtVideo = {
   playable: boolean;
 };
 
-// Innertube player call. The ANDROID client + a real API key is the combination
-// that currently returns caption tracks whose baseUrl actually serves content
-// (mirrors what youtube-transcript-api ships today). Returns null on any
-// network/shape failure so the caller can fall back to the page scrape.
-async function fetchYouTubeVideo(videoId: string, apiKey: string): Promise<YtVideo | null> {
+// Innertube player call. The ANDROID client returns caption tracks whose
+// baseUrl actually serves content (mirrors what youtube-transcript-api ships
+// today) and needs no API key. Returns null on any network/shape failure so
+// the caller can fall back to the page scrape.
+async function fetchYouTubeVideo(videoId: string): Promise<YtVideo | null> {
   try {
-    const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+    const res = await fetch("https://www.youtube.com/youtubei/v1/player", {
       method: "POST",
       signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/json" },
@@ -485,8 +481,7 @@ Deno.serve(async (req) => {
         if (!videoId) {
           return json({ error: "Link a specific video (not a channel or playlist) — or paste the recipe text instead." });
         }
-        const apiKey = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)?.[1] || YT_FALLBACK_API_KEY;
-        const vid = await fetchYouTubeVideo(videoId, apiKey);
+        const vid = await fetchYouTubeVideo(videoId);
         const yt = html ? extractYouTube(html) : null;
         const meta = html ? pageMeta(html) : { title: "", description: "" };
 
