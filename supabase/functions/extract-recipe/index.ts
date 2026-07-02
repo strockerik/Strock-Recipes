@@ -257,12 +257,29 @@ function pageMeta(html: string): { title: string; description: string } {
 }
 
 // ---------- YouTube / video helpers ----------
-// Cooking videos carry the recipe in the description (and/or the spoken
-// captions), not in page text or JSON-LD. YouTube embeds both in the watch page,
-// so read the description first and fall back to the captions.
+// Cooking videos carry the recipe in the description (usually the ingredient
+// list) and the spoken captions (the method) — not in page text or JSON-LD.
+// The reliable pipeline (verified against YouTube's current bot hardening):
+//   1. GET the watch page (browser UA + consent cookie) → INNERTUBE_API_KEY,
+//      plus shortDescription/author as a scrape fallback.
+//   2. POST youtubei/v1/player?key=… with the ANDROID client context — this is
+//      the one client that still returns BOTH videoDetails and working
+//      captionTracks (the WEB client withholds captions, and caption baseUrls
+//      embedded in the page HTML are proof-of-origin-gated and return empty).
+//   3. GET the chosen track's baseUrl (with &fmt=srv3 stripped) → XML → text.
 function isYouTube(url: URL): boolean {
   const h = url.hostname.toLowerCase().replace(/^www\./, "");
   return h === "youtube.com" || h === "m.youtube.com" || h === "youtu.be" || h.endsWith(".youtube.com");
+}
+
+// watch?v=ID, youtu.be/ID, /shorts/ID, /live/ID, /embed/ID — IDs are 11 chars.
+function youTubeVideoId(url: URL): string | null {
+  const host = url.hostname.toLowerCase().replace(/^(www|m)\./, "");
+  const id = host === "youtu.be"
+    ? url.pathname.slice(1).split("/")[0]
+    : url.searchParams.get("v") ||
+      (url.pathname.match(/^\/(shorts|live|embed)\/([A-Za-z0-9_-]{11})/)?.[2] ?? "");
+  return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
 }
 
 // The description is stored JSON-escaped in the page (\n, \", é); wrap it
@@ -282,25 +299,87 @@ function extractYouTube(html: string): { title: string; description: string; aut
   };
 }
 
-// Auto-generated captions as a last resort: read the first caption track and
-// flatten its json3 transcript into plain text. Returns "" if unavailable.
-async function fetchYouTubeTranscript(html: string): Promise<string> {
-  const tm = html.match(/"captionTracks":(\[.*?\])/);
-  if (!tm) return "";
-  let baseUrl = "";
+// YouTube's long-stable public web API key — used only if the watch page (the
+// canonical source for it) couldn't be fetched or didn't contain one.
+const YT_FALLBACK_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+
+type YtCaptionTrack = { baseUrl?: string; languageCode?: string; kind?: string };
+type YtVideo = {
+  title: string;
+  author: string;
+  description: string;
+  captionTracks: YtCaptionTrack[];
+  playable: boolean;
+};
+
+// Innertube player call. The ANDROID client + a real API key is the combination
+// that currently returns caption tracks whose baseUrl actually serves content
+// (mirrors what youtube-transcript-api ships today). Returns null on any
+// network/shape failure so the caller can fall back to the page scrape.
+async function fetchYouTubeVideo(videoId: string, apiKey: string): Promise<YtVideo | null> {
   try {
-    const tracks = JSON.parse(tm[1]) as Array<{ baseUrl?: string }>;
-    baseUrl = tracks[0]?.baseUrl || "";
-  } catch { return ""; }
-  if (!baseUrl) return "";
-  try {
-    const res = await fetch(baseUrl + "&fmt=json3", { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return "";
+    const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+      method: "POST",
+      signal: AbortSignal.timeout(10_000),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        context: { client: { clientName: "ANDROID", clientVersion: "20.10.38" } },
+        videoId
+      })
+    });
+    if (!res.ok) return null;
     const data = await res.json();
-    const events = Array.isArray(data?.events) ? data.events : [];
-    return events
-      .map((e: { segs?: Array<{ utf8?: string }> }) => (e.segs || []).map((s) => s.utf8 || "").join(""))
-      .join(" ").replace(/\s+/g, " ").trim();
+    const vd = data?.videoDetails;
+    const status = data?.playabilityStatus?.status;
+    if (!vd?.title && status !== "OK") return null; // deleted/nonexistent → let scrape try
+    return {
+      title: vd?.title || "",
+      author: vd?.author || "",
+      description: vd?.shortDescription || "",
+      captionTracks: data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [],
+      playable: status === "OK"
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Prefer human captions over auto-generated (kind === "asr"), English over
+// not, then whatever exists.
+function pickCaptionTrack(tracks: YtCaptionTrack[]): string {
+  const en = (t: YtCaptionTrack) => (t.languageCode || "").toLowerCase().startsWith("en");
+  const manual = (t: YtCaptionTrack) => t.kind !== "asr";
+  const pick =
+    tracks.find((t) => t.baseUrl && manual(t) && en(t)) ||
+    tracks.find((t) => t.baseUrl && en(t)) ||
+    tracks.find((t) => t.baseUrl && manual(t)) ||
+    tracks.find((t) => t.baseUrl);
+  return pick?.baseUrl || "";
+}
+
+// Caption-track list scraped from the watch page — fallback when the Innertube
+// call fails (its baseUrls are often proof-of-origin-gated, but trying costs
+// one cheap GET).
+function captionTracksFromHtml(html: string): YtCaptionTrack[] {
+  const tm = html.match(/"captionTracks":(\[.*?\])/);
+  if (!tm) return [];
+  try { return JSON.parse(tm[1]) as YtCaptionTrack[]; } catch { return []; }
+}
+
+// Fetch a caption track and flatten it to plain text. The track serves XML
+// (<text …>chunk</text>) once &fmt=srv3 is stripped; entities arrive
+// double-escaped (&amp;#39;), hence decoding twice. Returns "" if unavailable.
+async function fetchTranscriptFromUrl(baseUrl: string): Promise<string> {
+  if (!baseUrl) return "";
+  // "&exp=xpe" marks tracks that require a proof-of-origin token — the fetch
+  // would come back empty, so don't bother.
+  if (baseUrl.includes("&exp=xpe")) return "";
+  try {
+    const res = await fetch(baseUrl.replace("&fmt=srv3", ""), { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return "";
+    const xml = await res.text();
+    const chunks = [...xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g)].map((m) => m[1]);
+    return decodeEntities(decodeEntities(chunks.join(" "))).replace(/\s+/g, " ").trim();
   } catch {
     return "";
   }
@@ -360,7 +439,8 @@ Deno.serve(async (req) => {
     } else if (body.type === "url") {
       const url = typeof body.url === "string" ? parseAllowedUrl(body.url.trim()) : null;
       if (!url) return json({ error: "That doesn’t look like a valid link." });
-      let html: string;
+      const onYouTube = isYouTube(url);
+      let html = "";
       try {
         const pageRes = await fetch(url, {
           redirect: "follow",
@@ -368,7 +448,11 @@ Deno.serve(async (req) => {
           headers: {
             // A browser-ish UA — many recipe sites refuse obvious bots outright.
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml"
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+            // SOCS=CAI skips YouTube's EU consent interstitial, which otherwise
+            // replaces the watch page (hiding description and captions).
+            ...(onYouTube ? { "Cookie": "SOCS=CAI" } : {})
           }
         });
         html = await pageRes.text();
@@ -378,33 +462,55 @@ Deno.serve(async (req) => {
         if (!pageRes.ok && !looksLikeBotChallenge(html)) throw new Error(`status ${pageRes.status}`);
       } catch (fetchErr) {
         console.error("URL fetch failed:", url.href, fetchErr);
-        return json({ error: "Couldn’t load that page — the site may block robots. Copy the recipe text and paste it instead." });
+        // For YouTube the watch page is only one of two sources — the Innertube
+        // API below often works even when the page fetch is blocked.
+        if (!onYouTube) {
+          return json({ error: "Couldn’t load that page — the site may block robots. Copy the recipe text and paste it instead." });
+        }
+        html = "";
       }
       if (looksLikeBotChallenge(html)) {
-        return json({ error: "This site’s bot-protection is blocking automatic access — copy the recipe text and paste it instead." });
+        if (!onYouTube) {
+          return json({ error: "This site’s bot-protection is blocking automatic access — copy the recipe text and paste it instead." });
+        }
+        html = "";
       }
       let content: string;
       let sourceHint = url.hostname;
 
-      if (isYouTube(url)) {
-        // The recipe is in the description; if that's just a teaser, fall back
-        // to the spoken captions, then to og: meta (consent pages have neither).
-        const yt = extractYouTube(html);
-        if (yt?.author) sourceHint = yt.author;
-        let videoText = yt ? `${yt.title}\n\n${yt.description}` : "";
-        if (videoText.replace(/\s/g, "").length < 200) {
-          const transcript = await fetchYouTubeTranscript(html);
-          if (transcript) {
-            const meta = pageMeta(html);
-            videoText = `${yt?.title || meta.title}\n\n${yt?.description || meta.description}\n\nTranscript:\n${transcript}`;
-          }
+      if (onYouTube) {
+        // Description (usually the ingredient list) + spoken transcript (the
+        // method) — always gather BOTH and let the model combine them.
+        const videoId = youTubeVideoId(url);
+        if (!videoId) {
+          return json({ error: "Link a specific video (not a channel or playlist) — or paste the recipe text instead." });
         }
-        if (videoText.replace(/\s/g, "").length < 80) {
-          const meta = pageMeta(html);
-          videoText = `${meta.title}\n\n${meta.description}`;
-        }
-        content = videoText.trim().slice(0, MAX_PAGE_CHARS);
+        const apiKey = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)?.[1] || YT_FALLBACK_API_KEY;
+        const vid = await fetchYouTubeVideo(videoId, apiKey);
+        const yt = html ? extractYouTube(html) : null;
+        const meta = html ? pageMeta(html) : { title: "", description: "" };
+
+        // Merge sources: Innertube first, page scrape second, og: meta last.
+        const title = vid?.title || yt?.title || meta.title;
+        const author = vid?.author || yt?.author || "";
+        const description = vid?.description || yt?.description || meta.description;
+        const tracks = vid?.captionTracks?.length ? vid.captionTracks : captionTracksFromHtml(html);
+        if (author) sourceHint = author;
+
+        const transcript = await fetchTranscriptFromUrl(pickCaptionTrack(tracks));
+
+        // Compose within the model-input budget: the description (ingredients
+        // live there) gets priority; the transcript fills the rest.
+        const head = `VIDEO: ${title}\nCHANNEL: ${author}\n\nDESCRIPTION:\n${description.slice(0, 12_000)}`;
+        const transcriptBudget = Math.max(MAX_PAGE_CHARS - head.length - 30, 0);
+        content = (transcript
+          ? `${head}\n\nSPOKEN TRANSCRIPT:\n${transcript.slice(0, transcriptBudget)}`
+          : head).trim();
+
         if (content.replace(/\s/g, "").length < 80) {
+          if (vid && !vid.playable) {
+            return json({ error: "This video is private, age-restricted, or unavailable — paste the recipe text instead." });
+          }
           return json({ error: "Couldn’t read a recipe from this video — its description and captions don’t contain one. Open the description, copy the recipe text, and paste it instead." });
         }
       } else {
@@ -426,8 +532,8 @@ Deno.serve(async (req) => {
         }
       }
 
-      const promptText = isYouTube(url)
-        ? `Extract the recipe from this YouTube cooking video's description and/or transcript by calling save_recipe. It may be loosely written — turn it into a proper ingredient list and ordered steps, filling gaps as instructed. Use "${sourceHint}" as the source if no clearer attribution is given.\n\n${content}`
+      const promptText = onYouTube
+        ? `Extract the recipe from this YouTube cooking video by calling save_recipe. The DESCRIPTION often contains the ingredient list (frequently with exact amounts) plus unrelated clutter — sponsor links, chapter timestamps, social links; ignore the clutter. The SPOKEN TRANSCRIPT is speech-to-text of the video: use it to reconstruct the ordered method steps and any technique details, and to recover ingredients or amounts the description omits. It has no punctuation and may mis-hear words — clean that up. When the description and the spoken amounts disagree, prefer the description. Ignore intros, sponsor reads, and calls to subscribe. Fill remaining gaps as instructed and flag them in notes. Use "${sourceHint}" as the source if no clearer attribution is given.\n\n${content}`
         : `Extract the recipe from this content from ${sourceHint} by calling save_recipe. If the content names no clearer attribution, use "${sourceHint}" as the source.\n\n${content}`;
       userContent = [{ type: "text", text: promptText }];
     } else {
