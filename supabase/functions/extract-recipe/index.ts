@@ -510,18 +510,23 @@ Deno.serve(async (req) => {
         // a browser. These lengths make that obvious in the function logs.
         console.error(`extract-recipe youtube: id=${videoId} innertube=${vid ? "ok" : "null"} desc=${description.length} transcript=${transcript.length} content=${content.length}`);
 
+        // When captions don't reach us (YouTube IP-gates the download), the
+        // recipe is stuck in the video's audio. YouTube's own built-in AI can
+        // read that audio, so route the user there and back through Paste text.
+        const useYouTubeAi = "In the YouTube app, tap its AI (“Ask”) button and ask for the recipe's ingredients and method, then copy the answer and use “Paste text” here.";
+
         // A cooking video's method lives in the spoken captions; when they don't
-        // reach us (IP-gated) the description alone is often just sponsor links,
-        // so point the user straight at the transcript rather than "clearer photo".
+        // reach us the description alone is often just sponsor links, so point
+        // the user at YouTube's AI rather than "clearer photo".
         if (!transcript) {
-          noRecipeMessage = "Got this video's description but couldn't read its captions from our server (YouTube limits that). Open the video, tap ⋯ (More) → Show transcript, copy it, then use “Paste text” here.";
+          noRecipeMessage = `We read this video's description but not its spoken audio, where the recipe is. ${useYouTubeAi}`;
         }
 
         if (content.replace(/\s/g, "").length < 80) {
           if (vid && !vid.playable) {
             return json({ error: "This video is private, age-restricted, or unavailable — paste the recipe text instead." });
           }
-          return json({ error: "Couldn’t read a recipe from this video — its description and captions don’t contain one. Open the description, copy the recipe text, and paste it instead." });
+          return json({ error: `Couldn't read this video automatically. ${useYouTubeAi}` });
         }
       } else {
         const jsonLd = findJsonLdRecipe(html);
