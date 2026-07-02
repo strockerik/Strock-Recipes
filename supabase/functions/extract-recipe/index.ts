@@ -402,6 +402,9 @@ Deno.serve(async (req) => {
 
     const body = await req.json();
     let userContent;
+    // Message shown if the model returns no recipe — made input-specific below
+    // (a link failure shouldn't advise "try a clearer photo").
+    let noRecipeMessage = "AI couldn’t find a recipe in that input. Try a clearer photo or paste the text.";
 
     if (body.type === "image") {
       const images = Array.isArray(body.images) ? body.images : [];
@@ -502,6 +505,18 @@ Deno.serve(async (req) => {
           ? `${head}\n\nSPOKEN TRANSCRIPT:\n${transcript.slice(0, transcriptBudget)}`
           : head).trim();
 
+        // Server-side visibility: YouTube gates caption downloads by IP, so the
+        // transcript can be empty from the Edge runtime even when it isn't from
+        // a browser. These lengths make that obvious in the function logs.
+        console.error(`extract-recipe youtube: id=${videoId} innertube=${vid ? "ok" : "null"} desc=${description.length} transcript=${transcript.length} content=${content.length}`);
+
+        // A cooking video's method lives in the spoken captions; when they don't
+        // reach us (IP-gated) the description alone is often just sponsor links,
+        // so point the user straight at the transcript rather than "clearer photo".
+        if (!transcript) {
+          noRecipeMessage = "Got this video's description but couldn't read its captions from our server (YouTube limits that). Open the video, tap ⋯ (More) → Show transcript, copy it, then use “Paste text” here.";
+        }
+
         if (content.replace(/\s/g, "").length < 80) {
           if (vid && !vid.playable) {
             return json({ error: "This video is private, age-restricted, or unavailable — paste the recipe text instead." });
@@ -586,7 +601,7 @@ Deno.serve(async (req) => {
     }
 
     if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
-      return json({ error: "AI couldn’t find a recipe in that input. Try a clearer photo or paste the text." });
+      return json({ error: noRecipeMessage });
     }
 
     return json({ recipe });
