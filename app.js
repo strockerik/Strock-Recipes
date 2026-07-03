@@ -207,6 +207,7 @@
   const cookTimerBar = $("#cook-timer-bar");
   const cookTimerLabel = $("#cook-timer-label");
   const cookTimerClock = $("#cook-timer-clock");
+  const cookTimerPauseBtn = $("#cook-timer-pause");
   const cookTimerStopBtn = $("#cook-timer-stop");
   const cookIngredients = $("#cook-ingredients");
   const cookPrevBtn = $("#cook-prev");
@@ -2954,7 +2955,10 @@
   }
 
   // ---------- Cook step timers ----------
-  let cookTimer = null; // {endsAt, label, intervalId} — survives step changes, cleared on open/close
+  // {endsAt, label, intervalId, paused, remaining} — survives step changes,
+  // cleared on open/close. While paused, `intervalId` is null and `remaining`
+  // (seconds left) is authoritative instead of `endsAt`.
+  let cookTimer = null;
   const DURATION_RE = /(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/gi;
   function parseDurations(text) {
     const out = [];
@@ -2978,9 +2982,12 @@
   }
   function startCookTimer(seconds, label) {
     if (cookTimer) clearInterval(cookTimer.intervalId);
-    cookTimer = { endsAt: Date.now() + seconds * 1000, label, intervalId: null };
+    cookTimer = { endsAt: Date.now() + seconds * 1000, label, intervalId: null, paused: false, remaining: null };
     cookTimerBar.hidden = false;
+    cookTimerBar.classList.remove("is-paused");
     cookTimerLabel.textContent = label;
+    cookTimerPauseBtn.textContent = "Pause";
+    cookTimerPauseBtn.setAttribute("aria-label", "Pause timer");
     paintTimer();
     cookTimer.intervalId = setInterval(paintTimer, 1000);
   }
@@ -2992,31 +2999,90 @@
     const ss = String(remaining % 60).padStart(2, "0");
     cookTimerClock.textContent = `${mm}:${ss}`;
   }
-  function timerDone() {
-    if (cookTimer) clearInterval(cookTimer.intervalId);
-    cookTimerClock.textContent = "Done!";
-    if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 200]);
+  // A soft two-note chime (sine tones with a fade-in/out envelope) rather than
+  // a single tone snapping straight to full volume and cutting off abruptly.
+  function playTimerChime() {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      osc.frequency.value = 880;
-      osc.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.5);
-      osc.onended = () => ctx.close();
+      const now = ctx.currentTime;
+      const notes = [
+        { freq: 880, start: 0, dur: 0.35 },
+        { freq: 1108.73, start: 0.26, dur: 0.5 }
+      ];
+      notes.forEach(({ freq, start, dur }) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, now + start);
+        gain.gain.linearRampToValueAtTime(0.18, now + start + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now + start);
+        osc.stop(now + start + dur + 0.05);
+      });
+      const totalMs = (Math.max(...notes.map((n) => n.start + n.dur)) + 0.1) * 1000;
+      setTimeout(() => ctx.close(), totalMs);
     } catch {}
+  }
+  // Soft accent-tinted pulse over the cook panel so the "time's up" moment is
+  // visible even if the phone's face-down or the sound's missed — one-shot,
+  // self-removing so it can re-fire for the next timer. `animationend` never
+  // fires under prefers-reduced-motion (the global rule disables the
+  // animation), so fall back to a timeout there.
+  function flashCookPanel() {
+    cookPanel.classList.remove("cook-timer-flash");
+    void cookPanel.offsetWidth; // restart the animation if it's still mid-flash
+    cookPanel.classList.add("cook-timer-flash");
+    const clear = () => cookPanel.classList.remove("cook-timer-flash");
+    cookPanel.addEventListener("animationend", clear, { once: true });
+    setTimeout(clear, 1000);
+  }
+  function timerDone() {
+    if (cookTimer) clearInterval(cookTimer.intervalId);
+    cookTimerBar.classList.remove("is-paused");
+    cookTimerClock.textContent = "Done!";
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 200]);
+    playTimerChime();
+    flashCookPanel();
     cookTimer = null;
+  }
+  function pauseCookTimer() {
+    if (!cookTimer || cookTimer.paused) return;
+    clearInterval(cookTimer.intervalId);
+    cookTimer.intervalId = null;
+    cookTimer.remaining = Math.max(0, Math.round((cookTimer.endsAt - Date.now()) / 1000));
+    cookTimer.paused = true;
+    cookTimerBar.classList.add("is-paused");
+    cookTimerPauseBtn.textContent = "Resume";
+    cookTimerPauseBtn.setAttribute("aria-label", "Resume timer");
+  }
+  function resumeCookTimer() {
+    if (!cookTimer || !cookTimer.paused) return;
+    cookTimer.endsAt = Date.now() + cookTimer.remaining * 1000;
+    cookTimer.paused = false;
+    cookTimerBar.classList.remove("is-paused");
+    cookTimerPauseBtn.textContent = "Pause";
+    cookTimerPauseBtn.setAttribute("aria-label", "Pause timer");
+    paintTimer();
+    cookTimer.intervalId = setInterval(paintTimer, 1000);
   }
   function stopCookTimer() {
     if (cookTimer) clearInterval(cookTimer.intervalId);
     cookTimer = null;
     cookTimerBar.hidden = true;
+    cookTimerBar.classList.remove("is-paused");
   }
   cookTimerChips.addEventListener("click", (e) => {
     const chip = e.target.closest(".cook-timer-chip");
     if (!chip) return;
     e.stopPropagation();
     startCookTimer(Number(chip.dataset.seconds), chip.dataset.label);
+  });
+  cookTimerPauseBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!cookTimer) return;
+    cookTimer.paused ? resumeCookTimer() : pauseCookTimer();
   });
   cookTimerStopBtn.addEventListener("click", (e) => {
     e.stopPropagation();

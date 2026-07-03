@@ -1593,6 +1593,14 @@ button:focus-visible, input:focus-visible {
   font-weight: 600;
 }
 .cook-timer-bar .ghost-btn { color: var(--paper); border-color: var(--paper); background: transparent; }
+.cook-timer-bar.is-paused .cook-timer-clock { opacity: 0.55; }
+
+/* One-shot accent-tinted pulse when a cook-mode timer finishes. */
+@keyframes cookTimerFlash {
+  0% { background-color: var(--accent-soft); }
+  100% { background-color: var(--paper); }
+}
+.cook-panel.cook-timer-flash { animation: cookTimerFlash 0.9s ease-out; }
 .cook-tap-hint {
   margin: 28px 0 0;
   font-size: 0.78rem;
