@@ -1,6 +1,6 @@
 ---
 name: app-testing
-description: Full QA pass for the House Index recipe app — static analysis, cleanup, a circular-reference & efficiency audit, headless-browser smoke tests, Edge Function checks, an AI prompt-contract audit, and live AI tests (photo/text/URL extraction plus coach & tweak acceptance). Use before committing a feature, after a refactor, or when something "doesn't work."
+description: Full QA pass for the House Index recipe app — static analysis, cleanup, a circular-reference & efficiency audit, headless-browser smoke tests, Edge Function checks, an AI prompt-contract audit, live AI tests (photo/text/URL extraction plus coach & tweak acceptance), and deploy verification (live site vs HEAD, Edge Function probes). Use before committing a feature, after a refactor, or when something "doesn't work."
 ---
 
 # App Testing Skill — The House Index (Recipes & Cocktails)
@@ -25,6 +25,21 @@ converts HEIC→JPEG), and **Google Chrome** at
 as the test runner). Plan every test around those tools — never assume a
 package manager or a JS test framework is installable.
 
+Tooling gotchas (all verified the hard way):
+
+- **Python's `urllib` has no CA certs** on this machine (`CERTIFICATE_VERIFY_FAILED`)
+  — make network calls with `curl` and parse the saved output with Python.
+- **Headless Chrome floors the page layout width at ~500px.** Any
+  `--window-size` ≤ 500 lays out at exactly 500px (`document.body.clientWidth`
+  reports 500; 501+ is honored). `--screenshot` at e.g. 390px wide *crops* the
+  500px layout rather than reflowing it, so a narrow screenshot can look broken
+  when the CSS is fine. To test the `max-width: 560px` mobile breakpoint,
+  render at **550px** (inside the breakpoint, above the floor) and reason
+  arithmetically about narrower widths from measured element boxes.
+- `python3 -m http.server` must serve from the **repo root** (the sandbox blocks
+  serving `/tmp`), so `test_*.html` files live in the repo root — which is why
+  deleting them afterward is non-negotiable.
+
 Architecture recap (so you test the right boundary):
 
 - **Frontend** — `index.html`, `style.css`, `app.js` (all client logic, wrapped
@@ -42,6 +57,23 @@ Architecture recap (so you test the right boundary):
 - **Schema/data changes** — applied by hand in the dashboard SQL editor (no
   CLI). One-time data migrations live in `scripts/` (e.g.
   `migrate_ingredients.py`) and are **user-run only** — see Phase 2.
+- **Per-user client persistence** — everything not in Postgres lives in
+  `localStorage` under `hi:{userId|"anon"}:{name}` via `userKey()` /
+  `loadLocal()` / `saveLocal()`; restored **once per real sign-in** by
+  `loadUserLocalState()`, hooked off the `userChanged` branch of
+  `onAuthStateChange` (NOT `loadData()`, which re-runs on every recipe save).
+  Current keys: `basket`, `checked`, `skipStaples`, `manualItems`, `mealTray`,
+  `household`, `aisleOrder`, `seenPickHint`, `seenIntro`, `planView`, plus the
+  coach threads under `coach:v1:<recipeId>`. Rule: `clearData()` (sign-out)
+  resets **in-memory** state only — it must never call
+  `saveLocal`/`removeItem`, so the next sign-in restores intact.
+- **UI topology (post Waves 1–3)** — the meal plan is an **inline top-level
+  view** (`.mode-tabs` switches Recipes ↔ Meal plan; content renders into
+  `#meal-plan-view`), not a modal. The tray→slot "armed mode" is **gone** —
+  placing a recipe goes through the `#place-sheet` day/meal picker
+  (`openPlaceSheetForRecipe` from a tray chip, `openPlaceSheetForSlot` from a
+  day's `+`). Recipe detail has a primary action row (Cook / Add to plan /
+  Grocery / Ask AI) plus a `⋯ More` floating menu (`#detail-more-menu`).
 - **Secrets** — service-role key + user ids live in the gitignored `notes.md`
   and `.env.local`. The Anthropic key is a server-side Edge Function secret.
   **Never** run a script that uses the service-role key against production from
@@ -107,8 +139,11 @@ references, before doing anything dynamic.
    grep -nE 'console\.(log|debug)' app.js                 # leftover debug logging
    grep -nE 'innerHTML *=' app.js                         # every one must be esc()'d
    grep -nE 'TODO|FIXME|XXX|HACK' app.js index.html supabase/functions/*/index.ts
-   grep -n 'is_shared\|household' app.js index.html style.css   # retired sharing model
+   grep -n 'is_shared\|armedTrayId' app.js index.html style.css  # retired models (share bool; tray armed-mode)
    ```
+   (Do **not** grep for bare `household` — `householdServings` is a live Wave-2
+   feature now. And a bare `\barmed\b` grep false-positives on "w**armed**" in
+   `PREP_WORDS`; grep the actual retired symbol `armedTrayId`.)
    `innerHTML` assignments that interpolate recipe data **must** route user text
    through `esc()` — see Phase 7 (XSS).
 
@@ -136,9 +171,11 @@ A human reviewer's job — be systematic, don't eyeball:
   ```
   (Manually confirm — the grep is a coarse first pass; some classes are built
   from string concatenation.)
-- **Stale comments:** anything mentioning the retired "share with household"
-  boolean model, "Pending redeploy" notes that are already deployed, or a model
-  name that's been changed. Comments must describe the code as it is now.
+- **Stale comments:** anything mentioning the retired `is_shared` boolean
+  sharing model or the retired tray "armed mode", "Pending redeploy" notes that
+  are already deployed, or a model name that's been changed. Comments must
+  describe the code as it is now. (`householdServings` and the "household"
+  wording around it are current, not stale.)
 - **Duplication:** repeated literal lists (tag taxonomy, unit tables) should
   have one source of truth. The tag list exists in both `index.html` (checkbox
   UI) and the Edge Function schema by necessity — note it, but verify they match.
@@ -168,10 +205,11 @@ serialized, or control flow that re-triggers itself. Check both:
   `{role,content}` + `coachLastResult`, both plain), `serializeRecipeForCoach`
   and the `functions.invoke({body})` payloads (plain recipe + `{role,content}`
   messages — **never** the live in-memory recipe object if it ever gains a back-
-  reference), `exportRecipesJSON`/`toBackupRow` (plain rows). Confirm each
-  `localStorage.setItem(... JSON.stringify ...)` is inside a `try/catch`
-  (`saveCoachState`, the meal-plan/grocery persistence) so a serialize failure
-  degrades instead of throwing.
+  reference), `exportRecipesJSON`/`toBackupRow` (plain rows), and `saveLocal`
+  (the single funnel for all per-user persistence — values must stay plain
+  arrays/objects/scalars: `[...basket.entries()]`, `[...set]`, bools, strings).
+  Confirm `saveLocal`/`loadLocal` and `saveCoachState` wrap storage access in
+  `try/catch` so a quota/serialize failure degrades instead of throwing.
 - **Recursion needs a base case.** Grep for self- and mutual-recursion and verify
   each terminates:
   ```bash
@@ -233,11 +271,36 @@ The established pattern for this app (no DOM/test framework, so drive the real
 2. Replace the two real script tags (the supabase CDN script and `config.js`)
    with an inline stub: `window.supabase.createClient` returning stubs for
    `auth.onAuthStateChange`, `auth.getSession`, `auth.signInWithPassword`,
-   `auth.updateUser`, `auth.signOut`, a chainable `.from()` query builder
-   (`.select().eq().order()` → `{data, error}`), and `.rpc()` /
-   `.functions.invoke()`.
+   `auth.updateUser`, `auth.signOut`, a chainable `.from()` query builder,
+   and `.rpc()` / `.functions.invoke()`. Hard-won stub rules — violating any
+   of these produces silent hangs or misleading failures, not clean errors:
+   - **The query builder must be chainable AND thenable**: support
+     `.eq/.gte/.lte/.in/.ilike/.order/.is` each returning the chain, plus
+     `.single()` and a `.then(resolve)` that resolves `{data, error}`.
+     `loadMealPlan()` calls `.select().gte().lte()` — a non-chainable stub
+     throws inside an async function and is swallowed as an unhandled
+     rejection, which looks exactly like a feature bug.
+   - **The session fixture must include `user.email`** — `ensureProfile()`
+     splits it; a missing email throws inside `loadData` and the list never
+     renders.
+   - Fire `cb('INITIAL_SESSION', { user: {...} })` via `setTimeout(..., 0)`
+     from `onAuthStateChange`, and stub `navigator.vibrate` and
+     `window.confirm` (delete/remove flows call confirm).
+   - Capture invoke/insert payloads with `JSON.parse(JSON.stringify(body))`
+     inside the stub — live arrays are mutated after the call.
+   - **Escape `</` as `<\/` when inlining fixture JSON into a `<script>`** —
+     a fixture containing a literal `</script>` (e.g. an XSS test payload)
+     terminates the script element at the HTML-parser level and silently kills
+     the whole stub; the failure looks like "auth gate never hides".
 3. Add a test driver script at the end that exercises one behavior and writes
-   the verdict to `document.title` / a `data-results` attribute.
+   the verdict to `document.title` / a `#smoke-results` div. Driver rules:
+   - **Re-query every element after any click that triggers a re-render**
+     (`renderList()`, `renderMealPlan()`, …) — `innerHTML` swaps replace the
+     subtree, and stale node references silently fail `classList`/`dataset`
+     assertions.
+   - Buttons that only exist in an expanded recipe detail (`.cook-btn`,
+     `.detail-serv-btn`, `.detail-grocery-btn`, `.detail-more-btn`) require
+     clicking `.item-head` first; on a collapsed row they're `null`.
 4. Run and read the verdict:
    ```bash
    cd /path/to/repo && python3 -m http.server 8765 &
@@ -310,13 +373,28 @@ Smoke tests worth having (each its own `test_*.html` or one with sub-cases):
 - **Unit toggle** — click `.unit-toggle-btn[data-unit="us"]` in an open detail
   and assert weights flip to oz/lb (the open item re-renders, others unaffected;
   nothing is saved to Supabase).
-- **Step reorder** — toggle `#rf-reorder-steps` in the form, assert `▲▼` controls
-  appear, click `▼` on a step and assert the textarea order changed; save and
-  assert `method` order follows the DOM.
-- **Meal plan flow** — stub `meal_plan_entries` insert/select; click `📅 Add to
-  Weekly Meal Plan` (tray gains the recipe), open the planner, arm the tray chip,
-  tap a day/slot `＋` and assert an `insert` fired; click "Create grocery list"
-  and assert the basket fills from planned servings + entries get `purchased_at`.
+- **Form reorder (method AND ingredients)** — each list has its own toggle
+  (`#rf-reorder-steps`, `#rf-reorder-ingredients`); assert `▲▼` row controls and
+  `↑↓` section controls appear. **Semantics:** every row — ingredient, step, or
+  section divider — nudges exactly **one position** per press (`nudgeRow` via
+  `bindReorderHandler`); a section divider slides *through* stationary rows,
+  re-grouping only the row it passes; there is no "move the whole block" mode.
+  Save and assert the payload's order and each row's `group` re-derive from
+  final DOM positions (a row above all dividers → `group: null`).
+  (Known-good: an 11-assertion divider-slide harness passed 11/11.)
+- **Meal plan flow (place-sheet, no armed mode)** — stub `meal_plan_entries`
+  insert/select; click `📅 Add to plan` in a recipe detail (tray gains the
+  recipe); switch to the Meal plan mode tab (`#meal-plan-view` renders inline).
+  Tap the tray chip → `#place-sheet` opens with day×slot targets; pick one and
+  assert an `insert` fired with that date/slot and the sheet closed. Tap an
+  empty slot's `.mp-slot-add` → the sheet opens pre-scoped to that day+slot.
+  Click "Create grocery list" and assert the basket fills from planned servings
+  and entries get `purchased_at`. Assert **no** `armedTrayId` reference exists.
+- **Planner density (dinners-first)** — default `planView === "dinners"`: an
+  upcoming day with no breakfast/lunch renders **no** row for them (hidden, not
+  stubbed), while a breakfast that has an entry still shows; the
+  Dinners / All-meals toggle re-renders all three slots and persists via
+  `saveLocal("planView", …)`; history days always render fully.
 - **Send a recipe (HTML export)** — stub `navigator.share`/`canShare` (use
   `Object.defineProperty`, both are read-only/absent in headless Chrome) to capture
   the arg; open an owned recipe and click `.send-recipe-btn`. Assert `navigator.share`
@@ -332,6 +410,50 @@ Smoke tests worth having (each its own `test_*.html` or one with sub-cases):
   "INGREDIENTS"). NB: the fixture session **must include `user.email`** —
   `ensureProfile()` splits it, and a missing email throws inside `loadData` so the
   list never renders. (Known-good: a 22-assertion harness passed 22/22.)
+- **Per-user local persistence (#0)** — after a stubbed sign-in as `u1`,
+  mutating basket/tray/settings writes `hi:u1:*` keys; a simulated reload
+  (re-fire `INITIAL_SESSION`) restores them via `loadUserLocalState()`;
+  sign-out (`clearData`) resets the UI but **leaves localStorage intact**;
+  signing in as `u2` sees none of `u1`'s state (key namespace isolation).
+- **Shopping mode (#9)** — the grocery panel's `#shopping-mode-toggle` adds the
+  `.shopping` class (big rows; `.g-by-recipe`, reorder UI and actions hidden),
+  shows "✓ N of M" progress from `checkedGroceryItems` vs combined+manual
+  items, and calls `requestWakeLock()`/release on enter/exit; checks persist
+  across a reload (`hi:<uid>:checked`).
+- **Manual grocery items (#10)** — adding "trash bags" buckets it via
+  `categorizeGrocery` into its aisle, renders with a trailing `×` to remove,
+  appears in `groceryText()` and in the shopping-mode denominator; persists in
+  `hi:<uid>:manualItems`.
+- **Aisle reorder (#11)** — the ↑/↓ list reorders `aisleOrder`, re-renders both
+  the panel sections and `groceryText()` export in the new order, keeps
+  "Other" pinned last, and persists; `loadStoredAisleOrder()` merges a stored
+  order missing newer categories by appending them (new buckets never vanish).
+- **Household servings (#7)** — with the account panel's "we usually cook for"
+  set to N, a **first add** (card `.pick`, detail grocery button, or meal-plan
+  placement) uses N via `defaultAddServings()`, but an explicit per-recipe
+  stepper override set beforehand wins; `setRecipeServings` afterward is a full
+  override. Precedence: explicit > household > `baseServings`.
+- **One-time hints (#12/#15)** — `#pick-hint` shows for a fresh user and stays
+  dismissed after reload (`seenPickHint`); the `#intro-card` (Cook/Plan/Shop
+  pointer) fires once per real sign-in via the `userChanged` hook — assert it
+  does NOT reappear for a `TOKEN_REFRESHED` event or during
+  `PASSWORD_RECOVERY`, and never again once dismissed (`seenIntro`).
+- **Cook mode additions (#1–#4)** — per-step ingredient pills render scaled
+  amounts and are non-interactive (must not swallow the tap-to-advance /
+  swipe gestures); a step containing "10 minutes" renders a timer chip whose
+  click starts `#cook-timer-bar` **without advancing the step**
+  (`stopPropagation`); the `#cook-rail` renders one dot per step, click jumps
+  `cookIdx`, exactly one dot active (re-query after — the rail re-renders);
+  ingredient checkoff (`cookCheckedIngs`) toggles per tap and **resets when
+  cook mode reopens** (session-only). All three indicators (rail, section
+  chips, progress bar) coexist.
+- **Detail ⋯ More menu (#13)** — one shared `#detail-more-menu` repopulated per
+  recipe: owned recipes get Send/Edit/Share/Delete, shared-with-me get
+  Send/Copy/Remove; it opens `position:fixed` off the trigger rect and must
+  stay fully on-screen at mobile widths (test at 550px per the viewport-floor
+  rule); it closes on outside click, Escape, and **any scroll** (the fixed menu
+  would otherwise detach from the page — a capture-phase `scroll` listener
+  closes both it and `#add-menu`).
 
 ## 4. Functional / business-logic test matrix
 
@@ -354,6 +476,9 @@ logic into the harness). Assert exact outputs:
 | Sections | `groupRuns` | items with mixed `group` labels split into runs in order; all-null → one ungrouped run |
 | Sharing labels | `shareButtonLabel`, `shareRecipients` | 0 → "Share", 1 → "Shared with 1 person", 2 → "…2 people" |
 | Escaping | `esc` | `<`, `>`, `&`, `"`, `'` all entity-encoded |
+| First-add servings | `defaultAddServings` | explicit `servingsByRecipe` override wins; else `householdServings`; else `baseServings`; result floored at 1 |
+| Aisle-order restore | `loadStoredAisleOrder` | stored order preserved; categories added to the app since the user last reordered are appended (never dropped); "Other" always last; `null`/garbage stored value → full default order |
+| Timer parsing | `parseDurations` | "simmer 10 minutes" → 600s chip; "1.5 hours" → 5400s; "30 secs" → 30s; multiple durations in one step → one chip each; a step with none → no chips |
 
 For each: PASS only on exact expected value. A wrong fraction, a to-taste item
 that scaled, a prep note that leaked onto the shopping list, or a rounding that
@@ -377,27 +502,62 @@ test them against saved HTML fixtures with no spend:
    page): assert `<div id="root|app|__next">` present **and** stripped text
    length is tiny → `true`. A normal blog with real article text → `false`.
 2b. **Link-extraction suite** (the helpers that source URL content:
-   `findJsonLdRecipe`/`findRecipeNode`, `extractYouTube`, `pageMeta`,
-   `looksLikeBotChallenge`). `curl` real pages to `/tmp/*.html`, then run the
-   helper logic over the saved files — **no Anthropic spend.** The sandbox blocks
-   serving `/tmp` over http.server and Python's urllib has no CA certs, so the
-   reliable recipe here is: **curl the fixtures, then a Python script that
-   re-implements the same regex/JSON logic and reads the local files** (ports are
-   mechanical — keep them in sync with the TS). Assert:
-   - `youtube.com/watch?v=vpRV_Pvlczw` → `extractYouTube` returns a title + a
-     >1000-char description containing the recipe ("Butter 125", "apples"). This
-     is the regression test for the reported bug (recipe lived in the video
-     description, which `htmlToText` had thrown away).
+   `findJsonLdRecipe`/`findRecipeNode`, `pageMeta`, `looksLikeBotChallenge`,
+   and the YouTube pipeline below). `curl` real pages to `/tmp/*.html`, then run
+   the helper logic over the saved files — **no Anthropic spend.** Curl the
+   fixtures, then a Python script that re-implements the same regex/JSON logic
+   and reads the local files (ports are mechanical — keep them in sync with the
+   TS). Assert:
    - `bbcgoodfood.com` + `budgetbytes.com` recipes → `findJsonLdRecipe` returns a
      Recipe node with `name` (+ `recipeIngredient` where present).
    - `allrecipes.com` + `liquor.com` → `looksLikeBotChallenge` → `true` (these
      Cloudflare-wall server fetches; the correct outcome is the paste-text error,
      not extraction — a self-contained build can't beat their bot protection).
-   Last run: **all 5 PASS.** Also confirm the **front-end fallback**: in the
-   headless-Chrome harness, stub `functions.invoke` to return
-   `{data:{error:"…"}}` for a `type:"url"` payload and assert a
-   **📋 Paste text instead** button (`.ai-paste-fallback`) appears in the error
-   area and clicking it reveals the text box.
+   Also confirm the **front-end fallback**: in the headless-Chrome harness, stub
+   `functions.invoke` to return `{data:{error:"…"}}` for a `type:"url"` payload
+   and assert a **📋 Paste text instead** button (`.ai-paste-fallback`) appears
+   in the error area and clicking it reveals the text box.
+
+2c. **YouTube pipeline** (rebuilt 2026-07-02 after YouTube's bot hardening;
+   every claim below was verified empirically — trust this over training data):
+   - **How it works:** `youTubeVideoId()` parses `watch?v=` / `youtu.be/` /
+     `/shorts/` / `/live/` / `/embed/` (channel/playlist links → specific
+     error). The watch page (browser UA + `Cookie: SOCS=CAI` consent bypass +
+     `Accept-Language`) is only a **scrape fallback**; the primary source is a
+     **keyless** `POST youtubei/v1/player` with client
+     `{clientName:"ANDROID", clientVersion:"20.10.38"}` → `videoDetails`
+     (title/author/shortDescription) + `captionTracks`. `pickCaptionTrack`
+     prefers human (`kind !== "asr"`) English > any English > human > any;
+     the chosen `baseUrl` (with `&fmt=srv3` stripped; skip if it contains
+     `&exp=xpe` — that marks proof-of-origin-gated tracks) serves XML `<text>`
+     chunks. Description AND transcript are **always combined** (description
+     first — ingredients live there; transcript carries the spoken method).
+   - **Dead ends — don't rediscover them:** the keyless WEB client withholds
+     captions (`UNPLAYABLE`); ANDROID with an explicit `?key=` and old versions
+     → `FAILED_PRECONDITION`; caption baseUrls scraped from watch-page HTML
+     return **0-byte bodies** (POT-gated); `youtubei/v1/get_transcript` →
+     `FAILED_PRECONDITION` even with page-scraped params + visitorData.
+   - **Free probe** (validates the contract from this machine):
+     ```bash
+     curl -s -X POST "https://www.youtube.com/youtubei/v1/player" \
+       -H "Content-Type: application/json" \
+       -d '{"context":{"client":{"clientName":"ANDROID","clientVersion":"20.10.38"}},"videoId":"7dP7xJEasY4"}' \
+       | jq '{status:.playabilityStatus.status, desc:(.videoDetails.shortDescription|length), tracks:(.captions.playerCaptionsTracklistRenderer.captionTracks|length)}'
+     ```
+     Known-good fixtures: `7dP7xJEasY4` (Brian Lagerstrom smash burger — 3k-char
+     description + ~15k-char ASR transcript) and `dQw4w9WgXcQ` (6 tracks;
+     track-preference picks manual English over ASR).
+   - **Known limitation (confirmed live):** YouTube **IP-gates caption
+     downloads from the Edge runtime's datacenter IP** — a video whose recipe is
+     only in the spoken audio (e.g. `pzj8tjhq-2o`: sponsor-link description,
+     recipe in transcript) extracts fine from a residential IP but reaches the
+     model transcript-less from the server. The designed remedy: the function
+     logs `desc/transcript/content` lengths (check Supabase function logs) and
+     the no-recipe / thin-content errors tell the user to ask **YouTube's
+     built-in AI ("Ask")** for the ingredients + method and paste the answer via
+     "Paste text". Description-carrying videos extract server-side normally.
+     Probes run from this machine **cannot** reproduce the gating — only the
+     deployed function's logs prove which side failed.
 3. **Input validation** — confirm (by reading the branch) that: missing/empty
    `text`, an `images` array longer than `MAX_IMAGES` (4), a disallowed
    `mediaType`, and an unknown `type` each return an `{error}` **before** any
@@ -495,6 +655,11 @@ method from the other), not two recipes.
 - *URL (should fail gracefully):* a Cloudflare site (liquor.com) → the
   bot-protection `{error}` message; a JS-only SPA → the "loads its recipe with
   JavaScript" `{error}`. Neither should 500 or hang.
+- *URL (YouTube, live):* one **description-carrying** cooking video (e.g.
+  `7dP7xJEasY4`) → a real recipe with ingredients + ordered method. A
+  transcript-only video (`pzj8tjhq-2o`-style) may legitimately fail from the
+  server (caption IP-gating, Phase 5.2c) — the acceptance there is the
+  **"ask YouTube's built-in AI" error message**, not extraction.
 
 Record a table: photo → PASS/PARTIAL/FAIL + the specific rule violated. Track
 results over time; a prompt change that fixes one card shouldn't regress another.
@@ -556,6 +721,11 @@ prompt regression — flag it for a prompt fix (separate from this test run).
   docs, never a committed key; `notes.md` and `.env.local` stay gitignored.
 - **Anon key exposure is intentional** — fine in `config.js`, but only because
   RLS constrains it. Don't "fix" it.
+- **No Google-API-key-shaped literals** (`AIzaSy…`) anywhere in the repo — even
+  YouTube's *public* Innertube key trips GitHub secret scanning (a real alert
+  was raised 2026-07-02 and dismissed as a false positive). The Innertube call
+  is deliberately keyless; keep it that way rather than re-adding a constant
+  that trains everyone to ignore scanner alerts.
 - **XSS:** every recipe field rendered via `innerHTML` must pass through
   `esc()`. Add a recipe named `<img src=x onerror=alert(1)>` and confirm it
   renders as text, never executes.
@@ -588,16 +758,60 @@ Ideas to grow the suite as the app evolves:
 - **Empty/edge states:** zero recipes, a recipe with no tags, an ingredient
   with a blank amount, a 1-step recipe, a recipe shared then unshared, a grocery
   list built from a plan with a since-deleted recipe.
-- **Network resilience:** Edge Function timeout path (`Promise.race` in
-  `app.js:1208`) shows a friendly message, not a spinner forever.
+- **Network resilience:** Edge Function timeout path (the
+  `EXTRACTION_TIMEOUT_MS` 75s `Promise.race` in `runExtraction`) shows a
+  friendly message, not a spinner forever; a stale response after Cancel is
+  discarded (the `extractionToken` guard).
 - **Accessibility smoke:** buttons have labels, form inputs have associated
   text, focus order is sane.
 - **Performance:** with ~200 recipes, `renderList`/filter stays snappy; no
   N² work in `combinedGroceryItems`.
 
+## 9. Deploy verification — is what we tested what users get?
+
+Testing HEAD means nothing if the live site serves something else. All three
+failure modes below have actually happened; check all three.
+
+1. **Frontend: live must equal HEAD, byte for byte.** GitHub Pages serves
+   pushed `origin/main` — a local commit deploys nothing, and even a push can
+   silently fail to publish (see 3):
+   ```bash
+   for f in index.html app.js style.css config.js; do
+     live=$(curl -s "https://strockerik.github.io/Strock-Recipes/$f?z=$RANDOM" | shasum -a 256 | awk '{print $1}')
+     loc=$(git show HEAD:$f | shasum -a 256 | awk '{print $1}')
+     [ "$live" = "$loc" ] && echo "$f MATCH" || echo "$f DIFFER ← stale deploy or unpushed commit"
+   done
+   git status -sb | head -1   # must not say "ahead" — push ≠ commit
+   ```
+2. **Edge Functions: dashboard-deployed, not git-deployed.** Pushing never
+   updates them; the user pastes `index.ts` into the Supabase dashboard. Free
+   liveness probe (proves deploy + JWT-off + auth gate, no Anthropic spend):
+   ```bash
+   curl -s -X POST "https://olzmcwcybleulazvgxeq.supabase.co/functions/v1/extract-recipe" \
+     -H "Content-Type: application/json" -d '{"type":"url","url":"x"}'
+   # → {"error":"Please sign in first."}
+   ```
+   That probe can't tell **which version** is deployed — if in doubt, check for
+   a newly-added log line / error string in the Supabase function logs.
+3. **Pages deploys can hang.** The managed `pages-build-deployment` deploy step
+   sometimes hits "Timeout reached, aborting!" (~10 min) with **no GitHub
+   incident** — the build + artifact succeed, publishing doesn't, and rapid
+   successive pushes make it worse (each queues a serialized deploy). Diagnose
+   via the public API (no `gh` CLI here):
+   ```bash
+   curl -s "https://api.github.com/repos/strockerik/Strock-Recipes/deployments?environment=github-pages&per_page=3"
+   # then …/deployments/<id>/statuses — look for success/error/in_progress
+   ```
+   Remedies, in order: wait (queued deploys often drain), **Actions → Re-run
+   failed jobs**, or Settings → Pages → flip Source away and back. A failed
+   deploy never un-publishes the previous artifact; `last-modified` on any
+   served file shows which artifact is actually live. Deploys are cumulative —
+   one success publishes every commit up to it.
+
 ## Reporting
 
 Finish every run with a short table: phase → PASS/FAIL/SKIPPED, plus a bullet
 list of bugs found (file:line), cleanups made, and any photo regressions. State
-plainly what was *not* run (e.g. "Phase 6 skipped — would spend quota"). If
-tests fail, show the actual output; don't smooth it over.
+plainly what was *not* run (e.g. "Phase 6 skipped — would spend quota") and the
+**deploy state** (live-vs-HEAD match, Edge Function probe result). If tests
+fail, show the actual output; don't smooth it over.
