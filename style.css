@@ -1592,7 +1592,7 @@ button:focus-visible, input:focus-visible {
   font-size: 1.1rem;
   font-weight: 600;
 }
-.cook-timer-bar .ghost-btn { color: var(--paper); border-color: var(--paper); }
+.cook-timer-bar .ghost-btn { color: var(--paper); border-color: var(--paper); background: transparent; }
 .cook-tap-hint {
   margin: 28px 0 0;
   font-size: 0.78rem;
