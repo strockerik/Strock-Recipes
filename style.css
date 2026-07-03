@@ -519,10 +519,11 @@ button:focus-visible, input:focus-visible {
 .ing-list li:last-child { border-bottom: 0; }
 .ing-amt {
   font-family: var(--font-mono);
-  font-size: 0.83rem;
+  font-size: 1rem;
+  font-weight: 500;
   color: var(--accent);
   white-space: nowrap;
-  min-width: 64px;
+  min-width: 72px;
 }
 #cook-ingredients .ing-row { cursor: pointer; user-select: none; }
 #cook-ingredients .ing-row.is-checked { opacity: 0.5; text-decoration: line-through; }
@@ -1547,7 +1548,8 @@ button:focus-visible, input:focus-visible {
 }
 .cook-step-ing {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.92rem;
+  font-weight: 500;
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: 999px;
