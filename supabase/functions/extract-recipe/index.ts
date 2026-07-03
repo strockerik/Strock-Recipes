@@ -438,6 +438,16 @@ Deno.serve(async (req) => {
     } else if (body.type === "url") {
       const url = typeof body.url === "string" ? parseAllowedUrl(body.url.trim()) : null;
       if (!url) return json({ error: "That doesn’t look like a valid link." });
+      // Instagram and TikTok are login-walled at the HTTP level — a server-side
+      // fetch gets a JS shell with no caption in it (verified 2026-07: the post
+      // page, the /embed/ endpoint, and every known API route all gate on
+      // login). Fail fast with instructions instead of fetching a known dead
+      // end; the frontend adds its "Paste text instead" button to this error.
+      const socialHost = url.hostname.toLowerCase().replace(/^www\./, "");
+      if (socialHost === "instagram.com" || socialHost.endsWith(".instagram.com") ||
+          socialHost === "tiktok.com" || socialHost.endsWith(".tiktok.com")) {
+        return json({ error: "Instagram and TikTok don’t let servers read posts. Copy the post’s caption and paste it here — and if the steps are only spoken in the video, jot those in too." });
+      }
       const onYouTube = isYouTube(url);
       let html = "";
       try {
