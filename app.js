@@ -1444,15 +1444,23 @@
     if (shoppingModeOn) setShoppingMode(false);
   }
 
+  // Plain text only \u2014 Keep doesn't parse any incoming syntax into real
+  // checkboxes or bold, so a leading \u2610/\u2611 glyph here just renders as an
+  // inert square once shared. Real checkboxes come from Keep's own
+  // \u22ee > Convert to checklist afterward (a note-wide toggle with no way to
+  // exempt specific lines), so headers are dash-wrapped to still read as
+  // section labels rather than tasks once every line gets a checkbox.
+  // Already-checked-off items are left out entirely \u2014 a shopping list of
+  // just what's still needed.
   function groceryText() {
     const date = new Date().toLocaleDateString();
     let out = `Grocery list \u2014 ${date}\n\n`;
-    groceryByCategory(allGroceryItems()).forEach((sec) => {
-      out += `${sec.category.toUpperCase()}\n`;
+    const remaining = allGroceryItems().filter((it) => !checkedGroceryItems.has(it.key));
+    groceryByCategory(remaining).forEach((sec) => {
+      out += `\u2014 ${sec.category.toUpperCase()} \u2014\n`;
       sec.items.forEach((it) => {
-        const box = checkedGroceryItems.has(it.key) ? "\u2611" : "\u2610";
         const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + it.unit : "") + " ";
-        out += `${box} ${amtStr}${it.item}\n`;
+        out += `- ${amtStr}${it.item}\n`;
       });
       out += `\n`;
     });
