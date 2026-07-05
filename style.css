@@ -252,6 +252,7 @@ button:focus-visible, input:focus-visible {
   font-size: 0.9rem;
   font-weight: 600;
 }
+.solid-btn:disabled { opacity: 0.45; cursor: default; }
 
 /* Tag filter cloud */
 .tag-filters {
@@ -362,7 +363,11 @@ button:focus-visible, input:focus-visible {
   padding: 14px 16px;
 }
 
-/* grocery checkbox */
+/* grocery checkbox — wrapped with a cart glyph (dim -> lit) so the row reads
+   as "add to shopping" rather than a bare "select this row" checkbox. */
+.pick-wrap { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; flex: 0 0 auto; }
+.pick-wrap .pick-ico { font-size: 0.9rem; opacity: 0.45; transition: opacity 0.15s; }
+.pick-wrap .pick:checked + .pick-ico { opacity: 1; }
 .pick {
   flex: 0 0 auto;
   width: 21px; height: 21px;

@@ -323,15 +323,17 @@
   // Convert a combined canonical quantity to what's sold at a US grocery store,
   // rounded UP to a practical increment so the list never has you under-buy:
   // weights to the nearest ¼ oz/lb, volumes to ¼ cup / ½ tbsp / ¼ tsp, and
-  // loose counts to a whole number (you can't buy 1.3 onions).
+  // loose counts to a whole number (you can't buy 1.3 onions). Weights ≥12 oz
+  // switch to lb — nobody buys ground beef in quarter-ounces, and a "~1 lb"
+  // reads far more like a real shopping amount than "14¼ oz".
   function shoppableQuantity(amount, family, unit) {
     if (amount == null) return { amount: null, unit };
     if (family === "weight") {
       if (amount < MIN_SHOPPABLE_GRAMS) return { amount: Math.round(amount), unit: "g" };
-      const ozUp = ceilToQuarter(amount / G_PER_OZ);
-      return ozUp >= 16
+      const oz = amount / G_PER_OZ;
+      return oz >= 12
         ? { amount: ceilToQuarter(amount / G_PER_LB), unit: "lb" }
-        : { amount: ozUp, unit: "oz" };
+        : { amount: ceilToQuarter(oz), unit: "oz" };
     }
     if (family === "volume") {
       const cups = amount / ML_PER_CUP;
@@ -1020,8 +1022,11 @@
       return `
       <li class="item${open ? " is-open" : ""}" data-id="${esc(it.id)}">
         <div class="item-row">
-          <input type="checkbox" class="pick" ${picked ? "checked" : ""}
-                 aria-label="Add ${esc(it.name)} to grocery list">
+          <label class="pick-wrap" title="${picked ? "On your grocery list" : "Add to grocery list"}">
+            <input type="checkbox" class="pick" ${picked ? "checked" : ""}
+                   aria-label="Add ${esc(it.name)} to grocery list">
+            <span class="pick-ico" aria-hidden="true">🛒</span>
+          </label>
           <button class="item-head" aria-expanded="${open}">
             <span class="item-name">${esc(it.name)}</span>
             ${it.subtitle ? `<span class="item-sub">${esc(it.subtitle)}</span>` : ""}
@@ -1067,10 +1072,13 @@
           `<button class="unit-toggle-btn${unitSystem === v ? " is-on" : ""}" data-unit="${v}" aria-pressed="${unitSystem === v}">${label}</button>`
         ).join("")}
       </div>`;
+    const sourceLine = it.source || ownerNote
+      ? `<p class="detail-meta">${it.source ? `Source: ${esc(it.source)}` : ""}${ownerNote}</p>`
+      : "";
     return `
     <div class="item-detail">
-      <p class="detail-meta">Source: ${esc(it.source || "\u2014")}${ownerNote}</p>
-      ${servControl}
+      ${sourceLine}
+      ${basket.has(it.id) ? "" : servControl}
       <div class="detail-grid">
         <div>
           <div class="detail-h-row">
@@ -1682,6 +1690,10 @@
     const upcoming = [0, 1, 2, 3, 4, 5, 6].map((i) => mealDayCard(addDays(midnight(), i), false)).join("");
     const history = [1, 2, 3, 4, 5, 6, 7].map((i) => mealDayCard(addDays(midnight(), -i), true)).join("");
 
+    const todayStr = isoDate(midnight());
+    const endStr = isoDate(addDays(midnight(), 6));
+    const upcomingCount = mealPlan.filter((e) => e.date >= todayStr && e.date <= endStr).length;
+
     mealPlanView.innerHTML = `
       <section class="mp-section">
         <h3 class="detail-h">Recipes to plan</h3>
@@ -1690,7 +1702,7 @@
       <section class="mp-section">
         <div class="mp-section-head">
           <h3 class="detail-h">Upcoming 7 days</h3>
-          <button id="mp-make-grocery" class="solid-btn small">\ud83d\uded2 Create grocery list</button>
+          <button id="mp-make-grocery" class="solid-btn small"${upcomingCount ? "" : " disabled"}>\ud83d\uded2 Create grocery list</button>
         </div>
         <div class="mp-view-toggle" role="group" aria-label="Planner view">
           <button type="button" class="mp-view-btn${planView === "dinners" ? " is-active" : ""}" data-plan-view="dinners">Dinners</button>
@@ -1704,9 +1716,7 @@
       </section>`;
 
     // Update the tab badge with the count of upcoming planned meals
-    const todayStr = isoDate(midnight());
-    const endStr = isoDate(addDays(midnight(), 6));
-    updateMealplanBadge(mealPlan.filter((e) => e.date >= todayStr && e.date <= endStr).length);
+    updateMealplanBadge(upcomingCount);
   }
 
   function updateMealplanBadge(n) {
