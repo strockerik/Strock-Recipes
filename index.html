@@ -59,6 +59,7 @@
         <button class="tab tab-bar" role="tab" aria-selected="false" data-section="cocktails">Bar</button>
       </nav>
       <div id="account-area" class="account-area" hidden>
+        <button id="open-inventory" class="icon-btn" title="Bar & pantry" aria-label="Open bar & pantry inventory">📦</button>
         <button id="open-guide" class="icon-btn" title="Guide" aria-label="Open the feature guide">?</button>
         <button id="account-btn" class="avatar-btn" aria-haspopup="dialog" aria-label="Account">•</button>
       </div>
@@ -199,6 +200,23 @@
           We usually cook for
           <input type="number" id="account-household-servings" min="1" step="1" inputmode="numeric" placeholder="e.g. 4">
         </label>
+
+        <div class="diet-prefs">
+          <p class="diet-prefs-h">Dietary preferences</p>
+          <p class="diet-prefs-sub">The recipe generator honors these automatically.</p>
+          <div id="diet-diets" class="diet-chips" role="group" aria-label="Diets"></div>
+          <label class="diet-field" for="diet-allergies-input">
+            <span>Allergies <span class="diet-hard">(never included)</span></span>
+            <div id="diet-allergies" class="diet-tags"></div>
+            <input id="diet-allergies-input" class="search" type="text" placeholder="Add an allergy, press Enter (e.g. peanut)" aria-label="Add an allergy">
+          </label>
+          <label class="diet-field" for="diet-avoid-input">
+            <span>Dislikes / avoid <span class="diet-soft">(preferred, not strict)</span></span>
+            <div id="diet-avoid" class="diet-tags"></div>
+            <input id="diet-avoid-input" class="search" type="text" placeholder="Add something to avoid, press Enter (e.g. cilantro)" aria-label="Add an ingredient to avoid">
+          </label>
+        </div>
+
         <div class="grocery-actions">
           <button id="account-change-pw" class="ghost-btn">Change password</button>
           <button id="account-backup" class="ghost-btn">⬇ Back up recipes</button>
@@ -589,11 +607,88 @@
     <p>Recipes are stored in your account. Sign in with the same email on any device to see them.</p>
   </footer>
 
+  <!-- Bar & pantry inventory -->
+  <div id="inventory-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Bar and pantry inventory" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Bar &amp; Pantry</h2>
+        <button id="close-inventory" class="ghost-btn small" aria-label="Close inventory">Close</button>
+      </div>
+      <nav class="scope" role="tablist" aria-label="Inventory section">
+        <button class="scope-btn is-on" id="inv-tab-bar" role="tab" aria-selected="true" data-inv="bar">🍸 Bar</button>
+        <button class="scope-btn" id="inv-tab-pantry" role="tab" aria-selected="false" data-inv="pantry">🥫 Pantry</button>
+      </nav>
+      <p class="inv-hint">Track what you have on hand — it powers the recipe generator, and low/out items can drop into your grocery list.</p>
+      <form id="inv-add" class="inv-add">
+        <select id="inv-category" class="search inv-category" aria-label="Category"></select>
+        <input id="inv-name" class="search inv-name" type="text" aria-label="Name">
+        <button type="submit" class="solid-btn small">Add</button>
+      </form>
+      <div id="inventory-content" class="inventory-content"></div>
+    </div>
+  </div>
+
+  <!-- AI recipe generator: on-hand ingredients → a new recipe -->
+  <div id="generate-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Generate a recipe" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Generate a recipe</h2>
+        <button id="close-generate" class="ghost-btn small" aria-label="Close generator">Close</button>
+      </div>
+
+      <div id="generate-form">
+        <p class="gen-hint" id="gen-hint">List what you've got and AI will write one recipe from it, plus common pantry staples. Review it before saving.</p>
+        <div class="gen-ing">
+          <div id="gen-ing-chips" class="gen-chips"></div>
+          <div class="gen-ing-row">
+            <input id="gen-ing-input" class="search" type="text" placeholder="Add an ingredient, press Enter (e.g. chicken thighs)" aria-label="Add an ingredient">
+            <button type="button" id="gen-use-inventory" class="ghost-btn small">＋ Use my inventory</button>
+          </div>
+        </div>
+
+        <div class="gen-opts">
+          <div class="gen-opt" id="gen-opt-time">
+            <span class="gen-opt-label">Time</span>
+            <div class="gen-chip-row" data-gen-single="time"></div>
+          </div>
+          <div class="gen-opt" id="gen-opt-servings">
+            <span class="gen-opt-label">Servings</span>
+            <div class="gen-chip-row" data-gen-single="servings"></div>
+          </div>
+          <div class="gen-opt" id="gen-opt-cuisine">
+            <span class="gen-opt-label" id="gen-opt-cuisine-label">Cuisine</span>
+            <div class="gen-chip-row" data-gen-single="cuisine"></div>
+          </div>
+          <div class="gen-opt" id="gen-opt-equipment">
+            <span class="gen-opt-label">Equipment</span>
+            <div class="gen-chip-row" data-gen-single="equipment"></div>
+          </div>
+        </div>
+
+        <button type="button" id="gen-submit" class="solid-btn gen-submit">✨ Generate recipe</button>
+        <p class="gen-tip">AI-written, not yet kitchen-tested — give it a look before you save.</p>
+      </div>
+
+      <div id="generate-loading" class="ai-import-loading" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Writing your recipe…</p>
+        <p class="ai-import-hint">Building a dish from your ingredients with AI.</p>
+        <button type="button" id="generate-cancel" class="ghost-btn small">Cancel</button>
+      </div>
+
+      <p id="generate-status" class="auth-status" aria-live="polite"></p>
+    </div>
+  </div>
+
   <!-- Add recipe menu — shared by desktop ＋ Add button and mobile FAB -->
   <div id="add-menu" class="add-menu" role="menu" hidden>
     <button id="add-recipe-ai" role="menuitem">
       <span class="am-ico">✨</span>
       <span>Add with AI<small>Photo, link, or pasted text</small></span>
+    </button>
+    <button id="add-recipe-generate" role="menuitem">
+      <span class="am-ico">🪄</span>
+      <span>Generate a recipe<small>From ingredients you have</small></span>
     </button>
     <button id="add-recipe" role="menuitem">
       <span class="am-ico">✏️</span>

@@ -33,6 +33,11 @@
   let seenPickHint = false; // dismissed the "check recipes to build a grocery list" hint
   let seenIntro = false; // dismissed the first-run Cook/Plan/Shop pointer card
   let planView = "dinners"; // meal-plan grid density: "dinners" | "all"
+  // Bar & pantry inventory (Supabase-backed, source of truth): {id,section,category,name,status}
+  let inventory = [];
+  let invSection = "bar"; // which sub-tab the inventory panel is showing: "bar" | "pantry"
+  // Dietary preferences, stored on the profile row (cross-device); honored silently by the generator.
+  let dietPrefs = { diets: [], allergies: [], avoid: [] };
 
   // ---------- Per-user local persistence ----------
   // Namespaced by user id so two accounts on one device don't collide.
@@ -185,6 +190,40 @@
   const aiLinkArea = $("#ai-link-area");
   const aiLinkInput = $("#ai-link-input");
   const aiLinkSubmitBtn = $("#ai-link-submit");
+
+  // Dietary preferences (account panel)
+  const dietDietsEl = $("#diet-diets");
+  const dietAllergiesEl = $("#diet-allergies");
+  const dietAllergiesInput = $("#diet-allergies-input");
+  const dietAvoidEl = $("#diet-avoid");
+  const dietAvoidInput = $("#diet-avoid-input");
+
+  // Bar & pantry inventory panel
+  const openInventoryBtn = $("#open-inventory");
+  const inventoryPanel = $("#inventory-panel");
+  const closeInventoryBtn = $("#close-inventory");
+  const invTabBar = $("#inv-tab-bar");
+  const invTabPantry = $("#inv-tab-pantry");
+  const invAddForm = $("#inv-add");
+  const invCategorySelect = $("#inv-category");
+  const invNameInput = $("#inv-name");
+  const inventoryContent = $("#inventory-content");
+
+  // AI recipe generator panel
+  const addRecipeGenerateBtn = $("#add-recipe-generate");
+  const generatePanel = $("#generate-panel");
+  const closeGenerateBtn = $("#close-generate");
+  const generateForm = $("#generate-form");
+  const generateLoading = $("#generate-loading");
+  const generateStatus = $("#generate-status");
+  const generateCancelBtn = $("#generate-cancel");
+  const genHintEl = $("#gen-hint");
+  const genIngChips = $("#gen-ing-chips");
+  const genIngInput = $("#gen-ing-input");
+  const genUseInventoryBtn = $("#gen-use-inventory");
+  const genSubmitBtn = $("#gen-submit");
+  const genCuisineLabel = $("#gen-opt-cuisine-label");
+
   const coachPanel = $("#coach-panel");
   const coachRecipeName = $("#coach-recipe-name");
   const coachThread = $("#coach-thread");
@@ -533,6 +572,63 @@
     if (!error) profileNames[session.user.id] = displayName;
   }
 
+  // ---------- Dietary preferences (profile-backed, cross-device) ----------
+  // Normalize whatever's in the jsonb column to the three-array shape the
+  // generator expects, tolerating an empty {} default or a partial row.
+  function normalizeDietPrefs(raw) {
+    const arr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+    return { diets: arr(raw?.diets), allergies: arr(raw?.allergies), avoid: arr(raw?.avoid) };
+  }
+  async function loadMyDietPrefs() {
+    if (!session) { dietPrefs = { diets: [], allergies: [], avoid: [] }; return; }
+    const { data, error } = await supabaseClient
+      .from("profiles").select("diet_prefs").eq("id", session.user.id).single();
+    // Missing row/column or any error → keep the empty default (fail open).
+    dietPrefs = error ? { diets: [], allergies: [], avoid: [] } : normalizeDietPrefs(data?.diet_prefs);
+  }
+  async function saveDietPrefs() {
+    if (!session) return;
+    await ensureProfile(); // guarantee the row exists before writing settings onto it
+    const { error } = await supabaseClient.from("profiles")
+      .upsert({ id: session.user.id, diet_prefs: dietPrefs }, { onConflict: "id" });
+    if (error) toast("Couldn’t save dietary preferences — try again.");
+  }
+
+  // ---------- Bar & pantry inventory (Supabase-backed) ----------
+  function mapInventoryRow(r) {
+    return { id: r.id, section: r.section, category: r.category, name: r.name, status: r.status };
+  }
+  async function loadInventory() {
+    if (!session) { inventory = []; return; }
+    const { data, error } = await supabaseClient
+      .from("inventory_items").select("*").order("section").order("category");
+    inventory = error ? [] : (data || []).map(mapInventoryRow);
+  }
+  async function addInventoryItem({ section: sec, category, name, status }) {
+    if (!session) { toast("You've been signed out — sign in again."); return; }
+    const row = { section: sec, category: category || null, name: name || null, status: status || "in" };
+    const { data, error } = await supabaseClient
+      .from("inventory_items").insert(row).select().single();
+    if (error) { toast(`Couldn't add: ${error.message}`); return; }
+    inventory.push(mapInventoryRow(data));
+    renderInventoryPanel();
+  }
+  async function updateInventoryStatus(id, status) {
+    const item = inventory.find((i) => i.id === id);
+    if (!item) return;
+    const prev = item.status;
+    item.status = status; // optimistic
+    renderInventoryPanel();
+    const { error } = await supabaseClient.from("inventory_items").update({ status }).eq("id", id);
+    if (error) { item.status = prev; renderInventoryPanel(); toast(`Couldn't update: ${error.message}`); }
+  }
+  async function removeInventoryItem(id) {
+    const { error } = await supabaseClient.from("inventory_items").delete().eq("id", id);
+    if (error) { toast(`Couldn't remove: ${error.message}`); return; }
+    inventory = inventory.filter((i) => i.id !== id);
+    renderInventoryPanel();
+  }
+
   // Re-render every view that depends on data / filters / basket state.
   function refreshViews() {
     renderTagFilters();
@@ -563,6 +659,10 @@
       .order("name");
     const profilesPromise = loadProfiles();
     const me = session?.user?.id;
+    // Inventory + dietary prefs are independent reads used by the generator and
+    // the inventory panel — fetch alongside recipes, don't block the list render.
+    const inventoryPromise = loadInventory();
+    const dietPrefsPromise = loadMyDietPrefs();
     const sharesPromise = supabaseClient
       .from("recipe_shares")
       .select("recipe_id, shared_with_user_id")
@@ -596,6 +696,8 @@
 
     await profilesPromise; // attribution names must be ready before we render
     await ensureProfile();
+    await inventoryPromise; // resolve the background reads so a stale reload can't clobber
+    await dietPrefsPromise;
 
     // Note: we deliberately do NOT blanket-clear basket / activeTags / openItems
     // here, so adding/editing/deleting a recipe doesn't wipe the user's grocery
@@ -626,6 +728,8 @@
     seenIntro = false;
     introCardEl.hidden = true;
     planView = "dinners";
+    inventory = [];
+    dietPrefs = { diets: [], allergies: [], avoid: [] };
     mealPlan = [];
     mealPlanTray.clear();
     closePlaceSheet();
@@ -866,6 +970,7 @@
       : "Choose a new password.";
     showAccountView(view || "menu");
     accountHouseholdInput.value = householdServings || "";
+    renderDietPrefs();
     accountPanel.hidden = false;
   }
   accountBtn.addEventListener("click", () => openAccountPanel("menu"));
@@ -922,6 +1027,144 @@
     } finally {
       acctResetBusy = false;
     }
+  });
+
+  // ---------- Dietary preferences UI (account panel) ----------
+  const DIET_OPTIONS = ["vegetarian", "vegan", "pescatarian", "gluten-free", "dairy-free"];
+  function renderDietPrefs() {
+    dietDietsEl.innerHTML = DIET_OPTIONS.map((d) => {
+      const on = dietPrefs.diets.includes(d);
+      return `<button type="button" class="tag-chip diet-chip${on ? " is-on" : ""}" data-diet="${d}" aria-pressed="${on}">${d}</button>`;
+    }).join("");
+    const tagRow = (listName) => dietPrefs[listName].map((v) =>
+      `<span class="diet-tag">${esc(v)}<button type="button" class="diet-tag-x" data-diet-remove="${listName}" data-val="${esc(v)}" aria-label="Remove ${esc(v)}">×</button></span>`
+    ).join("");
+    dietAllergiesEl.innerHTML = tagRow("allergies");
+    dietAvoidEl.innerHTML = tagRow("avoid");
+  }
+  dietDietsEl.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-diet]");
+    if (!btn) return;
+    const d = btn.dataset.diet;
+    const i = dietPrefs.diets.indexOf(d);
+    if (i >= 0) dietPrefs.diets.splice(i, 1); else dietPrefs.diets.push(d);
+    renderDietPrefs();
+    saveDietPrefs();
+  });
+  function addDietTagFromInput(listName, input) {
+    const val = input.value.trim().toLowerCase().replace(/,$/, "");
+    input.value = "";
+    if (!val || dietPrefs[listName].includes(val)) return;
+    dietPrefs[listName].push(val);
+    renderDietPrefs();
+    saveDietPrefs();
+  }
+  dietAllergiesInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addDietTagFromInput("allergies", dietAllergiesInput); }
+  });
+  dietAvoidInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addDietTagFromInput("avoid", dietAvoidInput); }
+  });
+  [dietAllergiesEl, dietAvoidEl].forEach((el) => el.addEventListener("click", (e) => {
+    const x = e.target.closest("[data-diet-remove]");
+    if (!x) return;
+    const listName = x.dataset.dietRemove;
+    dietPrefs[listName] = dietPrefs[listName].filter((v) => v !== x.dataset.val);
+    renderDietPrefs();
+    saveDietPrefs();
+  }));
+
+  // ---------- Bar & pantry inventory UI ----------
+  const invCap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+  // Bar categories the user picks from (spirit types + common non-spirit bar items).
+  const BAR_CATEGORIES = ["gin", "vodka", "rum", "tequila", "mezcal", "whiskey", "bourbon", "rye", "scotch", "brandy", "liqueur", "vermouth", "amaro", "bitters", "wine", "mixer", "other"];
+  const invCategoriesFor = (sec) => (sec === "bar" ? BAR_CATEGORIES : GROCERY_CATEGORY_ORDER.slice());
+  const INV_STATUSES = ["in", "low", "out"];
+  const INV_STATUS_LABEL = { in: "In", low: "Low", out: "Out" };
+  function renderInvAddForm() {
+    invCategorySelect.innerHTML = invCategoriesFor(invSection)
+      .map((c) => `<option value="${esc(c)}">${invSection === "bar" ? invCap(c) : esc(c)}</option>`).join("");
+    invNameInput.placeholder = invSection === "bar" ? "Brand (optional)" : "Item (e.g. olive oil)";
+  }
+  function renderInventoryPanel() {
+    invTabBar.classList.toggle("is-on", invSection === "bar");
+    invTabBar.setAttribute("aria-selected", String(invSection === "bar"));
+    invTabPantry.classList.toggle("is-on", invSection === "pantry");
+    invTabPantry.setAttribute("aria-selected", String(invSection === "pantry"));
+    renderInvAddForm();
+    const items = inventory.filter((i) => i.section === invSection);
+    if (!items.length) {
+      inventoryContent.innerHTML = `<p class="inv-empty">Nothing here yet — add what you have on hand above.</p>`;
+      return;
+    }
+    const groups = {};
+    items.forEach((i) => { (groups[i.category || "other"] || (groups[i.category || "other"] = [])).push(i); });
+    const order = invCategoriesFor(invSection);
+    const cats = Object.keys(groups).sort((a, b) => {
+      const ia = order.indexOf(a), ib = order.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+    inventoryContent.innerHTML = cats.map((cat) => {
+      const rows = groups[cat].map((i) => {
+        const label = i.name
+          ? (invSection === "bar" ? `${invCap(i.category)} — ${esc(i.name)}` : esc(i.name))
+          : invCap(i.category);
+        const statusBtns = INV_STATUSES.map((s) =>
+          `<button type="button" class="inv-status-btn${i.status === s ? " is-" + s : ""}" data-inv-status="${s}" data-id="${i.id}" aria-pressed="${i.status === s}">${INV_STATUS_LABEL[s]}</button>`
+        ).join("");
+        const restock = i.status !== "in"
+          ? `<button type="button" class="inv-restock" data-inv-restock="${i.id}" title="Add to grocery list" aria-label="Add ${esc(label)} to grocery list">🛒</button>`
+          : "";
+        return `<li class="inv-row">
+          <span class="inv-row-name">${label}</span>
+          <span class="inv-status">${statusBtns}</span>
+          ${restock}
+          <button type="button" class="inv-remove" data-inv-remove="${i.id}" aria-label="Remove ${esc(label)}">×</button>
+        </li>`;
+      }).join("");
+      const heading = invSection === "bar" ? invCap(cat) : esc(cat);
+      return `<div class="inv-group"><h3 class="inv-cat">${heading}</h3><ul class="inv-list">${rows}</ul></div>`;
+    }).join("");
+  }
+  function setInvSection(sec) { invSection = sec; renderInventoryPanel(); }
+  function openInventoryPanel() {
+    invSection = section === "cocktails" ? "bar" : "pantry";
+    renderInventoryPanel();
+    inventoryPanel.hidden = false;
+  }
+  function restockToGrocery(id) {
+    const item = inventory.find((i) => i.id === id);
+    if (!item) return;
+    const name = item.name || invCap(item.category);
+    if (!name) return;
+    const norm = normalizeItemName(name);
+    if (manualGroceryItems.some((m) => normalizeItemName(m.name) === norm)) { toast("Already on your grocery list."); return; }
+    manualGroceryItems.push({ key: `manual:${Date.now()}`, name });
+    persistGrocery();
+    renderGroceryBar();
+    toast(`Added ${name} to grocery list`);
+  }
+  openInventoryBtn.addEventListener("click", openInventoryPanel);
+  closeInventoryBtn.addEventListener("click", () => (inventoryPanel.hidden = true));
+  inventoryPanel.addEventListener("click", (e) => { if (e.target === inventoryPanel) inventoryPanel.hidden = true; });
+  invTabBar.addEventListener("click", () => setInvSection("bar"));
+  invTabPantry.addEventListener("click", () => setInvSection("pantry"));
+  invAddForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const category = invCategorySelect.value;
+    const name = invNameInput.value.trim();
+    if (invSection === "pantry" && !name) { toast("Type an item name."); return; }
+    addInventoryItem({ section: invSection, category, name });
+    invNameInput.value = "";
+    invNameInput.focus();
+  });
+  inventoryContent.addEventListener("click", (e) => {
+    const statusBtn = e.target.closest("[data-inv-status]");
+    if (statusBtn) { updateInventoryStatus(statusBtn.dataset.id, statusBtn.dataset.invStatus); return; }
+    const restock = e.target.closest("[data-inv-restock]");
+    if (restock) { restockToGrocery(restock.dataset.invRestock); return; }
+    const rm = e.target.closest("[data-inv-remove]");
+    if (rm) { removeInventoryItem(rm.dataset.invRemove); return; }
   });
 
   setAuthMode("signin"); // default the gate to sign-in
@@ -2434,6 +2677,142 @@
     renderAiPhotoQueue();
   });
 
+  // ---------- AI recipe generator ----------
+  // One-shot: ingredients (+ optional quick-picks) → one recipe, funneled through
+  // the same fillRecipeFormFromExtraction path as AI import and the coach.
+  const GEN_TIME = [{ v: "quick", label: "Quick (~30 min)" }, { v: "involved", label: "Worth the effort" }];
+  const GEN_SERVINGS = [2, 4, 6];
+  const GEN_CUISINE = ["any", "italian", "mexican", "american", "asian", "mediterranean", "french"];
+  const GEN_STYLE_BAR = ["any", "classic", "sour", "highball", "tiki", "stirred"];
+  const GEN_EQUIP_KITCHEN = ["any", "stovetop", "oven", "sheet pan", "slow cooker", "air fryer", "no-cook"];
+  const GEN_EQUIP_BAR = ["any", "shaken", "stirred", "built", "blended"];
+  let genState = { ingredients: [], time: null, servings: null, cuisine: null, equipment: null };
+  let generationToken = 0;
+  const GENERATION_TIMEOUT_MS = 75_000;
+  const GENERATION_TIMEOUT = Symbol("generation-timeout");
+  const genIsBar = () => section === "cocktails";
+
+  function renderGenChips() {
+    genIngChips.innerHTML = genState.ingredients.map((ing, i) =>
+      `<span class="gen-chip">${esc(ing)}<button type="button" class="gen-chip-x" data-gen-ing="${i}" aria-label="Remove ${esc(ing)}">×</button></span>`
+    ).join("");
+  }
+  function renderGenOptions() {
+    const bar = genIsBar();
+    genCuisineLabel.textContent = bar ? "Style" : "Cuisine";
+    const single = (key, opts, valueOf, labelOf) => {
+      const row = generatePanel.querySelector(`[data-gen-single="${key}"]`);
+      row.innerHTML = opts.map((o) => {
+        const v = valueOf(o), lbl = labelOf(o);
+        const on = String(genState[key]) === String(v);
+        return `<button type="button" class="tag-chip gen-optchip${on ? " is-on" : ""}" data-gen-opt="${key}" data-val="${esc(String(v))}" aria-pressed="${on}">${esc(lbl)}</button>`;
+      }).join("");
+    };
+    single("time", GEN_TIME, (o) => o.v, (o) => o.label);
+    single("servings", GEN_SERVINGS, (o) => o, (o) => String(o));
+    single("cuisine", bar ? GEN_STYLE_BAR : GEN_CUISINE, (o) => o, (o) => invCap(o));
+    single("equipment", bar ? GEN_EQUIP_BAR : GEN_EQUIP_KITCHEN, (o) => o, (o) => invCap(o));
+  }
+  function openGeneratePanel() {
+    genState = { ingredients: [], time: null, servings: null, cuisine: null, equipment: null };
+    genIngInput.value = "";
+    generateStatus.textContent = "";
+    genHintEl.textContent = genIsBar()
+      ? "List the spirits and mixers you've got and AI will invent one cocktail. Review it before saving."
+      : "List what you've got and AI will write one recipe from it, plus common pantry staples. Review it before saving.";
+    renderGenChips();
+    renderGenOptions();
+    generateForm.hidden = false;
+    generateLoading.hidden = true;
+    generatePanel.hidden = false;
+  }
+  function closeGeneratePanel() {
+    generationToken++; // abandon any in-flight generation
+    generatePanel.hidden = true;
+  }
+  function addGenIngredient(raw) {
+    const val = String(raw).trim().replace(/,$/, "");
+    if (!val) return;
+    const norm = val.toLowerCase();
+    if (!genState.ingredients.some((x) => x.toLowerCase() === norm)) genState.ingredients.push(val);
+    genIngInput.value = "";
+    renderGenChips();
+  }
+  async function runGeneration() {
+    if (!genState.ingredients.length) { generateStatus.textContent = "Add at least one ingredient first."; return; }
+    const token = ++generationToken;
+    generateForm.hidden = true;
+    generateLoading.hidden = false;
+    generateStatus.textContent = "";
+
+    const payload = {
+      ingredients: genState.ingredients.slice(),
+      section: genIsBar() ? "bar" : "kitchen",
+      chips: {
+        time: genState.time || undefined,
+        servings: genState.servings ? Number(genState.servings) : undefined,
+        cuisine: genState.cuisine && genState.cuisine !== "any" ? genState.cuisine : undefined,
+        equipment: genState.equipment && genState.equipment !== "any" ? genState.equipment : undefined
+      },
+      dietPrefs
+    };
+    const invokePromise = supabaseClient.functions.invoke("generate-recipe", {
+      body: payload
+    }).catch((error) => ({ error }));
+    const timeoutPromise = new Promise((resolve) =>
+      setTimeout(() => resolve(GENERATION_TIMEOUT), GENERATION_TIMEOUT_MS)
+    );
+    const result = await Promise.race([invokePromise, timeoutPromise]);
+
+    if (token !== generationToken || generatePanel.hidden) return; // stale / cancelled
+
+    if (result === GENERATION_TIMEOUT) {
+      generateForm.hidden = false;
+      generateLoading.hidden = true;
+      generateStatus.textContent = "That's taking too long — check your connection and try again.";
+      return;
+    }
+    const { data, error } = result;
+    if (error || data?.error) {
+      generateForm.hidden = false;
+      generateLoading.hidden = true;
+      generateStatus.textContent = `Error: ${data?.error || error.message}`;
+      return;
+    }
+    closeGeneratePanel();
+    openRecipeForm(null);
+    fillRecipeFormFromExtraction(data.recipe);
+    recipeFormStatus.textContent = "AI generated this recipe — please review before saving.";
+  }
+
+  addRecipeGenerateBtn.addEventListener("click", openGeneratePanel);
+  closeGenerateBtn.addEventListener("click", closeGeneratePanel);
+  generateCancelBtn.addEventListener("click", closeGeneratePanel);
+  genSubmitBtn.addEventListener("click", runGeneration);
+  genIngInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addGenIngredient(genIngInput.value); }
+  });
+  genIngChips.addEventListener("click", (e) => {
+    const x = e.target.closest("[data-gen-ing]");
+    if (!x) return;
+    genState.ingredients.splice(Number(x.dataset.genIng), 1);
+    renderGenChips();
+  });
+  genUseInventoryBtn.addEventListener("click", () => {
+    const target = genIsBar() ? "bar" : "pantry";
+    const avail = inventory.filter((i) => i.section === target && i.status !== "out");
+    if (!avail.length) { toast("No inventory yet — add items in Bar & Pantry (📦)."); return; }
+    avail.forEach((i) => addGenIngredient(i.name || invCap(i.category)));
+  });
+  generatePanel.addEventListener("click", (e) => {
+    if (e.target === generatePanel) { closeGeneratePanel(); return; }
+    const opt = e.target.closest("[data-gen-opt]");
+    if (!opt) return;
+    const key = opt.dataset.genOpt;
+    genState[key] = String(genState[key]) === opt.dataset.val ? null : opt.dataset.val;
+    renderGenOptions();
+  });
+
   // ---------- AI recipe coach (troubleshoot / improve) ----------
   // A conversational assistant scoped to one recipe. The full thread is held
   // client-side and resent each turn (the Edge Function is stateless); in
@@ -3403,8 +3782,8 @@
       closeAddMenu();
     }
   });
-  // Close menu after either action opens its panel
-  [addRecipeAiBtn, addRecipeBtn].forEach((b) => b.addEventListener("click", closeAddMenu));
+  // Close menu after any action opens its panel
+  [addRecipeAiBtn, addRecipeGenerateBtn, addRecipeBtn].forEach((b) => b.addEventListener("click", closeAddMenu));
 
   // ---------- Recipe detail "⋯ More" menu ----------
   // A single shared floating menu (same fixed-position pattern as #add-menu),
@@ -3560,6 +3939,8 @@
     if (!recipeFormPanel.hidden) closeRecipeForm();
     if (!aiImportPanel.hidden) closeAiImport();
     if (!coachPanel.hidden) closeCoachPanel();
+    if (!inventoryPanel.hidden) inventoryPanel.hidden = true;
+    if (!generatePanel.hidden) closeGeneratePanel();
   });
 
   // ---------- Init ----------

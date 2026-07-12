@@ -1813,3 +1813,76 @@ button:focus-visible, input:focus-visible {
   .result-row-actions { display: none; }
 }
 @media (min-width: 561px) { .add-fab { display: none; } }
+
+/* ---------- Dietary preferences (account panel) ---------- */
+.diet-prefs { border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.diet-prefs-h { margin: 0; font-weight: 600; font-size: 0.95rem; color: var(--ink); }
+.diet-prefs-sub { margin: -6px 0 2px; font-size: 0.82rem; color: var(--faint); }
+.diet-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.diet-chip { text-transform: capitalize; cursor: pointer; }
+.diet-field { display: flex; flex-direction: column; gap: 6px; font-size: 0.88rem; color: var(--ink); }
+.diet-hard { color: var(--campari, #B5402A); font-size: 0.8rem; }
+.diet-soft { color: var(--faint); font-size: 0.8rem; }
+.diet-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.diet-tags:empty { display: none; }
+.diet-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink);
+  background: var(--chip); border-radius: 999px; padding: 3px 6px 3px 10px;
+}
+.diet-tag-x { border: 0; background: none; color: var(--faint); font-size: 1rem; line-height: 1; padding: 0 2px; cursor: pointer; }
+.diet-tag-x:hover { color: var(--accent); }
+
+/* ---------- Bar & pantry inventory ---------- */
+.inv-hint { margin: 12px 0; font-size: 0.85rem; color: var(--faint); }
+.inv-add { display: flex; gap: 8px; margin-bottom: 16px; }
+.inv-add .inv-category { flex: 0 0 auto; max-width: 42%; }
+.inv-add .inv-name { flex: 1; }
+.inventory-content { display: flex; flex-direction: column; gap: 18px; }
+.inv-empty { color: var(--faint); font-size: 0.9rem; text-align: center; padding: 18px 0; }
+.inv-cat {
+  margin: 0 0 6px; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint);
+}
+.inv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.inv-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dotted var(--line); }
+.inv-row:last-child { border-bottom: 0; }
+.inv-row-name { flex: 1; min-width: 0; font-size: 0.95rem; }
+.inv-status { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.inv-status-btn {
+  border: 0; background: transparent; color: var(--faint);
+  font-family: var(--font-mono); font-size: 0.72rem; padding: 4px 9px; cursor: pointer;
+}
+.inv-status-btn + .inv-status-btn { border-left: 1px solid var(--line); }
+.inv-status-btn.is-in { background: var(--accent); color: #fff; }
+.inv-status-btn.is-low { background: #C8862A; color: #fff; }
+.inv-status-btn.is-out { background: #B5402A; color: #fff; }
+.inv-restock, .inv-remove { border: 0; background: none; cursor: pointer; padding: 2px 4px; font-size: 1rem; line-height: 1; }
+.inv-restock { font-size: 0.95rem; }
+.inv-remove { color: var(--faint); }
+.inv-remove:hover { color: var(--campari, #B5402A); }
+
+/* ---------- AI recipe generator ---------- */
+.gen-hint { margin: 0 0 14px; font-size: 0.9rem; color: var(--ink); line-height: 1.5; }
+.gen-chips, .gen-ing-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.gen-chips { margin-bottom: 8px; }
+.gen-chips:empty { display: none; margin-bottom: 0; }
+.gen-ing-row { align-items: center; }
+.gen-ing-row .search { flex: 1; min-width: 160px; }
+.gen-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.85rem; color: var(--ink);
+  background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 999px;
+  padding: 4px 6px 4px 12px;
+}
+.gen-chip-x { border: 0; background: none; color: var(--accent); font-size: 1rem; line-height: 1; padding: 0 2px; cursor: pointer; }
+.gen-opts { display: flex; flex-direction: column; gap: 12px; margin: 18px 0; }
+.gen-opt { display: flex; flex-direction: column; gap: 6px; }
+.gen-opt-label {
+  font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--faint);
+}
+.gen-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.gen-optchip { text-transform: capitalize; cursor: pointer; }
+.gen-submit { width: 100%; margin-top: 4px; }
+.gen-tip { margin: 10px 0 0; font-size: 0.8rem; color: var(--faint); text-align: center; }

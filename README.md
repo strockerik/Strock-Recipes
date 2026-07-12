@@ -421,15 +421,52 @@ create index meal_plan_entries_user_date on public.meal_plan_entries (user_id, p
 
 Until this runs, the planner just shows up empty (it fails open).
 
+## Bar & pantry inventory + dietary preferences
+
+Two additions that power the AI recipe generator: a per-user inventory of what's
+on hand (bar liquor by type + optional brand, and pantry staples), and dietary
+preferences/allergies stored on the profile so the generator honors them
+silently across devices.
+
+**One-time setup (Supabase SQL editor)** — run once:
+
+```sql
+-- Dietary preferences on the existing profile row (owner-only RLS already covers it).
+-- Shape: { "diets": ["vegetarian"], "allergies": ["peanut"], "avoid": ["cilantro"] }
+alter table public.profiles
+  add column if not exists diet_prefs jsonb not null default '{}'::jsonb;
+
+-- Inventory: one row per tracked item, owner-only (same pattern as meal_plan_entries).
+create table public.inventory_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  section text not null check (section in ('bar','pantry')),
+  category text,        -- bar: spirit type (rum/gin/…); pantry: aisle bucket
+  name text,            -- bar: optional brand; pantry: staple name
+  status text not null default 'in' check (status in ('in','low','out')),
+  created_at timestamptz not null default now()
+);
+alter table public.inventory_items enable row level security;
+create policy "owners manage their inventory" on public.inventory_items
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create index inventory_items_user_section on public.inventory_items (user_id, section);
+```
+
+Until this runs, inventory shows empty and dietary preferences silently no-op
+(both fail open).
+
 ## AI usage limits
 
-Two independent per-user daily caps, both enforced server-side (in the Edge
+Three independent per-user daily caps, all enforced server-side (in the Edge
 Functions, via `SECURITY DEFINER` RPCs) so they can't be bypassed from the
-browser, and both resetting at midnight UTC:
+browser, and all resetting at midnight UTC:
 
 - **20 AI extractions/day** — `extract-recipe` (any mix of photo, text, or link).
 - **20 AI coaching requests/day** — `recipe-coach` (each ✨ Ask AI message,
   including an "emphasize this in the recipe" request, counts as one).
+- **20 AI recipe generations/day** — `generate-recipe` (each "Generate a recipe"
+  from on-hand ingredients counts as one).
 
 Each limit is a single constant in its Edge Function (`DAILY_EXTRACTION_LIMIT` /
 `DAILY_COACH_LIMIT`) — change the number and redeploy that function. Each uses its
@@ -514,9 +551,48 @@ $$;
 grant execute on function public.increment_coach_usage(int) to authenticated;
 ```
 
-If either SQL block hasn't been run yet (or an RPC call errors for any reason),
-that Edge Function fails open — the request proceeds without a cap rather than
-breaking.
+**And once for the AI recipe generator** — same pattern, its own bucket
+(20 generations/day), used by the `generate-recipe` function:
+
+```sql
+create table public.generation_usage (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  usage_date date not null,
+  count int not null default 0,
+  primary key (user_id, usage_date)
+);
+alter table public.generation_usage enable row level security;
+-- No policies on purpose: reachable only via the SECURITY DEFINER function below.
+
+create or replace function public.increment_generation_usage(daily_limit int)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  updated_count int;
+begin
+  insert into public.generation_usage as gu (user_id, usage_date, count)
+  values (auth.uid(), (now() at time zone 'utc')::date, 1)
+  on conflict (user_id, usage_date) do update
+    set count = gu.count + 1
+    where gu.count < daily_limit
+  returning gu.count into updated_count;
+
+  if updated_count is null then
+    return -1; -- already at/over the limit, not incremented
+  end if;
+  return updated_count;
+end;
+$$;
+
+grant execute on function public.increment_generation_usage(int) to authenticated;
+```
+
+If any of these SQL blocks hasn't been run yet (or an RPC call errors for any
+reason), that Edge Function fails open — the request proceeds without a cap
+rather than breaking.
 
 **Verifying setup:** don't call the RPCs directly from the SQL editor — they run
 there as `postgres` with no signed-in user, so `auth.uid()` is null and the insert
@@ -534,7 +610,7 @@ use the feature and watch the count climb (the 21st same-day call returns the
 
 ## Edge Function deployment (AI)
 
-There are **two** Edge Functions, each deployed via the Supabase dashboard (Edge
+There are **three** Edge Functions, each deployed via the Supabase dashboard (Edge
 Functions → the in-browser editor), with the repo files as the source of truth —
 keep them in sync when editing:
 
@@ -542,6 +618,9 @@ keep them in sync when editing:
 - **`recipe-coach`** — the AI coach (troubleshoot / improve an existing recipe).
   Deploy it the same way: create the function, paste in
   `supabase/functions/recipe-coach/index.ts`, Deploy.
+- **`generate-recipe`** — the AI recipe generator (on-hand ingredients → a new
+  recipe). Same deploy: create the function, paste in
+  `supabase/functions/generate-recipe/index.ts`, Deploy.
 
 Requirements (apply to **both** functions):
 
