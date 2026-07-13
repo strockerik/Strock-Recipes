@@ -1852,6 +1852,7 @@ button:focus-visible, input:focus-visible {
 .inv-add .solid-btn { flex: 0 0 auto; }
 .inventory-content { display: flex; flex-direction: column; gap: 18px; }
 .inv-empty { color: var(--faint); font-size: 0.9rem; text-align: center; padding: 18px 0; }
+.gen-from-inv { width: 100%; margin-top: 18px; }
 .inv-cat {
   margin: 0 0 6px; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent);
@@ -1878,6 +1879,12 @@ button:focus-visible, input:focus-visible {
 
 /* ---------- AI recipe generator ---------- */
 .gen-hint { margin: 0 0 14px; font-size: 0.9rem; color: var(--ink); line-height: 1.5; }
+.gen-diet-line { margin: -6px 0 14px; font-size: 0.82rem; color: var(--faint); }
+.link-inline {
+  background: none; border: 0; padding: 0; margin: 0; font: inherit; font-size: inherit;
+  color: var(--accent); text-decoration: underline; cursor: pointer;
+}
+.link-inline:hover { color: var(--ink); }
 .gen-chips, .gen-ing-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .gen-chips { margin-bottom: 8px; }
 .gen-chips:empty { display: none; margin-bottom: 0; }

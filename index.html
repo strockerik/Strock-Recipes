@@ -626,6 +626,7 @@
         <button type="submit" class="solid-btn small">Add</button>
       </form>
       <div id="inventory-content" class="inventory-content"></div>
+      <button type="button" id="inv-generate" class="solid-btn gen-from-inv" hidden>🪄 Generate a recipe from these</button>
     </div>
   </div>
 
@@ -639,6 +640,7 @@
 
       <div id="generate-form">
         <p class="gen-hint" id="gen-hint">List what you've got and AI will write one recipe from it, plus common pantry staples. Review it before saving.</p>
+        <p class="gen-diet-line" id="gen-diet-line"></p>
         <div class="gen-ing">
           <div id="gen-ing-chips" class="gen-chips"></div>
           <div class="gen-ing-row">

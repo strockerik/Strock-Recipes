@@ -208,6 +208,7 @@
   const invCategorySelect = $("#inv-category");
   const invNameInput = $("#inv-name");
   const inventoryContent = $("#inventory-content");
+  const invGenerateBtn = $("#inv-generate");
 
   // AI recipe generator panel
   const addRecipeGenerateBtn = $("#add-recipe-generate");
@@ -218,6 +219,7 @@
   const generateStatus = $("#generate-status");
   const generateCancelBtn = $("#generate-cancel");
   const genHintEl = $("#gen-hint");
+  const genDietLineEl = $("#gen-diet-line");
   const genIngChips = $("#gen-ing-chips");
   const genIngInput = $("#gen-ing-input");
   const genIngAddBtn = $("#gen-ing-add");
@@ -1077,6 +1079,16 @@
 
   // ---------- Bar & pantry inventory UI ----------
   const invCap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+  // Text sent to the generator for one inventory item: bar items lead with the
+  // spirit TYPE (what the AI actually reasons about), keeping the brand in
+  // parens when set, rather than a bare brand name it would have to reverse-map
+  // ("Tanqueray" -> "gin"). Pantry items are just their name.
+  function genIngredientText(item) {
+    if (item.section === "bar") {
+      return item.name ? `${invCap(item.category)} (${item.name})` : invCap(item.category);
+    }
+    return item.name || invCap(item.category);
+  }
   // Bar categories the user picks from (spirit types + common non-spirit bar items).
   const BAR_CATEGORIES = ["gin", "vodka", "rum", "tequila", "mezcal", "whiskey", "bourbon", "rye", "scotch", "brandy", "liqueur", "vermouth", "amaro", "bitters", "wine", "mixer", "other"];
   const invCategoriesFor = (sec) => (sec === "bar" ? BAR_CATEGORIES : GROCERY_CATEGORY_ORDER.slice());
@@ -1098,6 +1110,11 @@
     inventoryPanel.classList.toggle("is-pantry", invSection === "pantry");
     renderInvAddForm();
     const items = inventory.filter((i) => i.section === invSection);
+    // The bridge back to the generator: only worth showing once there's
+    // something in-stock to actually cook or mix with.
+    const avail = items.filter((i) => i.status !== "out");
+    invGenerateBtn.hidden = avail.length === 0;
+    invGenerateBtn.textContent = invSection === "bar" ? "🪄 Generate a cocktail from these" : "🪄 Generate a recipe from these";
     if (!items.length) {
       inventoryContent.innerHTML = `<p class="inv-empty">Nothing here yet — add what you have on hand above.</p>`;
       return;
@@ -1170,6 +1187,16 @@
     if (restock) { restockToGrocery(restock.dataset.invRestock); return; }
     const rm = e.target.closest("[data-inv-remove]");
     if (rm) { removeInventoryItem(rm.dataset.invRemove); return; }
+  });
+  // The inventory -> generator bridge: hand off whatever's in-stock on the
+  // current sub-tab, forcing the generator into the matching kitchen/bar mode
+  // regardless of which main Kitchen/Bar tab is currently selected.
+  invGenerateBtn.addEventListener("click", () => {
+    const avail = inventory.filter((i) => i.section === invSection && i.status !== "out");
+    if (!avail.length) return;
+    inventoryPanel.hidden = true;
+    openGeneratePanel(invSection === "bar" ? "bar" : "kitchen");
+    avail.forEach((i) => addGenIngredient(genIngredientText(i)));
   });
 
   setAuthMode("signin"); // default the gate to sign-in
@@ -2700,7 +2727,11 @@
   let generationToken = 0;
   const GENERATION_TIMEOUT_MS = 75_000;
   const GENERATION_TIMEOUT = Symbol("generation-timeout");
-  const genIsBar = () => section === "cocktails";
+  // Normally the generator follows the main Kitchen/Bar tab, but it can be
+  // opened forced into one mode (e.g. from the inventory panel's "Generate from
+  // these" button on the Bar sub-tab) without touching the main tab underneath.
+  let genForcedSection = null; // "bar" | "kitchen" | null
+  const genIsBar = () => (genForcedSection ? genForcedSection === "bar" : section === "cocktails");
 
   function renderGenChips() {
     genIngChips.innerHTML = genState.ingredients.map((ing, i) =>
@@ -2723,19 +2754,41 @@
     single("cuisine", bar ? GEN_STYLE_BAR : GEN_CUISINE, (o) => o, (o) => invCap(o));
     single("equipment", bar ? GEN_EQUIP_BAR : GEN_EQUIP_KITCHEN, (o) => o, (o) => invCap(o));
   }
-  function openGeneratePanel() {
+  function openGeneratePanel(forceSection) {
+    genForcedSection = forceSection || null;
     genState = { ingredients: [], time: null, servings: null, cuisine: null, equipment: null };
     genIngInput.value = "";
     generateStatus.textContent = "";
-    genHintEl.textContent = genIsBar()
+    const bar = genIsBar();
+    genHintEl.textContent = bar
       ? "List the spirits and mixers you've got and AI will invent one cocktail. Review it before saving."
       : "List what you've got and AI will write one recipe from it, plus common pantry staples. Review it before saving.";
+    genIngInput.placeholder = bar ? "Type an ingredient (e.g. gin, lime, mint)" : "Type an ingredient (e.g. chicken thighs)";
+    renderGenDietLine();
     renderGenChips();
     renderGenOptions();
     generateForm.hidden = false;
     generateLoading.hidden = true;
     generatePanel.hidden = false;
   }
+  // Dietary preferences are applied silently, but a first-time user has no way
+  // to know that — surface a quiet line naming what's honored, or a link to set
+  // them up if nothing's been chosen yet.
+  function renderGenDietLine() {
+    const parts = [
+      ...dietPrefs.diets,
+      ...dietPrefs.allergies.map((a) => `no ${a}`),
+      ...dietPrefs.avoid.map((a) => `avoiding ${a}`)
+    ];
+    genDietLineEl.innerHTML = parts.length
+      ? `Honoring your preferences (${esc(parts.join(", "))}) · <button type="button" id="gen-diet-edit" class="link-inline">Edit</button>`
+      : `<button type="button" id="gen-diet-edit" class="link-inline">Set dietary preferences</button>`;
+  }
+  genDietLineEl.addEventListener("click", (e) => {
+    if (!e.target.closest("#gen-diet-edit")) return;
+    closeGeneratePanel();
+    openAccountPanel("menu");
+  });
   function closeGeneratePanel() {
     generationToken++; // abandon any in-flight generation
     generatePanel.hidden = true;
@@ -2795,7 +2848,7 @@
     recipeFormStatus.textContent = "AI generated this recipe — please review before saving.";
   }
 
-  addRecipeGenerateBtn.addEventListener("click", openGeneratePanel);
+  addRecipeGenerateBtn.addEventListener("click", () => openGeneratePanel());
   closeGenerateBtn.addEventListener("click", closeGeneratePanel);
   generateCancelBtn.addEventListener("click", closeGeneratePanel);
   genSubmitBtn.addEventListener("click", runGeneration);
@@ -2813,7 +2866,7 @@
     const target = genIsBar() ? "bar" : "pantry";
     const avail = inventory.filter((i) => i.section === target && i.status !== "out");
     if (!avail.length) { toast("No inventory yet — add items in Bar & Pantry (📦)."); return; }
-    avail.forEach((i) => addGenIngredient(i.name || invCap(i.category)));
+    avail.forEach((i) => addGenIngredient(genIngredientText(i)));
   });
   generatePanel.addEventListener("click", (e) => {
     if (e.target === generatePanel) { closeGeneratePanel(); return; }
