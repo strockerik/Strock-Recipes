@@ -488,7 +488,10 @@
     { name: "Dairy & Eggs", terms: ["milk", "butter", "cheese", "cheddar", "mozzarella", "parmesan", "parmigiano", "feta", "ricotta", "gouda", "swiss cheese", "provolone", "monterey jack", "pepper jack", "cream cheese", "sour cream", "heavy cream", "whipping cream", "half and half", "yogurt", "yoghurt", "egg", "eggs", "margarine", "buttermilk", "cottage cheese", "mascarpone", "creme fraiche", "almond milk", "oat milk", "soy milk", "cream", "burrata", "pecorino", "romano", "gruyere", "gruyère", "asiago", "manchego", "brie", "camembert", "havarti", "queso", "cotija", "halloumi", "paneer"] },
     { name: "Dry Goods & Baking", terms: ["flour", "sugar", "brown sugar", "powdered sugar", "confectioners", "rice", "pasta", "spaghetti", "penne", "macaroni", "fettuccine", "linguine", "noodle", "noodles", "bucatini", "rigatoni", "fusilli", "farfalle", "orzo", "ziti", "rotini", "tagliatelle", "pappardelle", "gnocchi", "lasagna", "lasagne", "vermicelli", "cavatappi", "orecchiette", "gemelli", "ravioli", "tortellini", "cannelloni", "manicotti", "angel hair", "capellini", "ditalini", "paccheri", "conchiglie", "oat", "oats", "oatmeal", "quinoa", "lentil", "lentils", "couscous", "barley", "cornmeal", "cornstarch", "corn starch", "baking powder", "baking soda", "yeast", "cocoa", "vanilla", "almond extract", "chocolate chip", "chocolate chips", "chocolate", "nut", "nuts", "almond", "almonds", "walnut", "walnuts", "pecan", "pecans", "cashew", "cashews", "peanut", "peanuts", "raisin", "raisins", "honey", "maple syrup", "syrup", "molasses", "breadcrumb", "breadcrumbs", "panko", "cereal", "granola", "cracker", "crackers", "gelatin", "shortening", "split pea", "polenta", "grits", "sesame seed", "sesame seeds", "chia", "flax", "sunflower seed", "shredded coconut", "coconut flake", "marshmallow", "marshmallows", "sprinkles", "cake mix", "pancake mix", "baking mix", "crisco", "semolina", "masa", "arrowroot", "tapioca"] },
     { name: "Condiments, Sauces & Spices", terms: ["salt", "pepper", "peppercorn", "soy sauce", "worcestershire", "fish sauce", "oyster sauce", "hoisin", "sriracha", "hot sauce", "tabasco", "ketchup", "catsup", "mustard", "mayo", "mayonnaise", "vinegar", "oil", "olive oil", "vegetable oil", "canola", "sesame oil", "cooking spray", "dressing", "ranch", "bbq sauce", "barbecue sauce", "teriyaki", "gravy", "pesto", "tahini", "miso", "gochujang", "sambal", "harissa", "horseradish", "spice", "spices", "cumin", "paprika", "cinnamon", "nutmeg", "oregano", "garlic powder", "onion powder", "chili powder", "cayenne", "turmeric", "curry", "coriander", "cardamom", "clove", "cloves", "allspice", "bay leaf", "bay leaves", "red pepper flake", "red pepper flakes", "italian seasoning", "seasoning", "garam masala", "extract", "mustard seed", "sea salt", "kosher salt", "taco seasoning", "sauce"] },
-    { name: "Beverages", terms: ["wine", "beer", "ale", "lager", "cider", "soda", "cola", "tonic", "club soda", "sparkling water", "seltzer", "coffee", "espresso", "tea", "rum", "vodka", "gin", "tequila", "whiskey", "whisky", "bourbon", "brandy", "vermouth", "liqueur", "triple sec", "champagne", "prosecco", "sake", "lemonade", "campari", "aperol", "chartreuse", "amaro", "amaretto", "cointreau", "grand marnier", "st-germain", "pimm", "bitters", "angostura", "sherry", "port", "mezcal", "scotch", "rye", "absinthe", "curacao", "verjus", "shochu", "shōchū", "soju", "spirit"] }
+    // Alcohol gets its own aisle, separate from non-alcoholic Beverages, so a
+    // bar restock (wine, spirits, liqueurs, bitters) never mixes with soda/coffee/tea.
+    { name: "Alcohol", terms: ["wine", "beer", "ale", "lager", "cider", "rum", "vodka", "gin", "tequila", "whiskey", "whisky", "bourbon", "brandy", "vermouth", "liqueur", "triple sec", "champagne", "prosecco", "sake", "campari", "aperol", "chartreuse", "amaro", "amaretto", "cointreau", "grand marnier", "st-germain", "pimm", "bitters", "angostura", "sherry", "port", "mezcal", "scotch", "rye", "absinthe", "curacao", "verjus", "shochu", "shōchū", "soju", "spirit"] },
+    { name: "Beverages", terms: ["soda", "cola", "tonic", "club soda", "sparkling water", "seltzer", "coffee", "espresso", "tea", "lemonade"] }
   ];
   const GROCERY_CATEGORY_RE = GROCERY_CATEGORY_RULES.map((c) => ({
     name: c.name,
@@ -498,7 +501,7 @@
   // Default store-walk order for display (independent of the match-priority
   // order above); empty sections are skipped, "Other" is always last. The
   // user can customize this via "Reorder aisles" — see aisleOrder/loadStoredAisleOrder.
-  const GROCERY_CATEGORY_ORDER = ["Produce", "Bakery", "Meat & Seafood", "Dairy & Eggs", "Frozen", "Canned & Jarred", "Dry Goods & Baking", "Condiments, Sauces & Spices", "Beverages", OTHER_CATEGORY];
+  const GROCERY_CATEGORY_ORDER = ["Produce", "Bakery", "Meat & Seafood", "Dairy & Eggs", "Frozen", "Canned & Jarred", "Dry Goods & Baking", "Condiments, Sauces & Spices", "Beverages", "Alcohol", OTHER_CATEGORY];
 
   // Merge a stored aisle order with the current category list, so a category
   // added to the app after the user last reordered still shows up (appended,
@@ -1089,6 +1092,17 @@
     }
     return item.name || invCap(item.category);
   }
+  // Label for a restocked item on the grocery list: bar items show as
+  // "Category - Brand" (e.g. "Tequila - Cimmaron") so the item both reads
+  // clearly AND still categorizes correctly (categorizeGrocery matches on the
+  // leading spirit-type word even after normalizeItemName trims the " - …" part
+  // for its own comparison purposes). Pantry items are just their name.
+  function invGroceryLabel(item) {
+    if (item.section === "bar") {
+      return item.name ? `${invCap(item.category)} - ${item.name}` : invCap(item.category);
+    }
+    return item.name || invCap(item.category);
+  }
   // Bar categories the user picks from (spirit types + common non-spirit bar items).
   const BAR_CATEGORIES = ["gin", "vodka", "rum", "tequila", "mezcal", "whiskey", "bourbon", "rye", "scotch", "brandy", "liqueur", "vermouth", "amaro", "bitters", "wine", "mixer", "other"];
   // Pantry inventory is for stock that keeps for a month or more — a deliberately
@@ -1164,10 +1178,13 @@
   function restockToGrocery(id) {
     const item = inventory.find((i) => i.id === id);
     if (!item) return;
-    const name = item.name || invCap(item.category);
+    const name = invGroceryLabel(item);
     if (!name) return;
-    const norm = normalizeItemName(name);
-    if (manualGroceryItems.some((m) => normalizeItemName(m.name) === norm)) { toast("Already on your grocery list."); return; }
+    // Exact (case-insensitive) match, not normalizeItemName: its "drop the part
+    // after ' - '" rule (meant for prep notes like "olive oil — a splash") would
+    // otherwise treat "Tequila - Cimmaron" and "Tequila - Don Julio" as the same
+    // item and block the second brand from ever being added.
+    if (manualGroceryItems.some((m) => m.name.toLowerCase() === name.toLowerCase())) { toast("Already on your grocery list."); return; }
     manualGroceryItems.push({ key: `manual:${Date.now()}`, name });
     persistGrocery();
     renderGroceryBar();
