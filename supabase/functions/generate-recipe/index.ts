@@ -92,7 +92,7 @@ const RECIPE_SCHEMA = {
       },
       description: "Ordered list of method/instruction steps"
     },
-    notes: { type: ["string", "null"], description: "Tips, variations, and — importantly — any specialty items the user likely needs to BUY (not on-hand). Or null." }
+    notes: { type: ["string", "null"], description: "Tips and variations. If any ingredient beyond what the user listed (plus assumed staples) was added, the note MUST start with a line reading exactly 'Buy: ' followed by a comma-separated list of just those items — see the grocery-run rules in the system prompt. Or null if nothing to buy and no tips." }
   },
   required: ["name", "subtitle", "source", "section", "tags", "base_servings", "servings_label", "ingredients", "method", "notes"]
 };
@@ -102,13 +102,26 @@ const SYSTEM_PROMPT = `You are a home-cooking recipe developer. From a short lis
 PANTRY MODEL — assume a normal kitchen, don't over-shop:
 - Tier 1 (assume freely, no need to flag): salt, black pepper, water, a neutral cooking oil, and — for baking context only — basic amounts of flour/sugar.
 - Tier 2 (use if a normal cook plausibly has it; it's fine to include): olive oil, butter, eggs, milk, garlic, onion, common dried spices (cumin, paprika, chili powder, oregano, basil, garlic/onion powder), soy sauce, vinegar, stock, canned tomatoes, rice, pasta, sugar, honey, cornstarch.
-- Tier 3 (do NOT assume): specific proteins, fresh herbs, specialty cheeses, fish sauce/miso/gochujang, wine, buttermilk, heavy cream, nuts, specific produce. Build the recipe from the user's listed ingredients + Tier 1/2. Use AT MOST 1-2 Tier-3 items the user did NOT list, and only if the dish needs them — list those in 'notes' as "You'll need to buy: …".
+- Tier 3 (specialty/perishable — proteins beyond what's listed, fresh herbs, specialty cheeses, fish sauce/miso/gochujang, wine, buttermilk, heavy cream, nuts, specific fresh produce not listed): governed by the user's grocery-run choice in the request. This is a HARD LIMIT — count your Tier-3 additions before answering:
+  - "Grocery run: NONE" — zero Tier-3 additions, no exceptions. If the dish would otherwise be incomplete, substitute from Tier 1/2 or the user's listed ingredients, or make a simpler version instead. Never add a Tier-3 item just because it would improve the dish.
+  - "Grocery run: OK" — up to about 4 Tier-3 items are fine if they meaningfully improve the dish.
+  - Not specified — be conservative: at most 1 Tier-3 item, and only if the dish genuinely needs it.
+  - Any time you add so much as one Tier-3 item, 'notes' MUST begin with a line reading exactly "Buy: " followed by that item (or comma-separated items) — never bury a shopping need in prose the user might skim past.
 
 QUANTITIES — ground every amount in standard culinary ratios, never guess:
 - Vinaigrette 3:1 oil:acid. Pasta ~1 lb : 6 qt salted water; tomato sauce ~1.5 cups per lb dry pasta, cream/oil sauce ~1 cup per lb; finish pasta in the sauce with a splash of pasta water.
 - Rice pilaf 2:1 liquid:rice. Braise: liquid covers meat ~1/3-2/3; stew: liquid covers fully; cook to fork-tender. Puréed veg soup ~3:1 liquid:solid.
 - Cocktails: a sour is ~2:1:1 spirit:sweet:sour (e.g. 2 oz : 0.75 oz : 0.75 oz); stirred/spirit-forward is roughly equal-to-2:1 parts; a highball is ~1 part spirit : 3 parts mixer. Express bar amounts in oz.
 - Season in stages, build an aromatic base, balance fat and acid, and finish with something bright. These technique cues are what make a recipe feel tested — include them in the steps.
+
+CUISINE FLAVOR BASES — when a cuisine/style lean is specified, ground the dish in its real flavor grammar (don't just put the word in the title):
+- italian: garlic, basil, oregano, tomato, olive oil, Parmesan, crushed red pepper
+- mexican: cumin, chili powder or dried chiles, lime, cilantro, garlic, onion
+- american: butter, black pepper, thyme, Worcestershire, garlic/onion powder
+- asian: soy sauce, ginger, garlic, sesame oil, scallion, rice vinegar
+- mediterranean: olive oil, lemon, oregano, garlic, feta, fresh herbs
+- french: butter, shallot, dry white wine or stock, Dijon mustard, tarragon or thyme, cream
+If no cuisine is specified, let the listed ingredients suggest a coherent direction rather than defaulting to generic "American."
 
 COHERENCE & SAFETY:
 - Keep the dish internally consistent — a title, ingredients, and method that genuinely belong to the SAME dish. No stitched-together "Frankenstein" combinations.
@@ -117,8 +130,8 @@ COHERENCE & SAFETY:
 
 OUTPUT:
 - section must match what was requested (bar → a cocktail with bar tags and oz amounts; kitchen → a dish).
-- source is "AI generated". Pick 0-3 tags from the allowed list only. Give concrete amounts and a sensible base_servings/servings_label. Put anything the user must buy in 'notes'.
-- If the listed ingredients genuinely can't form a coherent dish, make the closest sensible recipe and explain the assumptions in 'notes' — do not invent an implausible dish.`;
+- source is "AI generated". Pick 0-3 tags from the allowed list only. Give concrete amounts and a sensible base_servings/servings_label.
+- If the listed ingredients genuinely can't form a coherent dish, make the closest sensible recipe and explain the assumptions in 'notes' (after any required "Buy: " line) — do not invent an implausible dish.`;
 
 function listOrNone(arr: unknown): string {
   return Array.isArray(arr) && arr.length ? arr.join(", ") : "none";
@@ -180,6 +193,8 @@ Deno.serve(async (req) => {
       : `Invent ONE kitchen recipe using these on-hand ingredients:`);
     reqLines.push(ingredients.map((i: string) => `- ${i}`).join("\n"));
     reqLines.push("");
+    if (chips.groceryRun === "none") reqLines.push(`Grocery run: NONE — use ONLY what's listed above plus Tier 1/2 staples.`);
+    else if (chips.groceryRun === "quick") reqLines.push(`Grocery run: OK — a few extra items are fine if they meaningfully improve the dish.`);
     if (chips.cuisine) reqLines.push(section === "bar" ? `Style lean: ${chips.cuisine}.` : `Cuisine lean: ${chips.cuisine}.`);
     if (chips.time === "quick") reqLines.push(`Keep it quick — about 30 minutes, weeknight-friendly.`);
     if (chips.time === "involved") reqLines.push(`A more involved, worth-the-effort dish is welcome.`);

@@ -2724,13 +2724,18 @@
   // ---------- AI recipe generator ----------
   // One-shot: ingredients (+ optional quick-picks) → one recipe, funneled through
   // the same fillRecipeFormFromExtraction path as AI import and the coach.
+  // Whether the AI can lean on a couple of items you don't have yet — the single
+  // biggest lever on whether a recipe stays 100% pantry or nudges toward a
+  // grocery run. Left unset, the model still defaults to a conservative couple
+  // of adds (see the Edge Function prompt).
+  const GEN_GROCERY = [{ v: "none", label: "Use what I have" }, { v: "quick", label: "OK for a quick grocery run" }];
   const GEN_TIME = [{ v: "quick", label: "Quick (~30 min)" }, { v: "involved", label: "Worth the effort" }];
   const GEN_SERVINGS = [2, 4, 6];
   const GEN_CUISINE = ["any", "italian", "mexican", "american", "asian", "mediterranean", "french"];
   const GEN_STYLE_BAR = ["any", "classic", "sour", "highball", "tiki", "stirred"];
   const GEN_EQUIP_KITCHEN = ["any", "stovetop", "oven", "sheet pan", "slow cooker", "air fryer", "no-cook"];
   const GEN_EQUIP_BAR = ["any", "shaken", "stirred", "built", "blended"];
-  let genState = { ingredients: [], time: null, servings: null, cuisine: null, equipment: null };
+  let genState = { ingredients: [], groceryRun: null, time: null, servings: null, cuisine: null, equipment: null };
   let generationToken = 0;
   const GENERATION_TIMEOUT_MS = 75_000;
   const GENERATION_TIMEOUT = Symbol("generation-timeout");
@@ -2756,6 +2761,7 @@
         return `<button type="button" class="tag-chip gen-optchip${on ? " is-on" : ""}" data-gen-opt="${key}" data-val="${esc(String(v))}" aria-pressed="${on}">${esc(lbl)}</button>`;
       }).join("");
     };
+    single("groceryRun", GEN_GROCERY, (o) => o.v, (o) => o.label);
     single("time", GEN_TIME, (o) => o.v, (o) => o.label);
     single("servings", GEN_SERVINGS, (o) => o, (o) => String(o));
     single("cuisine", bar ? GEN_STYLE_BAR : GEN_CUISINE, (o) => o, (o) => invCap(o));
@@ -2763,7 +2769,7 @@
   }
   function openGeneratePanel(forceSection) {
     genForcedSection = forceSection || null;
-    genState = { ingredients: [], time: null, servings: null, cuisine: null, equipment: null };
+    genState = { ingredients: [], groceryRun: null, time: null, servings: null, cuisine: null, equipment: null };
     genIngInput.value = "";
     generateStatus.textContent = "";
     const bar = genIsBar();
@@ -2819,6 +2825,7 @@
       ingredients: genState.ingredients.slice(),
       section: genIsBar() ? "bar" : "kitchen",
       chips: {
+        groceryRun: genState.groceryRun || undefined,
         time: genState.time || undefined,
         servings: genState.servings ? Number(genState.servings) : undefined,
         cuisine: genState.cuisine && genState.cuisine !== "any" ? genState.cuisine : undefined,
