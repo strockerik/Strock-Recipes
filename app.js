@@ -1091,7 +1091,14 @@
   }
   // Bar categories the user picks from (spirit types + common non-spirit bar items).
   const BAR_CATEGORIES = ["gin", "vodka", "rum", "tequila", "mezcal", "whiskey", "bourbon", "rye", "scotch", "brandy", "liqueur", "vermouth", "amaro", "bitters", "wine", "mixer", "other"];
-  const invCategoriesFor = (sec) => (sec === "bar" ? BAR_CATEGORIES : GROCERY_CATEGORY_ORDER.slice());
+  // Pantry inventory is for stock that keeps for a month or more — a deliberately
+  // narrower list than the grocery-list aisles (GROCERY_CATEGORY_ORDER), which
+  // covers everything you might buy, perishable or not. Fresh Produce/Bakery/
+  // Meat & Seafood only belong here if frozen, so they're folded into "Frozen"
+  // rather than offered as their own categories; Dairy & Eggs is left out
+  // entirely (not even under Frozen) since this app doesn't track it as pantry stock.
+  const PANTRY_CATEGORIES = ["Frozen", "Canned & Jarred", "Dry Goods & Baking", "Condiments, Sauces & Spices", "Beverages", OTHER_CATEGORY];
+  const invCategoriesFor = (sec) => (sec === "bar" ? BAR_CATEGORIES : PANTRY_CATEGORIES.slice());
   const INV_STATUSES = ["in", "low", "out"];
   const INV_STATUS_LABEL = { in: "In", low: "Low", out: "Out" };
   function renderInvAddForm() {
