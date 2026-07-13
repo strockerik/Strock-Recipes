@@ -443,7 +443,7 @@ create table public.inventory_items (
   section text not null check (section in ('bar','pantry')),
   category text,        -- bar: spirit type (rum/gin/…); pantry: aisle bucket
   name text,            -- bar: optional brand; pantry: staple name
-  status text not null default 'in' check (status in ('in','low','out')),
+  status text not null default 'in' check (status in ('in','out')), -- kept simple: no "low"
   created_at timestamptz not null default now()
 );
 alter table public.inventory_items enable row level security;
@@ -455,6 +455,16 @@ create index inventory_items_user_section on public.inventory_items (user_id, se
 
 Until this runs, inventory shows empty and dietary preferences silently no-op
 (both fail open).
+
+**Already ran the setup above with the old 3-value status?** The app now only
+sends `'in'`/`'out'` — run this once to fold any existing `'low'` rows into
+`'out'` and match the constraint to what the app actually writes:
+
+```sql
+update public.inventory_items set status = 'out' where status = 'low';
+alter table public.inventory_items drop constraint if exists inventory_items_status_check;
+alter table public.inventory_items add constraint inventory_items_status_check check (status in ('in','out'));
+```
 
 ## AI usage limits
 

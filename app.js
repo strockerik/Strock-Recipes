@@ -1099,8 +1099,8 @@
   // entirely (not even under Frozen) since this app doesn't track it as pantry stock.
   const PANTRY_CATEGORIES = ["Frozen", "Canned & Jarred", "Dry Goods & Baking", "Condiments, Sauces & Spices", "Beverages", OTHER_CATEGORY];
   const invCategoriesFor = (sec) => (sec === "bar" ? BAR_CATEGORIES : PANTRY_CATEGORIES.slice());
-  const INV_STATUSES = ["in", "low", "out"];
-  const INV_STATUS_LABEL = { in: "In", low: "Low", out: "Out" };
+  const INV_STATUSES = ["in", "out"];
+  const INV_STATUS_LABEL = { in: "In", out: "Out" };
   function renderInvAddForm() {
     invCategorySelect.innerHTML = invCategoriesFor(invSection)
       .map((c) => `<option value="${esc(c)}">${invSection === "bar" ? invCap(c) : esc(c)}</option>`).join("");

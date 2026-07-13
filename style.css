@@ -1867,10 +1867,9 @@ button:focus-visible, input:focus-visible {
   font-family: var(--font-mono); font-size: 0.72rem; padding: 4px 9px; cursor: pointer;
 }
 .inv-status-btn + .inv-status-btn { border-left: 1px solid var(--line); }
-/* Status colors are semantic (in stock / running low / out) and fixed, so they
-   stay readable regardless of the panel's green/red theme. */
+/* Status colors are semantic (in stock / out) and fixed, so they stay readable
+   regardless of the panel's green/red theme. */
 .inv-status-btn.is-in { background: #3E6B3A; color: #fff; }
-.inv-status-btn.is-low { background: #C8862A; color: #fff; }
 .inv-status-btn.is-out { background: #B5402A; color: #fff; }
 .inv-restock, .inv-remove { border: 0; background: none; cursor: pointer; padding: 2px 4px; font-size: 1rem; line-height: 1; }
 .inv-restock { font-size: 0.95rem; }
