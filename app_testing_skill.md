@@ -455,6 +455,43 @@ Smoke tests worth having (each its own `test_*.html` or one with sub-cases):
   would otherwise detach from the page — a capture-phase `scroll` listener
   closes both it and `#add-menu`).
 
+### 3c. Mobile viewport — nothing runs off the screen
+
+The app is phone-first, so **every panel and control must fit within a narrow
+viewport with no horizontal overflow** — a button spilling past the right edge
+(as the inventory "Add" button once did) is a real bug. Check the whole app, not
+just the page you changed.
+
+Two complementary checks:
+
+1. **Programmatic overflow assertion** (catches it even when a screenshot crop
+   hides it). In a headless driver, after opening each panel/state, assert the
+   document never scrolls sideways and no element extends past the viewport:
+   ```js
+   // page-level: body must not scroll horizontally
+   assert('no page horizontal overflow',
+     document.documentElement.scrollWidth <= window.innerWidth + 1);
+   // element-level: nothing pokes past the right edge of the viewport
+   const vw = window.innerWidth;
+   const spill = [...document.querySelectorAll('button, input, select, .grocery-panel-inner *')]
+     .filter(el => el.offsetParent !== null && el.getBoundingClientRect().right > vw + 1)
+     .map(el => el.id || el.className);
+   assert('no element overflows the viewport right edge: ' + spill.join(','), spill.length === 0);
+   ```
+   Open and assert for **each** modal: recipe form, AI import, generator
+   (`#generate-panel`), inventory (`#inventory-panel`, both Bar and Pantry
+   sub-tabs — the add row is the classic offender), grocery, account (with the
+   diet-prefs chips + tag inputs), place-sheet, coach, guide, backup.
+2. **Screenshot pass** at a phone size for a human look at wrapping/crowding.
+   Remember the headless-Chrome **layout-width floor of ~500px** (window sizes
+   ≤500 still lay out at 500): screenshot at **520** to stay inside the
+   `max-width:560px` mobile breakpoint while above the floor, then reason
+   about true 360–430px widths from measured content widths. Watch specifically
+   for: multi-control rows (`.inv-add`, `.gen-ing-row`, `.search-row`) — they
+   must `flex-wrap` or shrink (`min-width:0`), never overflow; and the header —
+   the four `.icon-btn`s + avatar must sit next to the title without pushing off
+   (they shrink to 34px and the title to 1.35rem under 560px).
+
 ## 4. Functional / business-logic test matrix
 
 These are pure-logic functions in `app.js` — testable in isolation by calling

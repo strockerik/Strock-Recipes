@@ -220,6 +220,7 @@
   const genHintEl = $("#gen-hint");
   const genIngChips = $("#gen-ing-chips");
   const genIngInput = $("#gen-ing-input");
+  const genIngAddBtn = $("#gen-ing-add");
   const genUseInventoryBtn = $("#gen-use-inventory");
   const genSubmitBtn = $("#gen-submit");
   const genCuisineLabel = $("#gen-opt-cuisine-label");
@@ -1091,6 +1092,10 @@
     invTabBar.setAttribute("aria-selected", String(invSection === "bar"));
     invTabPantry.classList.toggle("is-on", invSection === "pantry");
     invTabPantry.setAttribute("aria-selected", String(invSection === "pantry"));
+    // Theme the panel by sub-tab (bar = campari red, pantry = basil green) so the
+    // color reflects what you're viewing, not the Kitchen/Bar tab on the main screen.
+    inventoryPanel.classList.toggle("is-bar", invSection === "bar");
+    inventoryPanel.classList.toggle("is-pantry", invSection === "pantry");
     renderInvAddForm();
     const items = inventory.filter((i) => i.section === invSection);
     if (!items.length) {
@@ -1107,8 +1112,8 @@
     inventoryContent.innerHTML = cats.map((cat) => {
       const rows = groups[cat].map((i) => {
         const label = i.name
-          ? (invSection === "bar" ? `${invCap(i.category)} — ${esc(i.name)}` : esc(i.name))
-          : invCap(i.category);
+          ? (invSection === "bar" ? `${esc(invCap(i.category))} — ${esc(i.name)}` : esc(i.name))
+          : esc(invCap(i.category));
         const statusBtns = INV_STATUSES.map((s) =>
           `<button type="button" class="inv-status-btn${i.status === s ? " is-" + s : ""}" data-inv-status="${s}" data-id="${i.id}" aria-pressed="${i.status === s}">${INV_STATUS_LABEL[s]}</button>`
         ).join("");
@@ -1122,7 +1127,7 @@
           <button type="button" class="inv-remove" data-inv-remove="${i.id}" aria-label="Remove ${esc(label)}">×</button>
         </li>`;
       }).join("");
-      const heading = invSection === "bar" ? invCap(cat) : esc(cat);
+      const heading = esc(invSection === "bar" ? invCap(cat) : cat);
       return `<div class="inv-group"><h3 class="inv-cat">${heading}</h3><ul class="inv-list">${rows}</ul></div>`;
     }).join("");
   }
@@ -1554,10 +1559,15 @@
 
   // ---------- Grocery list ----------
   function renderGroceryBar() {
-    const n = basket.size;
-    groceryBar.hidden = n === 0;
-    if (n === 0) closeGroceryPanel();
-    grocerySummary.textContent = `${n} recipe${n === 1 ? "" : "s"} in your grocery list`;
+    // The list has content when recipes are checked OR when manual/inventory items
+    // have been added, so the bar shows (and the panel stays open) for either.
+    const recipes = basket.size;
+    const total = recipes + manualGroceryItems.length;
+    groceryBar.hidden = total === 0;
+    if (total === 0) closeGroceryPanel();
+    grocerySummary.textContent = recipes > 0
+      ? `${recipes} recipe${recipes === 1 ? "" : "s"} in your grocery list`
+      : `${manualGroceryItems.length} item${manualGroceryItems.length === 1 ? "" : "s"} in your grocery list`;
   }
 
   function groceryGroups() {
@@ -2790,8 +2800,9 @@
   generateCancelBtn.addEventListener("click", closeGeneratePanel);
   genSubmitBtn.addEventListener("click", runGeneration);
   genIngInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); addGenIngredient(genIngInput.value); }
+    if (e.key === "Enter") { e.preventDefault(); addGenIngredient(genIngInput.value); genIngInput.focus(); }
   });
+  genIngAddBtn.addEventListener("click", () => { addGenIngredient(genIngInput.value); genIngInput.focus(); });
   genIngChips.addEventListener("click", (e) => {
     const x = e.target.closest("[data-gen-ing]");
     if (!x) return;
@@ -3587,10 +3598,14 @@
   });
 
   // Grocery bar / panel
-  $("#open-grocery").addEventListener("click", () => {
+  function openGroceryPanel() {
     renderGroceryPanel();
     groceryPanel.hidden = false;
-  });
+  }
+  $("#open-grocery").addEventListener("click", openGroceryPanel);
+  // Header shortcut: always available, so a list built only from pantry/bar
+  // restocks (no checked recipes) can still be opened.
+  $("#open-grocery-top").addEventListener("click", openGroceryPanel);
   $("#close-grocery").addEventListener("click", closeGroceryPanel);
   groceryPanel.addEventListener("click", (e) => {
     if (e.target === groceryPanel) closeGroceryPanel();

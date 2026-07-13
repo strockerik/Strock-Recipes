@@ -59,6 +59,7 @@
         <button class="tab tab-bar" role="tab" aria-selected="false" data-section="cocktails">Bar</button>
       </nav>
       <div id="account-area" class="account-area" hidden>
+        <button id="open-grocery-top" class="icon-btn" title="Grocery list" aria-label="Open grocery list">🛒</button>
         <button id="open-inventory" class="icon-btn" title="Bar & pantry" aria-label="Open bar & pantry inventory">📦</button>
         <button id="open-guide" class="icon-btn" title="Guide" aria-label="Open the feature guide">?</button>
         <button id="account-btn" class="avatar-btn" aria-haspopup="dialog" aria-label="Account">•</button>
@@ -615,8 +616,8 @@
         <button id="close-inventory" class="ghost-btn small" aria-label="Close inventory">Close</button>
       </div>
       <nav class="scope" role="tablist" aria-label="Inventory section">
-        <button class="scope-btn is-on" id="inv-tab-bar" role="tab" aria-selected="true" data-inv="bar">🍸 Bar</button>
-        <button class="scope-btn" id="inv-tab-pantry" role="tab" aria-selected="false" data-inv="pantry">🥫 Pantry</button>
+        <button class="scope-btn is-on" id="inv-tab-pantry" role="tab" aria-selected="true" data-inv="pantry">🥫 Pantry</button>
+        <button class="scope-btn" id="inv-tab-bar" role="tab" aria-selected="false" data-inv="bar">🍸 Bar</button>
       </nav>
       <p class="inv-hint">Track what you have on hand — it powers the recipe generator, and low/out items can drop into your grocery list.</p>
       <form id="inv-add" class="inv-add">
@@ -641,9 +642,10 @@
         <div class="gen-ing">
           <div id="gen-ing-chips" class="gen-chips"></div>
           <div class="gen-ing-row">
-            <input id="gen-ing-input" class="search" type="text" placeholder="Add an ingredient, press Enter (e.g. chicken thighs)" aria-label="Add an ingredient">
-            <button type="button" id="gen-use-inventory" class="ghost-btn small">＋ Use my inventory</button>
+            <input id="gen-ing-input" class="search" type="text" placeholder="Type an ingredient (e.g. chicken thighs)" aria-label="Add an ingredient" enterkeyhint="done">
+            <button type="button" id="gen-ing-add" class="solid-btn small">＋ Add</button>
           </div>
+          <button type="button" id="gen-use-inventory" class="ghost-btn small gen-use-inv">📦 Add everything from my inventory</button>
         </div>
 
         <div class="gen-opts">
