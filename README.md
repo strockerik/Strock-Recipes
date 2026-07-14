@@ -521,6 +521,9 @@ begin
 end;
 $$;
 
+-- CREATE FUNCTION grants EXECUTE to PUBLIC by default; lock it to signed-in
+-- users only (the Security Advisor flags the default public grant otherwise).
+revoke execute on function public.increment_extraction_usage(int) from public;
 grant execute on function public.increment_extraction_usage(int) to authenticated;
 ```
 
@@ -560,6 +563,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.increment_coach_usage(int) from public;
 grant execute on function public.increment_coach_usage(int) to authenticated;
 ```
 
@@ -599,6 +603,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.increment_generation_usage(int) from public;
 grant execute on function public.increment_generation_usage(int) to authenticated;
 ```
 
