@@ -1142,13 +1142,13 @@
     }
     const groups = {};
     items.forEach((i) => { (groups[i.category || "other"] || (groups[i.category || "other"] = [])).push(i); });
-    const order = invCategoriesFor(invSection);
-    const cats = Object.keys(groups).sort((a, b) => {
-      const ia = order.indexOf(a), ib = order.indexOf(b);
-      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-    });
+    // Alphabetical throughout: categories by their displayed heading, items
+    // within a category by name (brand, or the staple name for pantry).
+    const cats = Object.keys(groups).sort((a, b) =>
+      (invSection === "bar" ? invCap(a) : a).localeCompare(invSection === "bar" ? invCap(b) : b)
+    );
     inventoryContent.innerHTML = cats.map((cat) => {
-      const rows = groups[cat].map((i) => {
+      const rows = groups[cat].slice().sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((i) => {
         const label = i.name
           ? (invSection === "bar" ? `${esc(invCap(i.category))} — ${esc(i.name)}` : esc(i.name))
           : esc(invCap(i.category));
