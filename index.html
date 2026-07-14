@@ -484,6 +484,7 @@
         </label>
 
         <p id="recipe-form-status" class="auth-status" aria-live="polite"></p>
+        <div id="rf-inventory-check" class="rf-inv-check" hidden></div>
 
         <div class="grocery-actions">
           <button type="submit" class="solid-btn">Save recipe</button>
@@ -639,15 +640,14 @@
       </div>
 
       <div id="generate-form">
-        <p class="gen-hint" id="gen-hint">List what you've got and AI will write one recipe from it, plus common pantry staples. Review it before saving.</p>
+        <p class="gen-hint" id="gen-hint">List your main ingredients and AI will suggest a few recipes to pick from. It assumes you have common seasonings.</p>
         <p class="gen-diet-line" id="gen-diet-line"></p>
         <div class="gen-ing">
           <div id="gen-ing-chips" class="gen-chips"></div>
           <div class="gen-ing-row">
-            <input id="gen-ing-input" class="search" type="text" placeholder="Type an ingredient (e.g. chicken thighs)" aria-label="Add an ingredient" enterkeyhint="done">
+            <input id="gen-ing-input" class="search" type="text" placeholder="Type a main ingredient (e.g. chicken thighs)" aria-label="Add an ingredient" enterkeyhint="done">
             <button type="button" id="gen-ing-add" class="solid-btn small">＋ Add</button>
           </div>
-          <button type="button" id="gen-use-inventory" class="ghost-btn small gen-use-inv">📦 Add everything from my inventory</button>
         </div>
 
         <div class="gen-opts">
@@ -673,14 +673,23 @@
           </div>
         </div>
 
-        <button type="button" id="gen-submit" class="solid-btn gen-submit">✨ Generate recipe</button>
+        <button type="button" id="gen-submit" class="solid-btn gen-submit">✨ Suggest recipes</button>
         <p class="gen-tip">AI-written, not yet kitchen-tested — give it a look before you save.</p>
+      </div>
+
+      <div id="generate-concepts" hidden>
+        <p class="gen-hint">Pick the one you'd like to cook — AI will write out the full recipe.</p>
+        <div id="gen-concept-list" class="gen-concept-list"></div>
+        <div class="gen-concepts-actions">
+          <button type="button" id="gen-concepts-back" class="ghost-btn small">← Start over</button>
+          <button type="button" id="gen-concepts-reroll" class="ghost-btn small">↻ Different ideas</button>
+        </div>
       </div>
 
       <div id="generate-loading" class="ai-import-loading" hidden>
         <div class="spinner" aria-hidden="true"></div>
-        <p>Writing your recipe…</p>
-        <p class="ai-import-hint">Building a dish from your ingredients with AI.</p>
+        <p id="generate-loading-msg">Finding a few ideas…</p>
+        <p class="ai-import-hint">Working with AI.</p>
         <button type="button" id="generate-cancel" class="ghost-btn small">Cancel</button>
       </div>
 

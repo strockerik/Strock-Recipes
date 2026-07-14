@@ -475,8 +475,10 @@ browser, and all resetting at midnight UTC:
 - **20 AI extractions/day** — `extract-recipe` (any mix of photo, text, or link).
 - **20 AI coaching requests/day** — `recipe-coach` (each ✨ Ask AI message,
   including an "emphasize this in the recipe" request, counts as one).
-- **20 AI recipe generations/day** — `generate-recipe` (each "Generate a recipe"
-  from on-hand ingredients counts as one).
+- **20 AI recipe generations/day** — `generate-recipe`. It's a two-step call
+  (`mode:"concepts"` proposes 3 ideas, then `mode:"full"` writes the chosen one);
+  **only the full-recipe step counts against the cap**, so browsing ideas is
+  free and the limit is effectively 20 finished recipes/day.
 
 Each limit is a single constant in its Edge Function (`DAILY_EXTRACTION_LIMIT` /
 `DAILY_COACH_LIMIT`) — change the number and redeploy that function. Each uses its

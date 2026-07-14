@@ -215,7 +215,12 @@
   const generatePanel = $("#generate-panel");
   const closeGenerateBtn = $("#close-generate");
   const generateForm = $("#generate-form");
+  const generateConcepts = $("#generate-concepts");
+  const genConceptList = $("#gen-concept-list");
+  const genConceptsBackBtn = $("#gen-concepts-back");
+  const genConceptsRerollBtn = $("#gen-concepts-reroll");
   const generateLoading = $("#generate-loading");
+  const generateLoadingMsg = $("#generate-loading-msg");
   const generateStatus = $("#generate-status");
   const generateCancelBtn = $("#generate-cancel");
   const genHintEl = $("#gen-hint");
@@ -223,9 +228,9 @@
   const genIngChips = $("#gen-ing-chips");
   const genIngInput = $("#gen-ing-input");
   const genIngAddBtn = $("#gen-ing-add");
-  const genUseInventoryBtn = $("#gen-use-inventory");
   const genSubmitBtn = $("#gen-submit");
   const genCuisineLabel = $("#gen-opt-cuisine-label");
+  const rfInventoryCheck = $("#rf-inventory-check");
 
   const coachPanel = $("#coach-panel");
   const coachRecipeName = $("#coach-recipe-name");
@@ -1214,9 +1219,13 @@
   });
   // The inventory -> generator bridge: hand off whatever's in-stock on the
   // current sub-tab, forcing the generator into the matching kitchen/bar mode
-  // regardless of which main Kitchen/Bar tab is currently selected.
+  // regardless of which main Kitchen/Bar tab is currently selected. For bar,
+  // your spirits ARE the cocktail's ingredients. For pantry we skip the
+  // seasoning aisle — the generator assumes common seasonings, so pre-filling
+  // spices as required ingredients is exactly the clutter we removed.
   invGenerateBtn.addEventListener("click", () => {
-    const avail = inventory.filter((i) => i.section === invSection && i.status !== "out");
+    let avail = inventory.filter((i) => i.section === invSection && i.status !== "out");
+    if (invSection === "pantry") avail = avail.filter((i) => i.category !== "Condiments, Sauces & Spices");
     if (!avail.length) return;
     inventoryPanel.hidden = true;
     openGeneratePanel(invSection === "bar" ? "bar" : "kitchen");
@@ -2190,8 +2199,42 @@
     rfIngredients.classList.remove("reordering");
     rfReorderIngredientsBtn.setAttribute("aria-pressed", "false");
     rfReorderIngredientsBtn.textContent = "↕ Reorder";
+    // Clear any prior generator inventory-check so it never lingers on a
+    // hand-added or edited recipe (only the generator re-populates it).
+    rfInventoryCheck.hidden = true;
+    rfInventoryCheck.innerHTML = "";
     updateTagGroupsVisibility();
     recipeFormPanel.hidden = false;
+  }
+
+  // After the generator fills the form, compare the recipe's ingredients against
+  // the user's in-stock inventory and show a quiet "have / need" line. Only runs
+  // when inventory exists; basic staples (salt/pepper/oil…) are assumed on hand
+  // and never listed on either side, so the "need" list stays signal, not noise.
+  function renderInventoryCheck(recipe) {
+    rfInventoryCheck.hidden = true;
+    rfInventoryCheck.innerHTML = "";
+    if (!inventory.length) return;
+    // Bar rows match on their spirit TYPE (category); pantry rows on their name.
+    const stockKeys = inventory
+      .filter((i) => i.status === "in")
+      .map((i) => normalizeItemName(i.section === "bar" ? i.category : (i.name || i.category)))
+      .filter(Boolean);
+    const have = [], need = [];
+    (recipe.ingredients || []).forEach((ing) => {
+      const raw = flattenText(ing && ing.item != null ? ing.item : ing);
+      const norm = normalizeItemName(raw);
+      if (!norm || isPantryStaple(norm)) return; // assumed on hand — skip both lists
+      const matched = stockKeys.some((k) => k === norm || norm.includes(k) || k.includes(norm));
+      (matched ? have : need).push(displayGroceryName(raw));
+    });
+    if (!have.length && !need.length) return;
+    const line = (icon, label, items) =>
+      items.length ? `<span class="rf-inv-part"><b>${icon} ${label}:</b> ${esc(items.join(", "))}</span>` : "";
+    rfInventoryCheck.innerHTML =
+      `<p class="rf-inv-lead">Checked against your inventory:</p>` +
+      line("✓", "You have", have) + line("🛒", "You'll need", need);
+    rfInventoryCheck.hidden = false;
   }
 
   function closeRecipeForm() {
@@ -2753,7 +2796,9 @@
   const GEN_EQUIP_KITCHEN = ["any", "stovetop", "oven", "sheet pan", "slow cooker", "air fryer", "no-cook"];
   const GEN_EQUIP_BAR = ["any", "shaken", "stirred", "built", "blended"];
   let genState = { ingredients: [], groceryRun: null, time: null, servings: null, cuisine: null, equipment: null };
-  let generationToken = 0;
+  let genConcepts = [];       // the 3 ideas from step 1, awaiting a pick
+  let genLastPayload = null;  // inputs captured at step 1, reused for step 2
+  let generationToken = 0;    // ++ on close and on each new call — abandons stale responses
   const GENERATION_TIMEOUT_MS = 75_000;
   const GENERATION_TIMEOUT = Symbol("generation-timeout");
   // Normally the generator follows the main Kitchen/Bar tab, but it can be
@@ -2784,21 +2829,29 @@
     single("cuisine", bar ? GEN_STYLE_BAR : GEN_CUISINE, (o) => o, (o) => invCap(o));
     single("equipment", bar ? GEN_EQUIP_BAR : GEN_EQUIP_KITCHEN, (o) => o, (o) => invCap(o));
   }
+  // The generate panel has three swappable views: the input form, the concept
+  // picker, and the loading spinner. Exactly one shows at a time.
+  function showGenView(view) {
+    generateForm.hidden = view !== "form";
+    generateConcepts.hidden = view !== "concepts";
+    generateLoading.hidden = view !== "loading";
+  }
   function openGeneratePanel(forceSection) {
     genForcedSection = forceSection || null;
     genState = { ingredients: [], groceryRun: null, time: null, servings: null, cuisine: null, equipment: null };
+    genConcepts = [];
+    genLastPayload = null;
     genIngInput.value = "";
     generateStatus.textContent = "";
     const bar = genIsBar();
     genHintEl.textContent = bar
-      ? "List the spirits and mixers you've got and AI will invent one cocktail. Review it before saving."
-      : "List what you've got and AI will write one recipe from it, plus common pantry staples. Review it before saving.";
-    genIngInput.placeholder = bar ? "Type an ingredient (e.g. gin, lime, mint)" : "Type an ingredient (e.g. chicken thighs)";
+      ? "List the spirits and mixers you've got and AI will suggest a few cocktails to pick from."
+      : "List your main ingredients and AI will suggest a few recipes to pick from. It assumes you have common seasonings.";
+    genIngInput.placeholder = bar ? "Type an ingredient (e.g. gin, lime, mint)" : "Type a main ingredient (e.g. chicken thighs)";
     renderGenDietLine();
     renderGenChips();
     renderGenOptions();
-    generateForm.hidden = false;
-    generateLoading.hidden = true;
+    showGenView("form");
     generatePanel.hidden = false;
   }
   // Dietary preferences are applied silently, but a first-time user has no way
@@ -2831,14 +2884,9 @@
     genIngInput.value = "";
     renderGenChips();
   }
-  async function runGeneration() {
-    if (!genState.ingredients.length) { generateStatus.textContent = "Add at least one ingredient first."; return; }
-    const token = ++generationToken;
-    generateForm.hidden = true;
-    generateLoading.hidden = false;
-    generateStatus.textContent = "";
-
-    const payload = {
+  // Assemble the generator inputs — shared by the concepts step and the full step.
+  function buildGenPayload() {
+    return {
       ingredients: genState.ingredients.slice(),
       section: genIsBar() ? "bar" : "kitchen",
       chips: {
@@ -2850,39 +2898,70 @@
       },
       dietPrefs
     };
-    const invokePromise = supabaseClient.functions.invoke("generate-recipe", {
-      body: payload
-    }).catch((error) => ({ error }));
-    const timeoutPromise = new Promise((resolve) =>
-      setTimeout(() => resolve(GENERATION_TIMEOUT), GENERATION_TIMEOUT_MS)
-    );
-    const result = await Promise.race([invokePromise, timeoutPromise]);
+  }
+  function genInvoke(body) {
+    const invokePromise = supabaseClient.functions.invoke("generate-recipe", { body }).catch((error) => ({ error }));
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(GENERATION_TIMEOUT), GENERATION_TIMEOUT_MS));
+    return Promise.race([invokePromise, timeoutPromise]);
+  }
+  function genFail(msg, backView) { showGenView(backView); generateStatus.textContent = msg; }
 
+  // Step 1: ask for 3 concepts.
+  async function runConcepts() {
+    if (!genState.ingredients.length) { generateStatus.textContent = "Add at least one ingredient first."; return; }
+    genLastPayload = buildGenPayload();
+    const token = ++generationToken;
+    generateStatus.textContent = "";
+    generateLoadingMsg.textContent = "Finding a few ideas…";
+    showGenView("loading");
+    const result = await genInvoke({ ...genLastPayload, mode: "concepts" });
     if (token !== generationToken || generatePanel.hidden) return; // stale / cancelled
-
-    if (result === GENERATION_TIMEOUT) {
-      generateForm.hidden = false;
-      generateLoading.hidden = true;
-      generateStatus.textContent = "That's taking too long — check your connection and try again.";
-      return;
-    }
+    if (result === GENERATION_TIMEOUT) return genFail("That's taking too long — check your connection and try again.", "form");
     const { data, error } = result;
-    if (error || data?.error) {
-      generateForm.hidden = false;
-      generateLoading.hidden = true;
-      generateStatus.textContent = `Error: ${data?.error || error.message}`;
-      return;
-    }
+    if (error || data?.error) return genFail(`Error: ${data?.error || error.message}`, "form");
+    genConcepts = Array.isArray(data.concepts) ? data.concepts : [];
+    if (!genConcepts.length) return genFail("Couldn't come up with ideas — try different ingredients.", "form");
+    renderConcepts();
+    showGenView("concepts");
+  }
+  function renderConcepts() {
+    genConceptList.innerHTML = genConcepts.map((c, i) =>
+      `<button type="button" class="gen-concept" data-concept="${i}">
+        <span class="gen-concept-title">${esc(c.title)}</span>
+        <span class="gen-concept-blurb">${esc(c.blurb)}</span>
+      </button>`
+    ).join("");
+  }
+  // Step 2: develop the picked concept into a full recipe.
+  async function pickConcept(i) {
+    const concept = genConcepts[i];
+    if (!concept || !genLastPayload) return;
+    const token = ++generationToken;
+    generateStatus.textContent = "";
+    generateLoadingMsg.textContent = "Writing your recipe…";
+    showGenView("loading");
+    const result = await genInvoke({ ...genLastPayload, mode: "full", concept });
+    if (token !== generationToken || generatePanel.hidden) return; // stale / cancelled
+    if (result === GENERATION_TIMEOUT) return genFail("That's taking too long — check your connection and try again.", "concepts");
+    const { data, error } = result;
+    if (error || data?.error) return genFail(`Error: ${data?.error || error.message}`, "concepts");
     closeGeneratePanel();
     openRecipeForm(null);
     fillRecipeFormFromExtraction(data.recipe);
     recipeFormStatus.textContent = "AI generated this recipe — please review before saving.";
+    renderInventoryCheck(data.recipe);
   }
 
   addRecipeGenerateBtn.addEventListener("click", () => openGeneratePanel());
   closeGenerateBtn.addEventListener("click", closeGeneratePanel);
   generateCancelBtn.addEventListener("click", closeGeneratePanel);
-  genSubmitBtn.addEventListener("click", runGeneration);
+  genSubmitBtn.addEventListener("click", runConcepts);
+  genConceptsBackBtn.addEventListener("click", () => { generateStatus.textContent = ""; showGenView("form"); });
+  genConceptsRerollBtn.addEventListener("click", runConcepts);
+  genConceptList.addEventListener("click", (e) => {
+    const card = e.target.closest("[data-concept]");
+    if (card) pickConcept(Number(card.dataset.concept));
+  });
   genIngInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); addGenIngredient(genIngInput.value); genIngInput.focus(); }
   });
@@ -2892,12 +2971,6 @@
     if (!x) return;
     genState.ingredients.splice(Number(x.dataset.genIng), 1);
     renderGenChips();
-  });
-  genUseInventoryBtn.addEventListener("click", () => {
-    const target = genIsBar() ? "bar" : "pantry";
-    const avail = inventory.filter((i) => i.section === target && i.status !== "out");
-    if (!avail.length) { toast("No inventory yet — add items in Bar & Pantry (📦)."); return; }
-    avail.forEach((i) => addGenIngredient(genIngredientText(i)));
   });
   generatePanel.addEventListener("click", (e) => {
     if (e.target === generatePanel) { closeGeneratePanel(); return; }

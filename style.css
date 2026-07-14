@@ -1890,7 +1890,17 @@ button:focus-visible, input:focus-visible {
 .gen-ing-row { align-items: center; flex-wrap: nowrap; }
 .gen-ing-row .search { flex: 1 1 auto; min-width: 0; }
 .gen-ing-row .solid-btn { flex: 0 0 auto; }
-.gen-use-inv { margin-top: 8px; }
+/* Concept picker: 3 tappable idea cards */
+.gen-concept-list { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 16px; }
+.gen-concept {
+  display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 16px; cursor: pointer; transition: border-color 0.12s, background 0.12s;
+}
+.gen-concept:hover { border-color: var(--accent); background: var(--accent-soft); }
+.gen-concept-title { font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; color: var(--ink); }
+.gen-concept-blurb { font-size: 0.88rem; color: var(--faint); line-height: 1.4; }
+.gen-concepts-actions { display: flex; justify-content: space-between; gap: 10px; }
 .gen-chip {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 0.85rem; color: var(--ink);
@@ -1908,3 +1918,12 @@ button:focus-visible, input:focus-visible {
 .gen-optchip { text-transform: capitalize; cursor: pointer; }
 .gen-submit { width: 100%; margin-top: 4px; }
 .gen-tip { margin: 10px 0 0; font-size: 0.8rem; color: var(--faint); text-align: center; }
+
+/* Generator inventory check on the recipe form (have / need) */
+.rf-inv-check {
+  margin: 10px 0 0; padding: 12px 14px; border-radius: var(--radius);
+  background: var(--accent-soft); border: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 4px; font-size: 0.88rem;
+}
+.rf-inv-lead { margin: 0; font-size: 0.72rem; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+.rf-inv-part { color: var(--ink); }

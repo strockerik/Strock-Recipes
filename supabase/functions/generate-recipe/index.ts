@@ -9,15 +9,21 @@
 // The Anthropic API key is a server-side secret and never reaches the browser.
 // The caller's Supabase JWT is verified before any paid API call.
 //
+// Two-step flow, selected by `mode`:
+//   mode: "concepts" -> return 3 short recipe ideas to choose from (NOT capped)
+//   mode: "full"     -> develop the chosen concept into a full recipe (capped)
+//
 // Request body (JSON):
 //   {
-//     ingredients: string[],            // what the user has on hand (>= 1)
+//     mode: "concepts" | "full",        // defaults to "full"
+//     ingredients: string[],            // main ingredients on hand (>= 1)
 //     section: "kitchen" | "bar",       // recipe vs cocktail
-//     chips: { time?, servings?, cuisine?, equipment? },   // all optional
-//     dietPrefs: { diets: string[], allergies: string[], avoid: string[] }
+//     chips: { groceryRun?, time?, servings?, cuisine?, equipment? },  // optional
+//     dietPrefs: { diets: string[], allergies: string[], avoid: string[] },
+//     concept: { title, blurb }         // required when mode === "full"
 //   }
 //
-// Response: always HTTP 200 with either { recipe: {...} } or { error: "..." }.
+// Response: always HTTP 200 — { concepts: [...] } | { recipe: {...} } | { error }.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
@@ -99,6 +105,12 @@ const RECIPE_SCHEMA = {
 
 const SYSTEM_PROMPT = `You are a home-cooking recipe developer. From a short list of ingredients the user has on hand, you invent ONE complete, realistic, coherent recipe and return it by calling the save_recipe tool. Produce exactly one recipe — never ask follow-up questions, never return prose.
 
+SEASONING — the user gives you MAIN ingredients only; they do NOT list seasonings.
+Season the dish properly on your own: reach for common spices, dried herbs, and
+aromatics that fit the cuisine (see CUISINE FLAVOR BASES) without being asked.
+These common seasonings never count as "Buy:" items — only genuinely specialty
+Tier-3 items do.
+
 PANTRY MODEL — assume a normal kitchen, don't over-shop:
 - Tier 1 (assume freely, no need to flag): salt, black pepper, water, a neutral cooking oil, and — for baking context only — basic amounts of flour/sugar.
 - Tier 2 (use if a normal cook plausibly has it; it's fine to include): olive oil, butter, eggs, milk, garlic, onion, common dried spices (cumin, paprika, chili powder, oregano, basil, garlic/onion powder), soy sauce, vinegar, stock, canned tomatoes, rice, pasta, sugar, honey, cornstarch.
@@ -133,8 +145,66 @@ OUTPUT:
 - source is "AI generated". Pick 0-3 tags from the allowed list only. Give concrete amounts and a sensible base_servings/servings_label.
 - If the listed ingredients genuinely can't form a coherent dish, make the closest sensible recipe and explain the assumptions in 'notes' (after any required "Buy: " line) — do not invent an implausible dish.`;
 
+// Lightweight schema for the "pick an option" step — just enough to show a card.
+const CONCEPTS_SCHEMA = {
+  type: "object",
+  properties: {
+    concepts: {
+      type: "array",
+      minItems: 3,
+      maxItems: 3,
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Short dish/cocktail name, head-noun-first (e.g. 'Chicken Thighs - Skillet Lemon')" },
+          blurb: { type: "string", description: "One appetizing sentence describing the idea and what makes it different from the others" }
+        },
+        required: ["title", "blurb"]
+      }
+    }
+  },
+  required: ["concepts"]
+};
+
+const CONCEPTS_PROMPT = `You help a home cook decide what to make. From their main ingredients you propose exactly THREE distinct ideas by calling the propose_recipes tool — nothing else, no prose.
+
+Make the three genuinely different from each other: vary the technique and/or cuisine (e.g. a quick skillet, a roast/braise, a soup or salad; or Italian vs Mexican vs Asian) so the choice is meaningful — not three variations of the same dish.
+
+Respect the request:
+- Honor the grocery-run limit exactly (NONE = ideas buildable from the listed ingredients + common staples/seasonings only; OK = a few specialty items allowed).
+- Honor any cuisine/style, time, and equipment preference.
+- Honor dietary constraints, and treat allergies as absolute — never propose an idea that requires an allergen.
+- The user lists MAIN ingredients only; assume they have common seasonings and staples.
+
+Each concept is just a title + one appetizing one-line blurb. Do NOT write ingredients or steps here — that comes after they pick one.`;
+
 function listOrNone(arr: unknown): string {
   return Array.isArray(arr) && arr.length ? arr.join(", ") : "none";
+}
+
+// The shared constraint block (grocery-run, cuisine, time, servings, equipment,
+// diet) used by both the concepts step and the full-recipe step.
+function buildConstraintLines(
+  section: string,
+  chips: Record<string, unknown>,
+  diets: unknown[],
+  allergies: unknown[],
+  avoid: unknown[]
+): string[] {
+  const lines: string[] = [];
+  if (chips.groceryRun === "none") lines.push(`Grocery run: NONE — use ONLY the listed ingredients plus Tier 1/2 staples and common seasonings.`);
+  else if (chips.groceryRun === "quick") lines.push(`Grocery run: OK — a few extra specialty items are fine if they meaningfully improve the dish.`);
+  if (chips.cuisine) lines.push(section === "bar" ? `Style lean: ${chips.cuisine}.` : `Cuisine lean: ${chips.cuisine}.`);
+  if (chips.time === "quick") lines.push(`Keep it quick — about 30 minutes, weeknight-friendly.`);
+  if (chips.time === "involved") lines.push(`A more involved, worth-the-effort dish is welcome.`);
+  if (chips.servings) lines.push(`Make it for ${Number(chips.servings)} ${section === "bar" ? "drinks" : "servings"} (set base_servings accordingly).`);
+  if (chips.equipment) lines.push(`Preferred method/equipment: ${chips.equipment}.`);
+  lines.push("");
+  lines.push(`Dietary constraints:`);
+  lines.push(`- Diets that MUST be satisfied: ${listOrNone(diets)}`);
+  lines.push(`- ALLERGIES — never include, in any form, including garnish or substitutions: ${listOrNone(allergies)}`);
+  lines.push(`- Dislikes to avoid when possible: ${listOrNone(avoid)}`);
+  return lines;
 }
 
 // Build a case-insensitive word-boundary matcher for each allergy term so the
@@ -153,6 +223,39 @@ function allergyHit(recipe: { name?: string; notes?: string; ingredients?: Array
     if (re.test(hay)) return term;
   }
   return null;
+}
+
+// One forced-tool Anthropic call. Returns the tool_use input, or a friendly
+// { error } string on any API/shape failure (both steps share this).
+async function runTool(system: string, toolName: string, schema: unknown, userText: string): Promise<{ input?: any; error?: string }> {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": ANTHROPIC_API_KEY!,
+      "anthropic-version": ANTHROPIC_VERSION
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 8192,
+      system,
+      tools: [{ name: toolName, description: "Return the structured result.", input_schema: schema }],
+      tool_choice: { type: "tool", name: toolName },
+      messages: [{ role: "user", content: [{ type: "text", text: userText }] }]
+    })
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("Anthropic API error:", res.status, errText);
+    return { error: res.status === 429 ? "Rate limit or usage limit reached — try again later." : "AI generation failed. Please try again." };
+  }
+  const data = await res.json();
+  if (data.stop_reason === "max_tokens") {
+    console.error("generate-recipe: response truncated at max_tokens");
+    return { error: "That came out too long — try again." };
+  }
+  const toolBlock = data.content?.find((c: { type: string }) => c.type === "tool_use");
+  return { input: toolBlock?.input };
 }
 
 Deno.serve(async (req) => {
@@ -175,6 +278,7 @@ Deno.serve(async (req) => {
     if (userError || !userData?.user) return json({ error: "Please sign in first." });
 
     const body = await req.json();
+    const mode = body.mode === "concepts" ? "concepts" : "full";
     const ingredients = Array.isArray(body.ingredients)
       ? body.ingredients.map((s: unknown) => String(s).trim()).filter(Boolean)
       : [];
@@ -186,29 +290,32 @@ Deno.serve(async (req) => {
     const diets = Array.isArray(dp.diets) ? dp.diets : [];
     const allergies = Array.isArray(dp.allergies) ? dp.allergies : [];
     const avoid = Array.isArray(dp.avoid) ? dp.avoid : [];
+    const ingList = ingredients.map((i: string) => `- ${i}`).join("\n");
+    const constraints = buildConstraintLines(section, chips, diets, allergies, avoid);
 
-    const reqLines: string[] = [];
-    reqLines.push(section === "bar"
-      ? `Invent ONE cocktail (bar recipe) using these on-hand ingredients:`
-      : `Invent ONE kitchen recipe using these on-hand ingredients:`);
-    reqLines.push(ingredients.map((i: string) => `- ${i}`).join("\n"));
-    reqLines.push("");
-    if (chips.groceryRun === "none") reqLines.push(`Grocery run: NONE — use ONLY what's listed above plus Tier 1/2 staples.`);
-    else if (chips.groceryRun === "quick") reqLines.push(`Grocery run: OK — a few extra items are fine if they meaningfully improve the dish.`);
-    if (chips.cuisine) reqLines.push(section === "bar" ? `Style lean: ${chips.cuisine}.` : `Cuisine lean: ${chips.cuisine}.`);
-    if (chips.time === "quick") reqLines.push(`Keep it quick — about 30 minutes, weeknight-friendly.`);
-    if (chips.time === "involved") reqLines.push(`A more involved, worth-the-effort dish is welcome.`);
-    if (chips.servings) reqLines.push(`Make it for ${Number(chips.servings)} ${section === "bar" ? "drinks" : "servings"} (set base_servings accordingly).`);
-    if (chips.equipment) reqLines.push(`Preferred method/equipment: ${chips.equipment}.`);
-    reqLines.push("");
-    reqLines.push(`Dietary constraints:`);
-    reqLines.push(`- Diets that MUST be satisfied: ${listOrNone(diets)}`);
-    reqLines.push(`- ALLERGIES — never include, in any form, including garnish or substitutions: ${listOrNone(allergies)}`);
-    reqLines.push(`- Dislikes to avoid when possible: ${listOrNone(avoid)}`);
-    reqLines.push("");
-    reqLines.push(`Call save_recipe once with the finished recipe.`);
+    // ---- Step 1: propose 3 concepts (NOT counted against the daily cap) ----
+    if (mode === "concepts") {
+      const conceptText = [
+        section === "bar"
+          ? `Propose 3 distinct cocktail ideas from these on-hand ingredients:`
+          : `Propose 3 distinct recipe ideas from these main ingredients:`,
+        ingList,
+        "",
+        ...constraints,
+        "",
+        `Call propose_recipes with exactly 3 ideas.`
+      ].join("\n");
+      const { input, error } = await runTool(CONCEPTS_PROMPT, "propose_recipes", CONCEPTS_SCHEMA, conceptText);
+      if (error) return json({ error });
+      const concepts = Array.isArray(input?.concepts)
+        ? input.concepts.filter((c: { title?: string; blurb?: string }) => c?.title && c?.blurb).slice(0, 3)
+        : [];
+      if (concepts.length === 0) return json({ error: "Couldn’t come up with ideas from those — try different or a couple more ingredients." });
+      return json({ concepts });
+    }
 
-    const userContent = [{ type: "text", text: reqLines.join("\n") }];
+    // ---- Step 2: develop the chosen concept into a full recipe (capped) ----
+    const concept = body.concept && typeof body.concept === "object" ? body.concept : null;
 
     // Enforce the per-user daily cap right before the paid call. Fails open.
     const { data: usageResult, error: usageError } = await supabaseClient
@@ -218,40 +325,22 @@ Deno.serve(async (req) => {
     }
     if (usageError) console.error("generation_usage check failed:", usageError);
 
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": ANTHROPIC_VERSION
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 8192,
-        system: SYSTEM_PROMPT,
-        tools: [{ name: "save_recipe", description: "Save the generated recipe.", input_schema: RECIPE_SCHEMA }],
-        tool_choice: { type: "tool", name: "save_recipe" },
-        messages: [{ role: "user", content: userContent }]
-      })
-    });
+    const fullText = [
+      section === "bar"
+        ? `Invent ONE cocktail (bar recipe) using these on-hand ingredients:`
+        : `Invent ONE kitchen recipe using these main ingredients:`,
+      ingList,
+      "",
+      ...(concept?.title
+        ? [`The user picked this idea — develop it into the full recipe: "${String(concept.title)}"${concept.blurb ? ` — ${String(concept.blurb)}` : ""}.`, ""]
+        : []),
+      ...constraints,
+      "",
+      `Call save_recipe once with the finished recipe.`
+    ].join("\n");
 
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      console.error("Anthropic API error:", anthropicRes.status, errText);
-      const friendly = anthropicRes.status === 429
-        ? "Rate limit or usage limit reached — try again later."
-        : "AI generation failed. Please try again.";
-      return json({ error: friendly });
-    }
-
-    const anthropicData = await anthropicRes.json();
-    const toolBlock = anthropicData.content?.find((c: { type: string }) => c.type === "tool_use");
-    const recipe = toolBlock?.input;
-
-    if (anthropicData.stop_reason === "max_tokens") {
-      console.error("generate-recipe: response truncated at max_tokens");
-      return json({ error: "That recipe came out too long — try again." });
-    }
+    const { input: recipe, error: fullError } = await runTool(SYSTEM_PROMPT, "save_recipe", RECIPE_SCHEMA, fullText);
+    if (fullError) return json({ error: fullError });
 
     if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
       return json({ error: "AI couldn’t make a recipe from those ingredients — try adding one or two more." });
