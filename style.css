@@ -1919,6 +1919,9 @@ button:focus-visible, input:focus-visible {
 .gen-submit { width: 100%; margin-top: 4px; }
 .gen-tip { margin: 10px 0 0; font-size: 0.8rem; color: var(--faint); text-align: center; }
 
+/* Describe-a-recipe textarea */
+.prompt-input { width: 100%; resize: vertical; margin-bottom: 12px; font-family: var(--font-body); }
+
 /* Generator inventory check on the recipe form (have / need) */
 .rf-inv-check {
   margin: 10px 0 0; padding: 12px 14px; border-radius: var(--radius);

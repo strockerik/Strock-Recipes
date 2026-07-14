@@ -232,6 +232,18 @@
   const genCuisineLabel = $("#gen-opt-cuisine-label");
   const rfInventoryCheck = $("#rf-inventory-check");
 
+  // Describe-a-recipe panel
+  const addRecipePromptBtn = $("#add-recipe-prompt");
+  const promptPanel = $("#prompt-panel");
+  const closePromptBtn = $("#close-prompt");
+  const promptForm = $("#prompt-form");
+  const promptLoading = $("#prompt-loading");
+  const promptStatus = $("#prompt-status");
+  const promptCancelBtn = $("#prompt-cancel");
+  const promptDietLine = $("#prompt-diet-line");
+  const promptInput = $("#prompt-input");
+  const promptSubmitBtn = $("#prompt-submit");
+
   const coachPanel = $("#coach-panel");
   const coachRecipeName = $("#coach-recipe-name");
   const coachThread = $("#coach-thread");
@@ -2856,19 +2868,22 @@
   }
   // Dietary preferences are applied silently, but a first-time user has no way
   // to know that — surface a quiet line naming what's honored, or a link to set
-  // them up if nothing's been chosen yet.
-  function renderGenDietLine() {
+  // them up if nothing's been chosen yet. Shared by the generator and the
+  // describe-a-recipe panels; the Edit link carries data-diet-edit so either
+  // container's click handler can route to the account panel.
+  function dietLineHTML() {
     const parts = [
       ...dietPrefs.diets,
       ...dietPrefs.allergies.map((a) => `no ${a}`),
       ...dietPrefs.avoid.map((a) => `avoiding ${a}`)
     ];
-    genDietLineEl.innerHTML = parts.length
-      ? `Honoring your preferences (${esc(parts.join(", "))}) · <button type="button" id="gen-diet-edit" class="link-inline">Edit</button>`
-      : `<button type="button" id="gen-diet-edit" class="link-inline">Set dietary preferences</button>`;
+    return parts.length
+      ? `Honoring your preferences (${esc(parts.join(", "))}) · <button type="button" data-diet-edit class="link-inline">Edit</button>`
+      : `<button type="button" data-diet-edit class="link-inline">Set dietary preferences</button>`;
   }
+  function renderGenDietLine() { genDietLineEl.innerHTML = dietLineHTML(); }
   genDietLineEl.addEventListener("click", (e) => {
-    if (!e.target.closest("#gen-diet-edit")) return;
+    if (!e.target.closest("[data-diet-edit]")) return;
     closeGeneratePanel();
     openAccountPanel("menu");
   });
@@ -2979,6 +2994,56 @@
     const key = opt.dataset.genOpt;
     genState[key] = String(genState[key]) === opt.dataset.val ? null : opt.dataset.val;
     renderGenOptions();
+  });
+
+  // ---------- Describe a recipe (free-text request -> one classic recipe) ----------
+  let promptToken = 0; // ++ on close and on each call, abandons a stale response
+  function openPromptPanel() {
+    promptInput.value = "";
+    promptStatus.textContent = "";
+    promptDietLine.innerHTML = dietLineHTML();
+    promptForm.hidden = false;
+    promptLoading.hidden = true;
+    promptPanel.hidden = false;
+    promptInput.focus();
+  }
+  function closePromptPanel() {
+    promptToken++;
+    promptPanel.hidden = true;
+  }
+  async function runPromptRecipe() {
+    const prompt = promptInput.value.trim();
+    if (!prompt) { promptStatus.textContent = "Describe the recipe you'd like first."; return; }
+    const token = ++promptToken;
+    promptStatus.textContent = "";
+    promptForm.hidden = true;
+    promptLoading.hidden = false;
+    const invokePromise = supabaseClient.functions.invoke("generate-recipe", {
+      body: { mode: "prompt", prompt, dietPrefs }
+    }).catch((error) => ({ error }));
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(GENERATION_TIMEOUT), GENERATION_TIMEOUT_MS));
+    const result = await Promise.race([invokePromise, timeoutPromise]);
+    if (token !== promptToken || promptPanel.hidden) return; // stale / cancelled
+    const fail = (msg) => { promptForm.hidden = false; promptLoading.hidden = true; promptStatus.textContent = msg; };
+    if (result === GENERATION_TIMEOUT) return fail("That's taking too long — check your connection and try again.");
+    const { data, error } = result;
+    if (error || data?.error) return fail(`Error: ${data?.error || error.message}`);
+    closePromptPanel();
+    openRecipeForm(null);
+    fillRecipeFormFromExtraction(data.recipe);
+    recipeFormStatus.textContent = "AI wrote this recipe — please review before saving.";
+    renderInventoryCheck(data.recipe);
+  }
+  addRecipePromptBtn.addEventListener("click", openPromptPanel);
+  closePromptBtn.addEventListener("click", closePromptPanel);
+  promptCancelBtn.addEventListener("click", closePromptPanel);
+  promptSubmitBtn.addEventListener("click", runPromptRecipe);
+  promptInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runPromptRecipe(); }
+  });
+  promptPanel.addEventListener("click", (e) => {
+    if (e.target === promptPanel) { closePromptPanel(); return; }
+    if (e.target.closest("[data-diet-edit]")) { closePromptPanel(); openAccountPanel("menu"); }
   });
 
   // ---------- AI recipe coach (troubleshoot / improve) ----------
@@ -3955,7 +4020,7 @@
     }
   });
   // Close menu after any action opens its panel
-  [addRecipeAiBtn, addRecipeGenerateBtn, addRecipeBtn].forEach((b) => b.addEventListener("click", closeAddMenu));
+  [addRecipeAiBtn, addRecipeGenerateBtn, addRecipePromptBtn, addRecipeBtn].forEach((b) => b.addEventListener("click", closeAddMenu));
 
   // ---------- Recipe detail "⋯ More" menu ----------
   // A single shared floating menu (same fixed-position pattern as #add-menu),
@@ -4113,6 +4178,7 @@
     if (!coachPanel.hidden) closeCoachPanel();
     if (!inventoryPanel.hidden) inventoryPanel.hidden = true;
     if (!generatePanel.hidden) closeGeneratePanel();
+    if (!promptPanel.hidden) closePromptPanel();
   });
 
   // ---------- Init ----------

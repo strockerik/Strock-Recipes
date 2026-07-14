@@ -697,6 +697,31 @@
     </div>
   </div>
 
+  <!-- Describe a recipe: free-text request → one classic recipe -->
+  <div id="prompt-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Describe a recipe" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Describe a recipe</h2>
+        <button id="close-prompt" class="ghost-btn small" aria-label="Close">Close</button>
+      </div>
+      <div id="prompt-form">
+        <p class="gen-hint">Describe any dish or drink and AI will write one classic, home-cook version. Review it before saving.</p>
+        <p class="gen-diet-line" id="prompt-diet-line"></p>
+        <textarea id="prompt-input" class="search prompt-input" rows="3" maxlength="500"
+                  placeholder="e.g. a simple marinara sauce that uses garlic and basil" aria-label="Describe a recipe"></textarea>
+        <button type="button" id="prompt-submit" class="solid-btn gen-submit">✨ Write the recipe</button>
+        <p class="gen-tip">AI-written, not yet kitchen-tested — give it a look before you save.</p>
+      </div>
+      <div id="prompt-loading" class="ai-import-loading" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Writing your recipe…</p>
+        <p class="ai-import-hint">Working with AI.</p>
+        <button type="button" id="prompt-cancel" class="ghost-btn small">Cancel</button>
+      </div>
+      <p id="prompt-status" class="auth-status" aria-live="polite"></p>
+    </div>
+  </div>
+
   <!-- Add recipe menu — shared by desktop ＋ Add button and mobile FAB -->
   <div id="add-menu" class="add-menu" role="menu" hidden>
     <button id="add-recipe-ai" role="menuitem">
@@ -706,6 +731,10 @@
     <button id="add-recipe-generate" role="menuitem">
       <span class="am-ico">🪄</span>
       <span>Generate a recipe<small>From ingredients you have</small></span>
+    </button>
+    <button id="add-recipe-prompt" role="menuitem">
+      <span class="am-ico">💬</span>
+      <span>Describe a recipe<small>Ask AI for any dish or drink</small></span>
     </button>
     <button id="add-recipe" role="menuitem">
       <span class="am-ico">✏️</span>

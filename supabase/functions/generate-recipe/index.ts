@@ -9,15 +9,17 @@
 // The Anthropic API key is a server-side secret and never reaches the browser.
 // The caller's Supabase JWT is verified before any paid API call.
 //
-// Two-step flow, selected by `mode`:
+// Modes, selected by `mode`:
 //   mode: "concepts" -> return 3 short recipe ideas to choose from (NOT capped)
 //   mode: "full"     -> develop the chosen concept into a full recipe (capped)
+//   mode: "prompt"   -> free-text request -> one classic consolidated recipe (capped)
 //
 // Request body (JSON):
 //   {
-//     mode: "concepts" | "full",        // defaults to "full"
-//     ingredients: string[],            // main ingredients on hand (>= 1)
-//     section: "kitchen" | "bar",       // recipe vs cocktail
+//     mode: "concepts" | "full" | "prompt",   // defaults to "full"
+//     ingredients: string[],            // main ingredients on hand (concepts/full)
+//     prompt: string,                   // free-text request (prompt mode)
+//     section: "kitchen" | "bar",       // recipe vs cocktail (concepts/full)
 //     chips: { groceryRun?, time?, servings?, cuisine?, equipment? },  // optional
 //     dietPrefs: { diets: string[], allergies: string[], avoid: string[] },
 //     concept: { title, blurb }         // required when mode === "full"
@@ -144,6 +146,21 @@ OUTPUT:
 - section must match what was requested (bar → a cocktail with bar tags and oz amounts; kitchen → a dish).
 - source is "AI generated". Pick 0-3 tags from the allowed list only. Give concrete amounts and a sensible base_servings/servings_label.
 - If the listed ingredients genuinely can't form a coherent dish, make the closest sensible recipe and explain the assumptions in 'notes' (after any required "Buy: " line) — do not invent an implausible dish.`;
+
+// "Describe a recipe" — the cook asks for a dish/drink in free text and gets one
+// reliable, classic version. No inventory context, so no pantry-tier / grocery-run
+// machinery; the emphasis is a consolidated, simple, home-cook result.
+const PROMPT_RECIPE_PROMPT = `You are a home-cooking recipe developer. A home cook will describe a dish or drink they want. Write ONE reliable, classic version of it by calling the save_recipe tool — nothing else, no prose, no follow-up questions.
+
+Aim for the CONSENSUS "best of" recipe: the version most good home recipes agree on — not experimental, not gourmet, not restaurant-fussy. Keep it SIMPLE: common supermarket ingredients, a short clear ingredient list, and straightforward steps a busy home cook can follow. Don't pad it with optional garnishes or specialty items the dish doesn't truly need. Honor everything the cook specifies in their request (ingredients they name, style, servings, etc.).
+
+QUANTITIES — ground amounts in standard culinary ratios, never guess: vinaigrette 3:1 oil:acid; pasta ~1 lb : 6 qt salted water, tomato sauce ~1.5 cups per lb dry pasta; rice pilaf 2:1 liquid:rice; cocktails a sour ~2:1:1 spirit:sweet:sour, a highball ~1:3 spirit:mixer (oz amounts). Season in stages; give doneness by sensory cue AND safe temperature where relevant (poultry 165°F, fish 145°F).
+
+FLAVOR — match the cuisine's real base when the request implies one, e.g. Italian → garlic, basil, oregano, tomato, olive oil, Parmesan; Mexican → cumin, chili, lime, cilantro, garlic; Asian → soy, ginger, garlic, sesame, scallion; Mediterranean → olive oil, lemon, oregano, garlic, feta.
+
+ALLERGIES ARE ABSOLUTE: never include an allergen the cook lists, in any form, including garnish or substitutions. Honor any diet constraints fully; treat dislikes as strong preferences to avoid.
+
+OUTPUT: set section to "bar" for a cocktail/drink, "kitchen" for everything else. source is "AI generated". Give a head-noun-first name, concrete amounts, a sensible base_servings/servings_label, and 0-3 tags from the allowed list only. If the request is vague, make the most classic sensible version; put any brief assumptions in 'notes' (or null).`;
 
 // Lightweight schema for the "pick an option" step — just enough to show a card.
 const CONCEPTS_SCHEMA = {
@@ -278,7 +295,57 @@ Deno.serve(async (req) => {
     if (userError || !userData?.user) return json({ error: "Please sign in first." });
 
     const body = await req.json();
-    const mode = body.mode === "concepts" ? "concepts" : "full";
+    const mode = body.mode === "concepts" ? "concepts" : body.mode === "prompt" ? "prompt" : "full";
+    const dp = body.dietPrefs && typeof body.dietPrefs === "object" ? body.dietPrefs : {};
+    const diets = Array.isArray(dp.diets) ? dp.diets : [];
+    const allergies = Array.isArray(dp.allergies) ? dp.allergies : [];
+    const avoid = Array.isArray(dp.avoid) ? dp.avoid : [];
+    const dietLines = [
+      `Dietary constraints:`,
+      `- Diets that MUST be satisfied: ${listOrNone(diets)}`,
+      `- ALLERGIES — never include, in any form, including garnish or substitutions: ${listOrNone(allergies)}`,
+      `- Dislikes to avoid when possible: ${listOrNone(avoid)}`
+    ];
+
+    // ---- "Describe a recipe": free-text request -> one classic recipe (capped) ----
+    // No ingredients needed and the model picks the section (a request could be a
+    // dish or a drink), so this branch runs before the ingredient requirement.
+    if (mode === "prompt") {
+      const promptText = typeof body.prompt === "string" ? body.prompt.trim().slice(0, 500) : "";
+      if (!promptText) return json({ error: "Describe the recipe you'd like." });
+
+      const { data: usageResult, error: usageError } = await supabaseClient
+        .rpc("increment_generation_usage", { daily_limit: DAILY_GENERATION_LIMIT });
+      if (!usageError && usageResult === -1) {
+        return json({ error: `You’ve used today’s ${DAILY_GENERATION_LIMIT} AI recipe generations — it resets at midnight UTC. Try again tomorrow.` });
+      }
+      if (usageError) console.error("generation_usage check failed:", usageError);
+
+      const askText = [
+        `The home cook asked for:`,
+        `"${promptText}"`,
+        "",
+        `Write ONE reliable, classic version of this.`,
+        "",
+        ...dietLines,
+        "",
+        `Call save_recipe once with the finished recipe.`
+      ].join("\n");
+      const { input: recipe, error } = await runTool(PROMPT_RECIPE_PROMPT, "save_recipe", RECIPE_SCHEMA, askText);
+      if (error) return json({ error });
+      if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
+        return json({ error: "AI couldn’t turn that into a recipe — try describing it a little differently." });
+      }
+      const promptHit = allergyHit(recipe, allergies);
+      if (promptHit) {
+        console.error("generate-recipe(prompt): allergen safety net tripped on", promptHit);
+        return json({ error: `That recipe included ${promptHit}, which is on your allergy list — please try again.` });
+      }
+      // Model decides kitchen vs bar here (a request may be either); just normalize.
+      recipe.section = recipe.section === "bar" ? "bar" : "kitchen";
+      return json({ recipe });
+    }
+
     const ingredients = Array.isArray(body.ingredients)
       ? body.ingredients.map((s: unknown) => String(s).trim()).filter(Boolean)
       : [];
@@ -286,10 +353,6 @@ Deno.serve(async (req) => {
 
     const section = body.section === "bar" ? "bar" : "kitchen";
     const chips = body.chips && typeof body.chips === "object" ? body.chips : {};
-    const dp = body.dietPrefs && typeof body.dietPrefs === "object" ? body.dietPrefs : {};
-    const diets = Array.isArray(dp.diets) ? dp.diets : [];
-    const allergies = Array.isArray(dp.allergies) ? dp.allergies : [];
-    const avoid = Array.isArray(dp.avoid) ? dp.avoid : [];
     const ingList = ingredients.map((i: string) => `- ${i}`).join("\n");
     const constraints = buildConstraintLines(section, chips, diets, allergies, avoid);
 
