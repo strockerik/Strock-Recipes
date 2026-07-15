@@ -117,7 +117,7 @@ PANTRY MODEL — assume a normal kitchen, don't over-shop:
 - Tier 1 (assume freely, no need to flag): salt, black pepper, water, a neutral cooking oil, and — for baking context only — basic amounts of flour/sugar.
 - Tier 2 (use if a normal cook plausibly has it; it's fine to include): olive oil, butter, eggs, milk, garlic, onion, common dried spices (cumin, paprika, chili powder, oregano, basil, garlic/onion powder), soy sauce, vinegar, stock, canned tomatoes, rice, pasta, sugar, honey, cornstarch.
 - Tier 3 (specialty/perishable — proteins beyond what's listed, fresh herbs, specialty cheeses, fish sauce/miso/gochujang, wine, buttermilk, heavy cream, nuts, specific fresh produce not listed): governed by the user's grocery-run choice in the request. This is a HARD LIMIT — count your Tier-3 additions before answering:
-  - "Grocery run: NONE" — zero Tier-3 additions, no exceptions. If the dish would otherwise be incomplete, substitute from Tier 1/2 or the user's listed ingredients, or make a simpler version instead. Never add a Tier-3 item just because it would improve the dish.
+  - "Grocery run: NONE" — zero Tier-3 additions, no exceptions. This includes wine, extra proteins, fresh herbs, and specialty cheeses — the usual slip-ups — even a splash of wine or stock beyond what's listed is NOT allowed. If the dish would otherwise be incomplete, substitute from Tier 1/2 or the user's listed ingredients, or make a simpler version instead. Never add a Tier-3 item just because it would improve the dish.
   - "Grocery run: OK" — up to about 4 Tier-3 items are fine if they meaningfully improve the dish.
   - Not specified — be conservative: at most 1 Tier-3 item, and only if the dish genuinely needs it.
   - Any time you add so much as one Tier-3 item, 'notes' MUST begin with a line reading exactly "Buy: " followed by that item (or comma-separated items) — never bury a shopping need in prose the user might skim past.
@@ -209,7 +209,7 @@ function buildConstraintLines(
   avoid: unknown[]
 ): string[] {
   const lines: string[] = [];
-  if (chips.groceryRun === "none") lines.push(`Grocery run: NONE — use ONLY the listed ingredients plus Tier 1/2 staples and common seasonings.`);
+  if (chips.groceryRun === "none") lines.push(`Grocery run: NONE — build the dish from ONLY the ingredients listed above plus Tier 1/2 staples and common seasonings. Do NOT add wine, extra proteins, fresh herbs, or any other Tier-3 item — not even a splash to improve it.`);
   else if (chips.groceryRun === "quick") lines.push(`Grocery run: OK — a few extra specialty items are fine if they meaningfully improve the dish.`);
   if (chips.cuisine) lines.push(section === "bar" ? `Style lean: ${chips.cuisine}.` : `Cuisine lean: ${chips.cuisine}.`);
   if (chips.time === "quick") lines.push(`Keep it quick — about 30 minutes, weeknight-friendly.`);
@@ -224,19 +224,23 @@ function buildConstraintLines(
   return lines;
 }
 
-// Build a case-insensitive word-boundary matcher for each allergy term so the
-// post-generation safety net catches "peanut" in "peanut butter" but not
-// coincidental substrings.
-function allergyHit(recipe: { name?: string; notes?: string; ingredients?: Array<{ item?: string }> }, allergies: string[]): string | null {
+// Post-generation safety net: does the recipe actually put an allergen on the
+// plate? Scans the NAME and INGREDIENT items only — NOT notes, because a safe
+// recipe may legitimately mention an allergen in notes to say it was left out
+// ("omits peanuts per your allergy"), and rejecting on that is a false positive.
+// Matches common plural/possessive forms so a bare "peanuts" is caught (a plain
+// \bterm\b misses the plural), while still catching "peanut butter" via the
+// leading word boundary.
+function allergyHit(recipe: { name?: string; ingredients?: Array<{ item?: string }> }, allergies: string[]): string | null {
   const haystacks: string[] = [];
   if (recipe.name) haystacks.push(recipe.name);
-  if (recipe.notes) haystacks.push(recipe.notes);
   (recipe.ingredients || []).forEach((ing) => { if (ing?.item) haystacks.push(ing.item); });
   const hay = haystacks.join(" \n ").toLowerCase();
   for (const raw of allergies) {
     const term = String(raw).trim().toLowerCase();
     if (!term) continue;
-    const re = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`\\b${esc}(?:es|s|'s)?\\b`, "i");
     if (re.test(hay)) return term;
   }
   return null;
