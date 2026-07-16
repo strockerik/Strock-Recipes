@@ -36,6 +36,7 @@
   // Bar & pantry inventory (Supabase-backed, source of truth): {id,section,category,name,status}
   let inventory = [];
   let invSection = "bar"; // which sub-tab the inventory panel is showing: "bar" | "pantry"
+  let collapsedInvCats = new Set(); // "<section>:<category>" keys the user has collapsed; persisted
   // Dietary preferences, stored on the profile row (cross-device); honored silently by the generator.
   let dietPrefs = { diets: [], allergies: [], avoid: [] };
 
@@ -62,6 +63,7 @@
     seenPickHint = loadLocal("seenPickHint", false);
     seenIntro = loadLocal("seenIntro", false);
     planView = loadLocal("planView", "dinners");
+    collapsedInvCats = new Set(loadLocal("invCollapsed", []));
   }
   function maybeShowIntro() {
     introCardEl.hidden = seenIntro;
@@ -752,6 +754,7 @@
     introCardEl.hidden = true;
     planView = "dinners";
     inventory = [];
+    collapsedInvCats = new Set();
     dietPrefs = { diets: [], allergies: [], avoid: [] };
     mealPlan = [];
     mealPlanTray.clear();
@@ -1183,7 +1186,15 @@
         </li>`;
       }).join("");
       const heading = esc(invSection === "bar" ? invCap(cat) : cat);
-      return `<div class="inv-group"><h3 class="inv-cat">${heading}</h3><ul class="inv-list">${rows}</ul></div>`;
+      const collapsed = collapsedInvCats.has(invSection + ":" + cat);
+      return `<div class="inv-group${collapsed ? " is-collapsed" : ""}">
+        <button type="button" class="inv-cat" data-inv-cat="${esc(cat)}" aria-expanded="${!collapsed}">
+          <span class="inv-cat-caret" aria-hidden="true">▸</span>
+          <span class="inv-cat-name">${heading}</span>
+          <span class="inv-cat-count">${groups[cat].length}</span>
+        </button>
+        <ul class="inv-list">${rows}</ul>
+      </div>`;
     }).join("");
   }
   function setInvSection(sec) { invSection = sec; renderInventoryPanel(); }
@@ -1228,6 +1239,17 @@
     if (restock) { restockToGrocery(restock.dataset.invRestock); return; }
     const rm = e.target.closest("[data-inv-remove]");
     if (rm) { removeInventoryItem(rm.dataset.invRemove); return; }
+    // Collapse/expand a category — toggle the class in place (no re-render, so
+    // the rest of the panel's state is untouched) and remember the choice.
+    const catBtn = e.target.closest("[data-inv-cat]");
+    if (catBtn) {
+      const key = invSection + ":" + catBtn.dataset.invCat;
+      const nowCollapsed = !collapsedInvCats.has(key);
+      if (nowCollapsed) collapsedInvCats.add(key); else collapsedInvCats.delete(key);
+      catBtn.closest(".inv-group").classList.toggle("is-collapsed", nowCollapsed);
+      catBtn.setAttribute("aria-expanded", String(!nowCollapsed));
+      saveLocal("invCollapsed", [...collapsedInvCats]);
+    }
   });
   // The inventory -> generator bridge: hand off whatever's in-stock on the
   // current sub-tab, forcing the generator into the matching kitchen/bar mode

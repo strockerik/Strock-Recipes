@@ -16,3 +16,6 @@ __pycache__/
 # Local recipe backups written by scripts/backup_recipes.py
 backups/
 The House Index — Features Guide.pdf
+
+# Live AI test result archives (recipes only, no secrets) — kept for run-to-run comparison
+ai_test_runs/

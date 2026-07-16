@@ -28,8 +28,12 @@ specific number.
   files, ask the user to add it there — do not accept it pasted into chat.
 - **Never use the Supabase service-role key here.** Lane B (below) signs in as a
   normal user with email+password + the anon key — the ordinary user path.
-- **Clean up.** Delete any temp images, JSON dumps, and harness files after the
-  run. Never commit fixtures, results, or anything containing the key.
+- **Archive, don't delete, the results.** Each run writes its JSON results to a
+  timestamped folder `ai_test_runs/<YYYY-MM-DD-HHMM>/` (git-ignored — persists on
+  disk across sessions so future runs can diff against it; contains recipes only,
+  no secrets). Delete only transient harness scripts and any converted temp
+  images. Never commit anything containing the key. The headline metrics also go
+  to the `ai-quality-baseline` memory for a quick reference point.
 - **Mirror production models.** Text/URL/generate → `claude-haiku-4-5-20251001`;
   images → `claude-sonnet-4-6`. Same as the Edge Functions.
 - **No drift.** Pull the prompts, tag taxonomy, and schema shape from the actual
@@ -70,7 +74,8 @@ prompts/tags so there's no drift.
 
 ## 3. The harness (Lane A) — `run_ai_tests.py`
 
-Writes each result to `scratchpad/ai_results/*.json` for grading in §5. It
+Writes each result to the archived run folder `ai_test_runs/<timestamp>/*.json`
+(git-ignored, kept for comparison) for grading in §5. It
 **extracts the real `SYSTEM_PROMPT` / `PROMPT_RECIPE_PROMPT` / `CONCEPTS_PROMPT`
 and tag lists** from the `.ts` files, forces the matching tool, and enforces the
 call budget.
@@ -83,7 +88,7 @@ assert KEY, "ANTHROPIC_API_KEY not set (load from notes.md/.env.local)"
 BUDGET = int(sys.argv[1]) if len(sys.argv) > 1 else 0           # max paid calls
 assert BUDGET > 0, "pass an authorized call budget: python run_ai_tests.py <N>"
 MODEL_TEXT, MODEL_VISION, VER = "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "2023-06-01"
-OUT = pathlib.Path("ai_results"); OUT.mkdir(exist_ok=True)
+OUT = pathlib.Path("ai_test_runs") / time.strftime("%Y-%m-%d-%H%M"); OUT.mkdir(parents=True, exist_ok=True)  # archived, git-ignored
 CALLS = 0
 
 GEN = pathlib.Path("supabase/functions/generate-recipe/index.ts").read_text()
@@ -182,15 +187,20 @@ t_describe("desc-marinara", "a simple marinara sauce that uses garlic and basil"
 t_describe("desc-allergy", "chicken pad thai for two", diet=(None, ["peanut"], None))   # SAFETY: peanut must NOT appear
 t_text("text-messy", "grandmas chili - brown 1lb ground beef w/ an onion, add a can of kidney beans, "
        "2 cans diced tomato, 2 tbsp chili powder, cumin, simmer 30 min. salt to taste.")
-# t_image("img-pina", "data/Recipe Photos/Pina Colada - No Proportions.jpeg")   # Sonnet, ~2c — enable if budget allows
+# --- BENCHMARK FIXTURES: always run these sloppy Recipe Photos (Sonnet ~2c each) ---
+# They're the hardest, most informative extraction cases — keep them in EVERY run
+# so results are comparable over time. Budget for ~3 Sonnet calls.
+t_image("img-pina", "data/Recipe Photos/Pina Colada - No Proportions.jpeg")       # must INFER sensible bar proportions, flag "AI added:"
+t_image("img-bbq", "data/Recipe Photos/BBQ Pork - Narrative.jpeg")                # casual narrative -> clean structured steps
+t_image("img-enchilada", "data/Recipe Photos/Chicken Enchilada Casserole - Incomplete.jpeg")  # cut-off recipe -> complete it, flag gap-fills
 print(f"\nDONE — {CALLS} paid call(s). Results in {OUT}/")
 ```
 
 Run (from repo root, after loading the key):
 
 ```bash
-mkdir -p /path/to/scratchpad/ai_results && cd /path/to/scratchpad
-cp /repo/run_ai_tests.py .   # or write it here
+# write run_ai_tests.py to the scratchpad, then run it FROM the repo root so it
+# reads supabase/functions/** and writes ai_test_runs/<timestamp>/ under the repo
 ( cd /repo && ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" python3 /path/to/scratchpad/run_ai_tests.py <BUDGET> )
 ```
 (The harness reads `supabase/functions/**` relative to CWD, so run it from the
@@ -226,13 +236,13 @@ curl -s "$SB/functions/v1/extract-recipe" -H "Authorization: Bearer $TOKEN" -H "
 # generate two-step, real path:
 #   call_fn '{"mode":"concepts","ingredients":["chicken thighs","lemon"],"section":"kitchen","dietPrefs":{"diets":[],"allergies":[],"avoid":[]}}'
 ```
-Save each JSON response to `ai_results/` for the same grading. Never echo `$TOKEN`.
+Save each JSON response into the same `ai_test_runs/<timestamp>/` folder for the same grading. Never echo `$TOKEN`.
 
 ---
 
 ## 5. Grading rubric — the point of the whole exercise
 
-Read each `ai_results/*.json` and grade. Score each dimension **✓ / ⚠ / ✗** and
+Read each `ai_test_runs/<timestamp>/*.json` and grade. Score each dimension **✓ / ⚠ / ✗** and
 keep a one-line note. The app's north star is **simple, helpful, home-cook** —
 weight simplicity and correctness over cleverness.
 
@@ -278,7 +288,7 @@ or the prompt regressed. Report it first, loudly.
 python3 - <<'PY'
 import json,glob,re
 ALLERGEN="peanut"
-for f in glob.glob("ai_results/*.json"):
+for f in glob.glob("ai_test_runs/*/*.json"):   # scan the latest run
     d=json.load(open(f)); r=(d.get("result") or {})
     hay=" ".join([r.get("name",""), r.get("notes","") or ""]+[i.get("item","") for i in r.get("ingredients",[])]).lower()
     if re.search(rf"\b{ALLERGEN}\b", hay): print("!! ALLERGEN HIT:", f)
@@ -300,12 +310,32 @@ Produce a compact table + narrative:
 Then:
 - **Patterns** — the systemic issues (e.g. "describe-mode over-seasons; 2/3 added
   optional garnishes not asked for"), not one-off nits.
+- **Compare against the baseline** — diff this run against the
+  `ai-quality-baseline` memory and the previous `ai_test_runs/<older>/` folder.
+  Call out regressions AND improvements explicitly. Track the metrics that move:
+  ingredient counts (simplicity), grocery-run "none" Tier-3 leaks, allergen
+  safety, and the **benchmark-fixture** behavior below.
 - **Concrete prompt fixes** — the specific line to change in
   `generate-recipe/index.ts` / `extract-recipe/index.ts`, mapped to the failing
   dimension. If a fix is obvious and budget remains, apply it and **re-test 1–2**
   to confirm (still within N).
 - **Spend** — `CALLS × ~$0.01` (note Sonnet image calls run higher).
 - **Blockers** — any allergen hit or schema break, called out at the top.
+
+### Benchmark fixtures — the sloppy Recipe Photos (grade every run against these)
+These three are the standing image benchmarks (always in the matrix). Each stress-
+tests a specific extraction skill; grade against the expected-good behavior, and
+compare the result to prior runs — a regression here is a real signal:
+- **Piña Colada — No Proportions** → the source lists ingredients with NO amounts;
+  a good extract *infers* sensible bar proportions (≈2 oz rum / 3 oz pineapple /
+  1.5 oz cream of coconut) and flags them in `notes` ("AI added: all amounts").
+- **BBQ Pork — Narrative** → a casual prose/text-message screenshot; a good extract
+  turns it into clean numbered steps with estimated spice amounts, flagged.
+- **Chicken Enchilada Casserole — Incomplete** → the method is cut off; a good
+  extract completes it sensibly and flags the gap-fill, without inventing a
+  different dish.
+(The `.heic` fixtures — Pannakakku, Chicken & Rice — are cursive-card benchmarks;
+convert to JPEG first, then add them when budget allows.)
 
 ---
 

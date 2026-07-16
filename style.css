@@ -1853,10 +1853,20 @@ button:focus-visible, input:focus-visible {
 .inventory-content { display: flex; flex-direction: column; gap: 18px; }
 .inv-empty { color: var(--faint); font-size: 0.9rem; text-align: center; padding: 18px 0; }
 .gen-from-inv { width: 100%; margin-top: 18px; }
+/* Category heading doubles as a collapse toggle */
 .inv-cat {
-  margin: 0 0 6px; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  margin: 0 0 6px; padding: 4px 0; border: 0; background: none; cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent);
 }
+.inv-cat-caret { font-size: 0.7rem; transition: transform 0.15s; transform: rotate(90deg); }
+.inv-group.is-collapsed .inv-cat-caret { transform: rotate(0deg); }
+.inv-cat-count {
+  margin-left: auto; font-weight: 500; color: var(--faint);
+  background: var(--chip); border-radius: 999px; padding: 1px 8px;
+}
+.inv-group.is-collapsed .inv-list { display: none; }
 .inv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .inv-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dotted var(--line); }
 .inv-row:last-child { border-bottom: 0; }
