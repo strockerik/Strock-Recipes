@@ -1955,7 +1955,11 @@
       placeSheetTitle.textContent = `Add to ${slotLabel(placeSheetState.slot)}, ${wd} ${md}`;
       const recipeBtns = [...mealPlanTray].map((id) => {
         const it = byId[id];
-        return it ? `<button class="ps-recipe-btn" data-recipe="${esc(id)}">${esc(it.name)}</button>` : "";
+        if (!it) return "";
+        // Already scheduled somewhere in the visible window — gray it out so
+        // adding it to a second night is a deliberate choice, not a slip.
+        const already = mealPlan.some((e) => e.recipeId === id);
+        return `<button class="ps-recipe-btn${already ? " is-planned" : ""}" data-recipe="${esc(id)}">${esc(it.name)}${already ? ` <span class="ps-recipe-planned-tag">already planned</span>` : ""}</button>`;
       }).filter(Boolean).join("");
       placeSheetBody.innerHTML = `<div class="ps-recipes">${recipeBtns}</div>`;
     }

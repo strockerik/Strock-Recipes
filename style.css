@@ -1015,6 +1015,19 @@ button:focus-visible, input:focus-visible {
   cursor: pointer;
 }
 .ps-slot-btn:hover, .ps-recipe-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* Already scheduled elsewhere this window — stays tappable (a second night
+   is a valid choice) but reads as "you've done this one" at a glance. */
+.ps-recipe-btn.is-planned { opacity: 0.55; border-style: dashed; }
+.ps-recipe-btn.is-planned:hover { opacity: 0.85; }
+.ps-recipe-planned-tag {
+  display: block;
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  margin-top: 2px;
+}
 
 /* ---------- Recipe form ---------- */
 .recipe-form { display: flex; flex-direction: column; gap: 14px; }
