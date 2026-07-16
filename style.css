@@ -327,6 +327,19 @@ button:focus-visible, input:focus-visible {
   color: var(--faint);
 }
 
+.staged-count {
+  display: block;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.staged-count:hover { border-color: var(--accent); }
+
 .intro-card {
   display: flex;
   align-items: center;
@@ -374,6 +387,14 @@ button:focus-visible, input:focus-visible {
   accent-color: var(--accent);
   cursor: pointer;
 }
+
+/* meal-plan pick — right-edge sibling of the grocery .pick; calendar glyph,
+   dim -> lit, so the row reads as "stage for the week". Glyph-only (no visible
+   box) so the right edge doesn't get busy next to ★ and ▶. */
+.plan-pick-wrap { display: inline-flex; align-items: center; cursor: pointer; flex: 0 0 auto; }
+.plan-pick-wrap .plan-pick-ico { font-size: 0.95rem; opacity: 0.4; transition: opacity 0.15s; }
+.plan-pick-wrap .plan-pick:checked + .plan-pick-ico { opacity: 1; }
+.plan-pick { position: absolute; opacity: 0; width: 0; height: 0; }
 
 .item-head {
   flex: 1;
@@ -586,6 +607,11 @@ button:focus-visible, input:focus-visible {
   color: #fff;
 }
 .detail-grocery-btn.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.add-to-plan-btn.is-on {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;

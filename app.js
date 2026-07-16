@@ -1361,6 +1361,7 @@
       const servings = chosenServings(it);
       const open = openItems.has(it.id);
       const mine = it.userId === session?.user?.id;
+      const inTray = mealPlanTray.has(it.id);
       return `
       <li class="item${open ? " is-open" : ""}" data-id="${esc(it.id)}">
         <div class="item-row">
@@ -1382,12 +1383,18 @@
             <button class="serv-btn" data-step="1" aria-label="Increase servings">+</button>
             <span class="serv-label">${esc(it.servingsLabel)}</span>
           </span>` : ""}
+          <label class="plan-pick-wrap" title="${inTray ? "Staged for meal planning \u2014 open Meal plan to place it" : "Add to meal plan"}">
+            <input type="checkbox" class="plan-pick" ${inTray ? "checked" : ""}
+                   aria-label="Add ${esc(it.name)} to meal plan">
+            <span class="plan-pick-ico" aria-hidden="true">\uD83D\uDCC5</span>
+          </label>
           ${mine ? `<button class="star-btn${it.isFavorite ? " is-on" : ""}" aria-label="${it.isFavorite ? "Remove from favorites" : "Add to favorites"}" aria-pressed="${it.isFavorite}">${it.isFavorite ? "\u2605" : "\u2606"}</button>` : ""}
           <span class="chevron" aria-hidden="true">\u25B6</span>
         </div>
         ${open ? renderDetail(it, servings) : ""}
       </li>`;
     }).join("");
+    renderStagedCount();
   }
 
   function renderDetail(it, servings) {
@@ -1447,7 +1454,7 @@
       </div>
       <div class="detail-actions-row">
         ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
-        <button class="ghost-btn small add-to-plan-btn" data-id="${esc(it.id)}">📅 Add to plan</button>
+        <button class="ghost-btn small add-to-plan-btn${mealPlanTray.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${mealPlanTray.has(it.id) ? "✓ In meal plan" : "📅 Add to plan"}</button>
         <button class="ghost-btn small detail-grocery-btn${basket.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${basket.has(it.id) ? "✓ In grocery list" : "🛒 Add to grocery list"}</button>
         <button class="ghost-btn small coach-btn" data-id="${esc(it.id)}">✨ Ask AI</button>
         <button class="ghost-btn small detail-more-btn" data-id="${esc(it.id)}" aria-haspopup="true" aria-expanded="false">⋯ More</button>
@@ -1859,15 +1866,26 @@
     }));
   }
 
-  function addToMealPlanTray(id) {
-    mealPlanTray.add(id);
+  function setTrayMembership(id, on) {
+    if (on) mealPlanTray.add(id); else mealPlanTray.delete(id);
     saveLocal("mealTray", [...mealPlanTray]);
+    renderStagedCount();
+    renderMealPlan();
+  }
+  function addToMealPlanTray(id) {
+    setTrayMembership(id, true);
     toast("Added to meal plan");
   }
   function removeFromTray(id) {
-    mealPlanTray.delete(id);
-    saveLocal("mealTray", [...mealPlanTray]);
-    renderMealPlan();
+    setTrayMembership(id, false);
+  }
+
+  function renderStagedCount() {
+    const el = $("#staged-count");
+    if (!el) return;
+    const n = mealPlanTray.size;
+    el.hidden = !n;
+    el.textContent = n === 1 ? "1 recipe staged — plan it →" : `${n} recipes staged — plan them →`;
   }
 
   async function assignMealEntry(recipeId, date, slot) {
@@ -3406,6 +3424,11 @@
       return;
     }
 
+    if (e.target.classList.contains("plan-pick")) {
+      setTrayMembership(id, e.target.checked);
+      return;
+    }
+
     if (e.target.classList.contains("pick")) {
       // Carry any scale chosen in the detail view into the grocery list.
       if (e.target.checked) basket.set(id, { servings: defaultAddServings(byId[id]) });
@@ -3461,7 +3484,9 @@
     }
 
     if (e.target.closest(".add-to-plan-btn")) {
-      addToMealPlanTray(id);
+      if (mealPlanTray.has(id)) removeFromTray(id);
+      else addToMealPlanTray(id);
+      renderList();
       return;
     }
 
@@ -3859,6 +3884,7 @@
   // Mode tabs: Recipes ↔ Meal plan
   modeRecipesBtn.addEventListener("click", () => setViewMode("recipes"));
   modeMealplanBtn.addEventListener("click", () => setViewMode("mealplan"));
+  $("#staged-count").addEventListener("click", () => setViewMode("mealplan"));
   mealPlanView.addEventListener("click", (e) => {
     if (e.target.closest("#mp-make-grocery")) { groceryFromPlan(); return; }
     const viewBtn = e.target.closest("[data-plan-view]");
