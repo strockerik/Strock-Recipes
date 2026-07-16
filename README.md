@@ -611,6 +611,16 @@ If any of these SQL blocks hasn't been run yet (or an RPC call errors for any
 reason), that Edge Function fails open — the request proceeds without a cap
 rather than breaking.
 
+> **Security Advisor flags a cap RPC as callable by `anon`?** Supabase grants
+> `EXECUTE` to `anon` on every new function by default, regardless of
+> `revoke ... from public` above — `anon` has to be revoked by name. Run once:
+>
+> ```sql
+> revoke execute on function public.increment_extraction_usage(int) from anon;
+> revoke execute on function public.increment_coach_usage(int) from anon;
+> revoke execute on function public.increment_generation_usage(int) from anon;
+> ```
+
 **Verifying setup:** don't call the RPCs directly from the SQL editor — they run
 there as `postgres` with no signed-in user, so `auth.uid()` is null and the insert
 fails with a not-null error (that error means the function exists, not that it's
