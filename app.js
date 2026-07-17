@@ -53,13 +53,11 @@
     try { localStorage.setItem(userKey(name), JSON.stringify(value)); } catch {}
   }
   function loadUserLocalState() {
-    loadLocal("basket", []).forEach(([id, v]) => basket.set(id, v));
-    loadLocal("checked", []).forEach((k) => checkedGroceryItems.add(k));
-    skipPantryStaples = loadLocal("skipStaples", false);
-    manualGroceryItems = loadLocal("manualItems", []);
+    // basket / checkedGroceryItems / manualGroceryItems / skipPantryStaples /
+    // aisleOrder are Supabase-backed now (loadGroceryList/loadMyGroceryPrefs
+    // in loadData) — this only hydrates state that's still per-device.
     loadLocal("mealTray", []).forEach((id) => mealPlanTray.add(id));
     householdServings = loadLocal("household", null);
-    aisleOrder = loadStoredAisleOrder();
     seenPickHint = loadLocal("seenPickHint", false);
     seenIntro = loadLocal("seenIntro", false);
     planView = loadLocal("planView", "dinners");
@@ -67,12 +65,6 @@
   }
   function maybeShowIntro() {
     introCardEl.hidden = seenIntro;
-  }
-  function persistGrocery() {
-    saveLocal("basket", [...basket.entries()]);
-    saveLocal("checked", [...checkedGroceryItems]);
-    saveLocal("skipStaples", skipPantryStaples);
-    saveLocal("manualItems", manualGroceryItems);
   }
 
   const DATA = { recipes: [], cocktails: [], sharedRecipes: [], sharedCocktails: [] };
@@ -519,14 +511,13 @@
   const OTHER_CATEGORY = "Other";
   // Default store-walk order for display (independent of the match-priority
   // order above); empty sections are skipped, "Other" is always last. The
-  // user can customize this via "Reorder aisles" — see aisleOrder/loadStoredAisleOrder.
+  // user can customize this via "Reorder aisles" — see aisleOrder/mergeAisleOrder.
   const GROCERY_CATEGORY_ORDER = ["Produce", "Bakery", "Meat & Seafood", "Dairy & Eggs", "Frozen", "Canned & Jarred", "Dry Goods & Baking", "Condiments, Sauces & Spices", "Beverages", "Alcohol", OTHER_CATEGORY];
 
   // Merge a stored aisle order with the current category list, so a category
   // added to the app after the user last reordered still shows up (appended,
   // before "Other") instead of silently vanishing from the grocery panel.
-  function loadStoredAisleOrder() {
-    const stored = loadLocal("aisleOrder", null);
+  function mergeAisleOrder(stored) {
     if (!stored) return GROCERY_CATEGORY_ORDER.slice();
     const known = GROCERY_CATEGORY_ORDER.filter((c) => c !== OTHER_CATEGORY);
     const kept = stored.filter((c) => known.includes(c));
@@ -619,6 +610,37 @@
     if (error) toast("Couldn’t save dietary preferences — try again.");
   }
 
+  // ---------- Grocery settings (profile-backed, cross-device) ----------
+  // Skip-staples + aisle order aren't list *contents*, just preferences —
+  // same jsonb-on-profile shape as dietPrefs above, not part of the
+  // basket/manual/checked tables.
+  function normalizeGroceryPrefs(raw) {
+    return {
+      skipStaples: !!raw?.skipStaples,
+      aisleOrder: Array.isArray(raw?.aisleOrder) ? raw.aisleOrder : null
+    };
+  }
+  async function loadMyGroceryPrefs() {
+    if (!session) { skipPantryStaples = false; aisleOrder = mergeAisleOrder(null); return; }
+    const { data, error } = await supabaseClient
+      .from("profiles").select("grocery_prefs").eq("id", session.user.id).single();
+    const prefs = error ? { skipStaples: false, aisleOrder: null } : normalizeGroceryPrefs(data?.grocery_prefs);
+    skipPantryStaples = prefs.skipStaples;
+    aisleOrder = mergeAisleOrder(prefs.aisleOrder);
+  }
+  let groceryPrefsSaveTimer = null;
+  async function saveGroceryPrefs() {
+    if (!session) return;
+    await ensureProfile();
+    const { error } = await supabaseClient.from("profiles")
+      .upsert({ id: session.user.id, grocery_prefs: { skipStaples: skipPantryStaples, aisleOrder } }, { onConflict: "id" });
+    if (error) toast("Couldn’t save grocery preferences — try again.");
+  }
+  function scheduleGroceryPrefsSave() {
+    clearTimeout(groceryPrefsSaveTimer);
+    groceryPrefsSaveTimer = setTimeout(saveGroceryPrefs, 400);
+  }
+
   // ---------- Bar & pantry inventory (Supabase-backed) ----------
   function mapInventoryRow(r) {
     return { id: r.id, section: r.section, category: r.category, name: r.name, status: r.status };
@@ -652,6 +674,142 @@
     if (error) { toast(`Couldn't remove: ${error.message}`); return; }
     inventory = inventory.filter((i) => i.id !== id);
     renderInventoryPanel();
+  }
+
+  // ---------- Grocery list (Supabase-backed, cross-device) ----------
+  // Three tables: basket (recipe_id + servings, one row per recipe),
+  // manual items (freeform + optional inventory-restock provenance), and
+  // checked-off state (a pure membership set over opaque item keys — see
+  // combinedGroceryItems() for how those keys are derived; they're never
+  // stored anywhere else). skipPantryStaples/aisleOrder live on the profile
+  // (see loadMyGroceryPrefs above) since they're settings, not list contents.
+  async function loadGroceryList() {
+    if (!session) { basket.clear(); manualGroceryItems = []; checkedGroceryItems.clear(); return; }
+    const [basketRes, manualRes, checkedRes] = await Promise.all([
+      supabaseClient.from("grocery_basket_items").select("*"),
+      supabaseClient.from("grocery_manual_items").select("*").order("created_at"),
+      supabaseClient.from("grocery_checked_items").select("item_key")
+    ]);
+    basket.clear();
+    if (!basketRes.error) (basketRes.data || []).forEach((r) => basket.set(r.recipe_id, { servings: r.servings }));
+    manualGroceryItems = manualRes.error ? [] : (manualRes.data || []).map((r) => ({ key: r.id, name: r.name, sourceInventoryId: r.source_inventory_id }));
+    checkedGroceryItems.clear();
+    if (!checkedRes.error) (checkedRes.data || []).forEach((r) => checkedGroceryItems.add(r.item_key));
+  }
+
+  // Optimistic: mirrors updateInventoryStatus's mutate-then-rollback shape,
+  // since a checkbox needs to feel instant. Unifies the two call sites that
+  // used to duplicate this (list-row .pick and the detail-view button).
+  async function setBasketMembership(id, on) {
+    const it = byId[id];
+    if (!it) return;
+    const prev = basket.has(id) ? { ...basket.get(id) } : null;
+    if (on) basket.set(id, { servings: defaultAddServings(it) }); else basket.delete(id);
+    renderList();
+    renderGroceryBar();
+    if (!groceryPanel.hidden) renderGroceryPanel();
+    if (!session) return;
+    const { error } = on
+      ? await supabaseClient.from("grocery_basket_items")
+          .upsert({ recipe_id: id, servings: basket.get(id).servings }, { onConflict: "user_id,recipe_id" })
+      : await supabaseClient.from("grocery_basket_items").delete().eq("recipe_id", id);
+    if (error) {
+      if (prev) basket.set(id, prev); else basket.delete(id);
+      renderList();
+      renderGroceryBar();
+      if (!groceryPanel.hidden) renderGroceryPanel();
+      toast(`Couldn't update grocery list: ${error.message}`);
+    }
+  }
+
+  // Non-optimistic (mirrors addInventoryItem/removeInventoryItem) — a manual
+  // item has no natural key, so add waits for the server-generated id before
+  // it can be referenced (e.g. checked off) at all.
+  async function addManualGroceryItem(name, sourceInventoryId = null) {
+    if (!session) { toast("You've been signed out — sign in again."); return null; }
+    const { data, error } = await supabaseClient
+      .from("grocery_manual_items").insert({ name, source_inventory_id: sourceInventoryId }).select().single();
+    if (error) { toast(`Couldn't add: ${error.message}`); return null; }
+    const item = { key: data.id, name: data.name, sourceInventoryId: data.source_inventory_id };
+    manualGroceryItems.push(item);
+    renderGroceryBar();
+    if (!groceryPanel.hidden) renderGroceryPanel();
+    return item;
+  }
+  async function removeManualGroceryItem(key) {
+    const [{ error }] = await Promise.all([
+      supabaseClient.from("grocery_manual_items").delete().eq("id", key),
+      supabaseClient.from("grocery_checked_items").delete().eq("item_key", key)
+    ]);
+    if (error) { toast(`Couldn't remove: ${error.message}`); return; }
+    manualGroceryItems = manualGroceryItems.filter((m) => m.key !== key);
+    checkedGroceryItems.delete(key);
+    renderGroceryBar();
+    if (!groceryPanel.hidden) renderGroceryPanel();
+  }
+
+  // Optimistic check/uncheck. On a successful CHECK (not uncheck) of an item
+  // that came from the pantry/bar restock bridge, also flip that inventory
+  // row back to "in" — closing the loop between "bought it" and "back in
+  // stock." Unchecking deliberately does NOT reverse this; that stays a
+  // manual call in the Bar & Pantry panel.
+  async function syncCheckedItem(key, checked) {
+    if (!session) return;
+    const { error } = checked
+      ? await supabaseClient.from("grocery_checked_items").upsert({ item_key: key }, { onConflict: "user_id,item_key" })
+      : await supabaseClient.from("grocery_checked_items").delete().eq("item_key", key);
+    if (error) {
+      if (checked) checkedGroceryItems.delete(key); else checkedGroceryItems.add(key);
+      renderGroceryProgress();
+      if (!groceryPanel.hidden) renderGroceryPanel();
+      toast(`Couldn't save check-off: ${error.message}`);
+      return;
+    }
+    if (checked) {
+      const manual = manualGroceryItems.find((m) => m.key === key);
+      if (manual?.sourceInventoryId) {
+        const invItem = inventory.find((i) => i.id === manual.sourceInventoryId);
+        if (invItem && invItem.status !== "in") await updateInventoryStatus(invItem.id, "in");
+      }
+    }
+  }
+
+  // One-time per-browser migration from the old localStorage-only grocery
+  // list to the new synced tables, so shipping this doesn't silently drop
+  // whatever's currently on someone's list. Only acts if the server-side
+  // list is empty and a legacy local one isn't; sets the flag either way so
+  // it's never attempted twice.
+  async function migrateLegacyGroceryLocalStorage() {
+    if (!session || loadLocal("groceryMigratedV2", false)) return;
+    const legacyBasket = loadLocal("basket", []);
+    const legacyManual = loadLocal("manualItems", []);
+    const legacyChecked = new Set(loadLocal("checked", []));
+    const legacySkip = loadLocal("skipStaples", null);
+    const legacyAisle = loadLocal("aisleOrder", null);
+    const hasLegacy = legacyBasket.length > 0 || legacyManual.length > 0;
+    const serverEmpty = basket.size === 0 && manualGroceryItems.length === 0;
+    if (hasLegacy && serverEmpty) {
+      try {
+        const basketRows = legacyBasket.filter(([id]) => byId[id]).map(([id, v]) => ({ recipe_id: id, servings: v.servings }));
+        if (basketRows.length) await supabaseClient.from("grocery_basket_items").upsert(basketRows, { onConflict: "user_id,recipe_id" });
+        const checkedRows = [];
+        for (const m of legacyManual) {
+          const { data, error } = await supabaseClient.from("grocery_manual_items").insert({ name: m.name }).select().single();
+          if (!error && data && legacyChecked.has(m.key)) checkedRows.push({ item_key: data.id });
+        }
+        for (const key of legacyChecked) {
+          if (!key.startsWith("manual:")) checkedRows.push({ item_key: key }); // combined-item keys carry over as-is
+        }
+        if (checkedRows.length) await supabaseClient.from("grocery_checked_items").upsert(checkedRows, { onConflict: "user_id,item_key" });
+        if (legacySkip != null || legacyAisle != null) {
+          skipPantryStaples = !!legacySkip;
+          aisleOrder = mergeAisleOrder(legacyAisle);
+          await saveGroceryPrefs();
+        }
+        await loadGroceryList();
+      } catch (e) { /* best-effort — the flag below still prevents retrying every load */ }
+    }
+    saveLocal("groceryMigratedV2", true);
   }
 
   // Re-render every view that depends on data / filters / basket state.
@@ -688,6 +846,11 @@
     // the inventory panel — fetch alongside recipes, don't block the list render.
     const inventoryPromise = loadInventory();
     const dietPrefsPromise = loadMyDietPrefs();
+    // Grocery list needs to be ready as soon as the app loads (the grocery bar
+    // shows a count on the main view), same urgency as inventory — unlike the
+    // meal plan, which only loads lazily when its tab opens.
+    const groceryPromise = loadGroceryList();
+    const groceryPrefsPromise = loadMyGroceryPrefs();
     const sharesPromise = supabaseClient
       .from("recipe_shares")
       .select("recipe_id, shared_with_user_id")
@@ -723,6 +886,9 @@
     await ensureProfile();
     await inventoryPromise; // resolve the background reads so a stale reload can't clobber
     await dietPrefsPromise;
+    await groceryPromise;
+    await groceryPrefsPromise;
+    await migrateLegacyGroceryLocalStorage(); // one-time, no-ops after the first run
 
     // Note: we deliberately do NOT blanket-clear basket / activeTags / openItems
     // here, so adding/editing/deleting a recipe doesn't wipe the user's grocery
@@ -1203,7 +1369,7 @@
     renderInventoryPanel();
     inventoryPanel.hidden = false;
   }
-  function restockToGrocery(id) {
+  async function restockToGrocery(id) {
     const item = inventory.find((i) => i.id === id);
     if (!item) return;
     const name = invGroceryLabel(item);
@@ -1213,10 +1379,10 @@
     // otherwise treat "Tequila - Cimmaron" and "Tequila - Don Julio" as the same
     // item and block the second brand from ever being added.
     if (manualGroceryItems.some((m) => m.name.toLowerCase() === name.toLowerCase())) { toast("Already on your grocery list."); return; }
-    manualGroceryItems.push({ key: `manual:${Date.now()}`, name });
-    persistGrocery();
-    renderGroceryBar();
-    toast(`Added ${name} to grocery list`);
+    // sourceInventoryId records provenance — checking this item off later
+    // auto-restocks it (see syncCheckedItem).
+    const added = await addManualGroceryItem(name, id);
+    if (added) toast(`Added ${name} to grocery list`);
   }
   openInventoryBtn.addEventListener("click", openInventoryPanel);
   closeInventoryBtn.addEventListener("click", () => (inventoryPanel.hidden = true));
@@ -1328,14 +1494,23 @@
 
   // Set a recipe's servings from any +/- control, keeping the grocery basket in
   // sync so the combined shopping list reflects the new scale immediately.
+  const basketServingsTimers = new Map(); // recipeId -> timeout handle, debounces rapid +/- taps
   function setRecipeServings(id, n) {
     const v = Math.max(1, n);
-    servingsByRecipe.set(id, v);
+    servingsByRecipe.set(id, v); // session-only override, never synced
     if (basket.has(id)) basket.get(id).servings = v;
-    persistGrocery();
     renderList();
     renderGroceryBar();
     if (!groceryPanel.hidden) renderGroceryPanel();
+    if (!session || !basket.has(id)) return;
+    clearTimeout(basketServingsTimers.get(id));
+    basketServingsTimers.set(id, setTimeout(async () => {
+      basketServingsTimers.delete(id);
+      if (!basket.has(id)) return; // removed while the debounce was pending
+      const { error } = await supabaseClient.from("grocery_basket_items")
+        .upsert({ recipe_id: id, servings: basket.get(id).servings }, { onConflict: "user_id,recipe_id" });
+      if (error) toast(`Couldn't save servings: ${error.message}`);
+    }, 500));
   }
 
   function renderList() {
@@ -1996,6 +2171,17 @@
       totals.set(e.recipeId, (totals.get(e.recipeId) || 0) + s);
     });
     if (!totals.size) { toast("Those planned recipes aren't available."); return; }
+    // Full server-side replace: wipe the existing basket + check-offs, then
+    // write the new one — manual items are deliberately left untouched.
+    if (session) {
+      const [{ error: e1 }, { error: e2 }] = await Promise.all([
+        supabaseClient.from("grocery_basket_items").delete().eq("user_id", session.user.id),
+        supabaseClient.from("grocery_checked_items").delete().eq("user_id", session.user.id)
+      ]);
+      const rows = [...totals.entries()].map(([recipe_id, servings]) => ({ recipe_id, servings }));
+      const { error: e3 } = await supabaseClient.from("grocery_basket_items").insert(rows);
+      if (e1 || e2 || e3) { toast("Couldn't rebuild your grocery list — try again."); return; }
+    }
     basket.clear();
     checkedGroceryItems.clear();
     totals.forEach((s, id) => basket.set(id, { servings: s }));
@@ -3434,23 +3620,12 @@
     }
 
     if (e.target.classList.contains("pick")) {
-      // Carry any scale chosen in the detail view into the grocery list.
-      if (e.target.checked) basket.set(id, { servings: defaultAddServings(byId[id]) });
-      else basket.delete(id);
-      persistGrocery();
-      renderList();
-      renderGroceryBar();
-      if (!groceryPanel.hidden) renderGroceryPanel();
+      setBasketMembership(id, e.target.checked);
       return;
     }
 
     if (e.target.closest(".detail-grocery-btn")) {
-      if (basket.has(id)) basket.delete(id);
-      else basket.set(id, { servings: defaultAddServings(byId[id]) });
-      persistGrocery();
-      renderList();
-      renderGroceryBar();
-      if (!groceryPanel.hidden) renderGroceryPanel();
+      setBasketMembership(id, !basket.has(id));
       return;
     }
 
@@ -3872,8 +4047,10 @@
 
   // Grocery bar / panel
   function openGroceryPanel() {
-    renderGroceryPanel();
+    renderGroceryPanel(); // whatever's already in memory — no blank flash
     groceryPanel.hidden = false;
+    // Refetch on open so a change made on another device shows up here.
+    loadGroceryList().then(() => { if (!groceryPanel.hidden) renderGroceryPanel(); });
   }
   $("#open-grocery").addEventListener("click", openGroceryPanel);
   // Header shortcut: always available, so a list built only from pantry/bar
@@ -3913,36 +4090,40 @@
       openCookMode(it, cook.dataset.serv ? Number(cook.dataset.serv) : it.baseServings);
     }
   });
-  $("#clear-grocery").addEventListener("click", () => {
+  $("#clear-grocery").addEventListener("click", async () => {
+    const n = basket.size + manualGroceryItems.length;
+    if (!n) return;
+    if (!confirm("Clear your grocery list? This removes every checked recipe and added item.")) return;
+    if (session) {
+      const [{ error: e1 }, { error: e2 }, { error: e3 }] = await Promise.all([
+        supabaseClient.from("grocery_basket_items").delete().eq("user_id", session.user.id),
+        supabaseClient.from("grocery_manual_items").delete().eq("user_id", session.user.id),
+        supabaseClient.from("grocery_checked_items").delete().eq("user_id", session.user.id)
+      ]);
+      if (e1 || e2 || e3) { toast("Couldn't clear the list — try again."); return; }
+    }
     basket.clear();
+    manualGroceryItems = [];
     checkedGroceryItems.clear();
-    persistGrocery();
     renderList();
     renderGroceryBar();
+    if (!groceryPanel.hidden) renderGroceryPanel();
   });
 
   // Grocery panel: manual item add/remove
-  groceryContent.addEventListener("submit", (e) => {
+  groceryContent.addEventListener("submit", async (e) => {
     if (e.target.id !== "grocery-add-manual") return;
     e.preventDefault();
     const input = $("#grocery-manual-input");
     const name = input.value.trim();
     if (!name) return;
-    manualGroceryItems.push({ key: `manual:${Date.now()}`, name });
-    persistGrocery();
-    renderGroceryPanel();
+    input.value = ""; // clear immediately for a snappy feel, before the round trip
+    await addManualGroceryItem(name);
     $("#grocery-manual-input").focus();
   });
   groceryContent.addEventListener("click", (e) => {
     const removeBtn = e.target.closest(".g-manual-remove");
-    if (removeBtn) {
-      const key = removeBtn.dataset.key;
-      manualGroceryItems = manualGroceryItems.filter((m) => m.key !== key);
-      checkedGroceryItems.delete(key);
-      persistGrocery();
-      renderGroceryPanel();
-      return;
-    }
+    if (removeBtn) { removeManualGroceryItem(removeBtn.dataset.key); return; }
     const upBtn = e.target.closest(".g-reorder-up");
     const downBtn = e.target.closest(".g-reorder-down");
     if (upBtn || downBtn) {
@@ -3953,7 +4134,7 @@
       if (i < 0 || j < 0 || j >= order.length || order[j] === OTHER_CATEGORY) return;
       [order[i], order[j]] = [order[j], order[i]];
       aisleOrder = order;
-      saveLocal("aisleOrder", aisleOrder);
+      scheduleGroceryPrefsSave();
       renderGroceryPanel();
       const reopened = groceryContent.querySelector(".g-reorder");
       if (reopened) reopened.open = true;
@@ -3964,18 +4145,19 @@
   groceryContent.addEventListener("change", (e) => {
     if (e.target.id === "grocery-skip-staples") {
       skipPantryStaples = e.target.checked;
-      persistGrocery();
+      scheduleGroceryPrefsSave();
       renderGroceryPanel();
       return;
     }
     if (e.target.classList.contains("g-item-check")) {
       const key = e.target.dataset.key;
-      if (e.target.checked) checkedGroceryItems.add(key);
+      const checked = e.target.checked;
+      if (checked) checkedGroceryItems.add(key);
       else checkedGroceryItems.delete(key);
       const li = e.target.closest("li");
-      if (li) li.classList.toggle("is-checked", e.target.checked);
-      persistGrocery();
+      if (li) li.classList.toggle("is-checked", checked);
       renderGroceryProgress();
+      syncCheckedItem(key, checked);
     }
   });
 

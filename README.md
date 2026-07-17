@@ -668,6 +668,80 @@ code. They're cosmetic — the function runs on Supabase's Deno runtime, where
 both resolve fine. Installing the official Deno VSCode extension (with
 `deno.enablePaths: ["supabase/functions"]`) silences them.
 
+## Grocery list sync
+
+The grocery list (checked recipes + servings, hand-typed items, pantry/bar
+restocks, and check-off state) is saved per-user in Supabase, so it follows
+you across devices — plan on a laptop or iPad, shop from a phone, or split
+planning and shopping between two people signed into the same account. It
+refetches whenever the grocery panel is opened, so a change made on another
+device shows up the next time you open the list there (not instantly live —
+reopen the panel or reload to see someone else's latest change).
+
+Checking off an item that came from the pantry/bar **🛒 Restock** button also
+flips that item back to "in stock" in Bar & Pantry automatically — buying it
+closes the loop. Unchecking it does *not* reverse that; marking something
+back out of stock is still a deliberate action in the inventory panel.
+
+**One-time setup (Supabase SQL editor)** — run once:
+
+```sql
+-- Basket: one row per recipe per user — mirrors the app's basket exactly, so
+-- (user_id, recipe_id) is the natural key adds/servings-updates upsert into.
+create table public.grocery_basket_items (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  recipe_id uuid not null references public.recipes(id) on delete cascade,
+  servings int not null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, recipe_id)
+);
+alter table public.grocery_basket_items enable row level security;
+create policy "owners manage their grocery basket" on public.grocery_basket_items
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Manual (non-recipe) items — hand-typed or added via a pantry/bar restock.
+-- source_inventory_id is the restock provenance link: set only when the item
+-- came from "🛒 Restock", so checking it off can auto-restock that item.
+create table public.grocery_manual_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  name text not null,
+  source_inventory_id uuid references public.inventory_items(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+alter table public.grocery_manual_items enable row level security;
+create policy "owners manage their manual grocery items" on public.grocery_manual_items
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create index grocery_manual_items_user on public.grocery_manual_items (user_id);
+
+-- Checked-off state. Recipe-ingredient keys are computed client-side (name +
+-- unit) and manual items key off their own row id — both are just opaque
+-- text, so this is a pure membership table: upsert to check, delete to uncheck.
+create table public.grocery_checked_items (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  item_key text not null,
+  checked_at timestamptz not null default now(),
+  primary key (user_id, item_key)
+);
+alter table public.grocery_checked_items enable row level security;
+create policy "owners manage their checked grocery items" on public.grocery_checked_items
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Settings, not list contents (skip-pantry-staples + aisle order) — same
+-- jsonb-on-profile shape as diet_prefs.
+alter table public.profiles
+  add column if not exists grocery_prefs jsonb not null default '{}'::jsonb;
+```
+
+Until this runs, the grocery list fails open like every other table here:
+empty list, no errors, nothing saves. The app also migrates each browser's
+existing local grocery list into these tables once, automatically, the first
+time it loads after this SQL has been run — nothing to do on your end beyond
+running the SQL.
+
 ## Grocery list → Google Keep
 
 - **On your phone:** check the recipes you want, set servings, open the grocery
@@ -695,8 +769,9 @@ peppers like bell or red pepper are never treated as a staple). The **By
 recipe** section below the list still shows each recipe's full ingredients at
 your chosen servings, unaffected by the staples toggle.
 
-The grocery selection lives in the current session, so fully closing the app
-resets the checked recipes and check-offs — build the list and send it to Keep.
+The grocery selection is saved per-user in Supabase (see "Grocery list sync"
+above), so it follows you across devices and survives closing the app —
+build the list on one device and send it to Keep from another if you like.
 
 ## Add to your iPhone home screen
 
