@@ -907,6 +907,40 @@ ids), add `--owner <your-user-uuid>` (find it in `notes.md`); those rows are
 inserted as new recipes owned by you and deduped by name + section. The
 `backups/` folder is gitignored — keep at least one copy somewhere off this Mac.
 
+## Data maintenance (optional)
+
+Two tables grow unbounded — not a performance problem (their reads are indexed
+and the rows are tiny), just housekeeping. `meal_plan_entries` keeps rows
+forever outside the app's rolling ±7-day window, and each `*_usage` cap table
+accrues one small row per user per active day. Prune them whenever you feel
+like it (Supabase SQL editor):
+
+```sql
+delete from public.meal_plan_entries where plan_date < (now() at time zone 'utc')::date - 30;
+delete from public.extraction_usage  where usage_date < (now() at time zone 'utc')::date - 90;
+delete from public.coach_usage       where usage_date < (now() at time zone 'utc')::date - 90;
+delete from public.generation_usage  where usage_date < (now() at time zone 'utc')::date - 90;
+delete from public.pairing_usage     where usage_date < (now() at time zone 'utc')::date - 90;
+```
+
+If the `pg_cron` extension is enabled on the project, schedule the same
+statements to run nightly; otherwise running them by hand once in a while (or
+never) is fine — the bytes are negligible.
+
+**Index check (one-time):** the main recipe-list query filters by `user_id`
+and orders by `name`. Confirm an index covers it:
+
+```sql
+select indexname, indexdef from pg_indexes where tablename = 'recipes';
+```
+
+If nothing covers `(user_id, name)`, add it — only matters past a few hundred
+recipes, but the query runs on every load:
+
+```sql
+create index if not exists recipes_user_name on public.recipes (user_id, name);
+```
+
 ## Local preview
 
 ```bash

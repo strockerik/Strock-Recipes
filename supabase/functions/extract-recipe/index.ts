@@ -142,7 +142,11 @@ SUB-RECIPES (sections)
 
 // ---------- URL import helpers ----------
 
-const MAX_PAGE_CHARS = 50_000; // keep model input (and cost) bounded
+// Cap on page text / transcript sent to the model. ~20k chars ≈ 5k tokens is
+// generous for a recipe (the recipe is usually early in the body, and clean
+// JSON-LD sites skip this path entirely via the tier-1 mapper). Tunable — raise
+// if long recipes start getting cut off; lower to shave Haiku input cost.
+const MAX_PAGE_CHARS = 20_000;
 
 // Only plain public http(s) URLs; refuse localhost / private-network targets so
 // the function can't be used to probe internal addresses.

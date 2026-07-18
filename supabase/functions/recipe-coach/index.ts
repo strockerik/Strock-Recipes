@@ -210,7 +210,15 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: MODEL_COACH,
         max_tokens: 4096,
-        system: buildSystemPrompt(mode, body.recipe),
+        // Cache the system block (mode prompt + the recipe JSON, which is
+        // constant across a session's turns) together with the tool schema
+        // that renders ahead of it. A troubleshoot/tweak session is several
+        // turns within minutes, so turns 2+ read this prefix at ~10% instead
+        // of re-billing the ~3k-token recipe JSON every turn. The growing
+        // `messages` history sits after this breakpoint, so it never
+        // invalidates the cache. Sonnet 4.6's min cacheable prefix is 2048
+        // tokens, which the tool schema + a real recipe clears.
+        system: [{ type: "text", text: buildSystemPrompt(mode, body.recipe), cache_control: { type: "ephemeral" } }],
         tools: [{ name: "respond", description: "Reply to the cook with a clarifying question or your advice.", input_schema: COACH_SCHEMA }],
         tool_choice: { type: "tool", name: "respond" },
         messages
