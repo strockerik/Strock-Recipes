@@ -493,8 +493,8 @@ wine, or beer pairing, then proposes 2-3 options to pick from:
 
 The pairing knowledge (which wine/beer/cocktail styles suit which kinds of
 dishes, and why) is baked into the `pair-drink` Edge Function's prompts as a
-static reference — condensed from `drink-pairing-research-brief.md` (repo
-root), a sourced deep-research brief (WSET, Cicerone/Brewers Association,
+static reference — condensed from `research/drink-pairing-research-brief.md`,
+a sourced deep-research brief (WSET, Cicerone/Brewers Association,
 Punch, Wine Enthusiast) — the same technique already used for the AI
 generator's cuisine flavor bases, so the model isn't relying on its own
 uncertain recall of pairing facts on every request. See that file if the
