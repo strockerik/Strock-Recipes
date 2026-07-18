@@ -604,6 +604,30 @@
     </div>
   </div>
 
+  <div id="pair-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Pair a drink" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">Pair a drink <span id="pair-recipe-name" class="coach-recipe-name"></span></h2>
+        <button id="close-pair" class="ghost-btn small" aria-label="Close drink pairing">Close</button>
+      </div>
+
+      <div class="pair-kind-toggle" role="tablist" aria-label="Drink type">
+        <button type="button" id="pair-kind-cocktail" class="pair-kind-btn" data-pair-kind="cocktail" role="tab" aria-selected="false">🍸 Cocktail</button>
+        <button type="button" id="pair-kind-wine" class="pair-kind-btn" data-pair-kind="wine" role="tab" aria-selected="false">🍷 Wine</button>
+        <button type="button" id="pair-kind-beer" class="pair-kind-btn" data-pair-kind="beer" role="tab" aria-selected="false">🍺 Beer</button>
+      </div>
+
+      <div id="pair-loading" class="ai-import-loading" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Thinking…</p>
+      </div>
+
+      <p id="pair-status" class="auth-status" aria-live="polite"></p>
+
+      <div id="pair-options" class="pair-options" aria-live="polite"></div>
+    </div>
+  </div>
+
   <!-- Cook mode (full-screen, one step at a time, keeps the screen awake) -->
   <div id="cook-panel" class="cook-panel" role="dialog" aria-modal="true" aria-labelledby="cook-title" hidden>
     <div class="cook-head wrap">

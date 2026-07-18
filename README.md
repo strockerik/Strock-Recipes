@@ -466,9 +466,33 @@ alter table public.inventory_items drop constraint if exists inventory_items_sta
 alter table public.inventory_items add constraint inventory_items_status_check check (status in ('in','out'));
 ```
 
+## Pair a drink
+
+On any kitchen recipe, **🍷 Pair a drink** asks whether you want a cocktail,
+wine, or beer pairing, then proposes 2-3 options to pick from:
+
+- **Cocktail** — checks your own saved bar recipes first (cross-referenced
+  against your bar inventory, if you track one) for a genuinely good existing
+  match before inventing anything new. Picking an existing match just opens
+  it — no AI call needed. Picking an invented idea develops it into a full,
+  saveable cocktail recipe.
+- **Wine / beer** — recommends a **type or style** (e.g. "a dry Sauvignon
+  Blanc," "a Belgian witbier"), never a specific bottle or brand, with a
+  short tasting profile and why it suits the dish. Not a saveable recipe —
+  there's a quick "add to grocery list" action instead.
+
+The pairing knowledge (which wine/beer/cocktail styles suit which kinds of
+dishes, and why) is baked into the `pair-drink` Edge Function's prompts as a
+static reference — condensed from `drink-pairing-research-brief.md` (repo
+root), a sourced deep-research brief (WSET, Cicerone/Brewers Association,
+Punch, Wine Enthusiast) — the same technique already used for the AI
+generator's cuisine flavor bases, so the model isn't relying on its own
+uncertain recall of pairing facts on every request. See that file if the
+pairing prompts ever need revisiting.
+
 ## AI usage limits
 
-Three independent per-user daily caps, all enforced server-side (in the Edge
+Four independent per-user daily caps, all enforced server-side (in the Edge
 Functions, via `SECURITY DEFINER` RPCs) so they can't be bypassed from the
 browser, and all resetting at midnight UTC:
 
@@ -479,10 +503,16 @@ browser, and all resetting at midnight UTC:
   (`mode:"concepts"` proposes 3 ideas, then `mode:"full"` writes the chosen one);
   **only the full-recipe step counts against the cap**, so browsing ideas is
   free and the limit is effectively 20 finished recipes/day.
+- **20 AI drink pairings/day** — `pair-drink` (🍷 Pair a drink). Proposing 2-3
+  cocktail options is free (like the generator's concepts step) since a picked
+  option may just point at a recipe you already have; only *developing* an
+  invented cocktail into a full recipe counts. Every wine/beer call counts —
+  there's no separate "browsing" step for those, the one call is the whole
+  answer.
 
 Each limit is a single constant in its Edge Function (`DAILY_EXTRACTION_LIMIT` /
-`DAILY_COACH_LIMIT`) — change the number and redeploy that function. Each uses its
-own table + RPC, so they never starve each other.
+`DAILY_COACH_LIMIT` / `DAILY_PAIRING_LIMIT`) — change the number and redeploy
+that function. Each uses its own table + RPC, so they never starve each other.
 
 **One-time setup (Supabase SQL editor)** — run once for extractions:
 
@@ -607,6 +637,49 @@ revoke execute on function public.increment_generation_usage(int) from public;
 grant execute on function public.increment_generation_usage(int) to authenticated;
 ```
 
+**And once for drink pairing** — same pattern, its own bucket, used by the
+`pair-drink` function:
+
+```sql
+create table public.pairing_usage (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  usage_date date not null,
+  count int not null default 0,
+  primary key (user_id, usage_date)
+);
+alter table public.pairing_usage enable row level security;
+-- No policies on purpose: reachable only via the SECURITY DEFINER function below.
+
+create or replace function public.increment_pairing_usage(daily_limit int)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  updated_count int;
+begin
+  insert into public.pairing_usage as pu (user_id, usage_date, count)
+  values (auth.uid(), (now() at time zone 'utc')::date, 1)
+  on conflict (user_id, usage_date) do update
+    set count = pu.count + 1
+    where pu.count < daily_limit
+  returning pu.count into updated_count;
+
+  if updated_count is null then
+    return -1; -- already at/over the limit, not incremented
+  end if;
+  return updated_count;
+end;
+$$;
+
+-- Both PUBLIC and anon default-grant EXECUTE on a new function — revoke both
+-- up front (learned from the earlier caps needing this as a fast-follow fix).
+revoke execute on function public.increment_pairing_usage(int) from public;
+revoke execute on function public.increment_pairing_usage(int) from anon;
+grant execute on function public.increment_pairing_usage(int) to authenticated;
+```
+
 If any of these SQL blocks hasn't been run yet (or an RPC call errors for any
 reason), that Edge Function fails open — the request proceeds without a cap
 rather than breaking.
@@ -619,6 +692,7 @@ rather than breaking.
 > revoke execute on function public.increment_extraction_usage(int) from anon;
 > revoke execute on function public.increment_coach_usage(int) from anon;
 > revoke execute on function public.increment_generation_usage(int) from anon;
+> revoke execute on function public.increment_pairing_usage(int) from anon;
 > ```
 
 **Verifying setup:** don't call the RPCs directly from the SQL editor — they run
@@ -637,7 +711,7 @@ use the feature and watch the count climb (the 21st same-day call returns the
 
 ## Edge Function deployment (AI)
 
-There are **three** Edge Functions, each deployed via the Supabase dashboard (Edge
+There are **four** Edge Functions, each deployed via the Supabase dashboard (Edge
 Functions → the in-browser editor), with the repo files as the source of truth —
 keep them in sync when editing:
 
@@ -648,16 +722,20 @@ keep them in sync when editing:
 - **`generate-recipe`** — the AI recipe generator (on-hand ingredients → a new
   recipe). Same deploy: create the function, paste in
   `supabase/functions/generate-recipe/index.ts`, Deploy.
+- **`pair-drink`** — 🍷 Pair a drink (cocktail/wine/beer pairings for a kitchen
+  recipe). Same deploy: create the function, paste in
+  `supabase/functions/pair-drink/index.ts`, Deploy.
 
-Requirements (apply to **both** functions):
+Requirements (apply to **all four** functions):
 
 - Secret `ANTHROPIC_API_KEY` set under Edge Functions → Secrets (shared).
 - **Verify JWT: OFF** for each (they do their own auth check and handle the CORS
   preflight; leaving it on breaks browser calls).
 - Each has its **own** per-user daily cap: `extract-recipe` uses
-  `increment_extraction_usage` (20/day) and `recipe-coach` uses
-  `increment_coach_usage` (20/day) — both fail open if their migration hasn't run.
-  See "AI usage limits" for the one-time SQL.
+  `increment_extraction_usage`, `recipe-coach` uses `increment_coach_usage`,
+  `generate-recipe` uses `increment_generation_usage`, and `pair-drink` uses
+  `increment_pairing_usage` (all 20/day) — each fails open if its migration
+  hasn't run. See "AI usage limits" for the one-time SQL.
 - Set a monthly spend limit on the Anthropic account as a runaway-cost guard.
 - After editing a repo `index.ts`, paste the new contents into that function's
   dashboard editor and hit Deploy — pushing to GitHub does **not** redeploy it.

@@ -247,6 +247,16 @@
   const coachSendBtn = $("#coach-send");
   const coachModeTroubleshootBtn = $("#coach-mode-troubleshoot");
   const coachModeTweakBtn = $("#coach-mode-tweak");
+
+  const pairPanel = $("#pair-panel");
+  const pairRecipeName = $("#pair-recipe-name");
+  const pairKindCocktailBtn = $("#pair-kind-cocktail");
+  const pairKindWineBtn = $("#pair-kind-wine");
+  const pairKindBeerBtn = $("#pair-kind-beer");
+  const pairLoading = $("#pair-loading");
+  const pairStatus = $("#pair-status");
+  const pairOptionsEl = $("#pair-options");
+
   const cookPanel = $("#cook-panel");
   const cookTitle = $("#cook-title");
   const cookCloseBtn = $("#cook-close");
@@ -1631,6 +1641,7 @@
         ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
         <button class="ghost-btn small add-to-plan-btn${mealPlanTray.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${mealPlanTray.has(it.id) ? "✓ In meal plan" : "📅 Add to plan"}</button>
         <button class="ghost-btn small detail-grocery-btn${basket.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${basket.has(it.id) ? "✓ In grocery list" : "🛒 Add to grocery list"}</button>
+        ${it.section === "kitchen" ? `<button class="ghost-btn small pair-btn" data-id="${esc(it.id)}">🍷 Pair a drink</button>` : ""}
         <button class="ghost-btn small coach-btn" data-id="${esc(it.id)}">✨ Ask AI</button>
         <button class="ghost-btn small detail-more-btn" data-id="${esc(it.id)}" aria-haspopup="true" aria-expanded="false">⋯ More</button>
       </div>
@@ -2449,33 +2460,40 @@
     recipeFormPanel.hidden = false;
   }
 
-  // After the generator fills the form, compare the recipe's ingredients against
-  // the user's in-stock inventory and show a quiet "have / need" line. Only runs
-  // when inventory exists; basic staples (salt/pepper/oil…) are assumed on hand
-  // and never listed on either side, so the "need" list stays signal, not noise.
-  function renderInventoryCheck(recipe) {
-    rfInventoryCheck.hidden = true;
-    rfInventoryCheck.innerHTML = "";
-    if (!inventory.length) return;
-    // Bar rows match on their spirit TYPE (category); pantry rows on their name.
+  // Match a recipe's ingredients against the user's in-stock inventory. Bar
+  // rows match on their spirit TYPE (category); pantry rows on their name.
+  // Basic staples (salt/pepper/oil…) are assumed on hand and skipped
+  // entirely, so the "need" list stays signal, not noise. Returns null when
+  // there's no inventory to check against.
+  function inventoryHaveNeed(ingredients) {
+    if (!inventory.length) return null;
     const stockKeys = inventory
       .filter((i) => i.status === "in")
       .map((i) => normalizeItemName(i.section === "bar" ? i.category : (i.name || i.category)))
       .filter(Boolean);
     const have = [], need = [];
-    (recipe.ingredients || []).forEach((ing) => {
+    (ingredients || []).forEach((ing) => {
       const raw = flattenText(ing && ing.item != null ? ing.item : ing);
       const norm = normalizeItemName(raw);
       if (!norm || isPantryStaple(norm)) return; // assumed on hand — skip both lists
       const matched = stockKeys.some((k) => k === norm || norm.includes(k) || k.includes(norm));
       (matched ? have : need).push(displayGroceryName(raw));
     });
-    if (!have.length && !need.length) return;
+    return { have, need };
+  }
+
+  // After the generator fills the form, show a quiet "have / need" line
+  // against the user's inventory.
+  function renderInventoryCheck(recipe) {
+    rfInventoryCheck.hidden = true;
+    rfInventoryCheck.innerHTML = "";
+    const hn = inventoryHaveNeed(recipe.ingredients);
+    if (!hn || (!hn.have.length && !hn.need.length)) return;
     const line = (icon, label, items) =>
       items.length ? `<span class="rf-inv-part"><b>${icon} ${label}:</b> ${esc(items.join(", "))}</span>` : "";
     rfInventoryCheck.innerHTML =
       `<p class="rf-inv-lead">Checked against your inventory:</p>` +
-      line("✓", "You have", have) + line("🛒", "You'll need", need);
+      line("✓", "You have", hn.have) + line("🛒", "You'll need", hn.need);
     rfInventoryCheck.hidden = false;
   }
 
@@ -3522,6 +3540,238 @@
     if (e.target === coachPanel) closeCoachPanel();
   });
 
+  // ---------- AI drink pairing ----------
+  // Pick a kitchen recipe -> choose cocktail/wine/beer -> 2-3 options -> pick
+  // one. A cocktail option may point at an EXISTING bar recipe (free to
+  // view, no further call) or an INVENTED idea (needs a second, capped call
+  // to develop into a full saveable recipe). Wine/beer options are pure
+  // recommendations — never savable — so the one options call is the whole
+  // interaction and is what counts against the cap.
+  let pairRecipeId = null;
+  let pairKind = null;        // "cocktail" | "wine" | "beer" | null
+  let pairOptions = [];       // 2-3 options awaiting a pick, from the last "options" call
+  let pairPickedStyle = null; // the picked wine/beer option, shown in place of the card list
+  let pairLastPayload = null; // {recipe, dietPrefs} captured once per panel-open, reused by "develop"
+  let pairToken = 0;          // guards stale/cancelled responses
+  const PAIR_TIMEOUT_MS = 75_000;
+  const PAIR_TIMEOUT = Symbol("pair-timeout");
+
+  // Trim the kitchen recipe to what the pairing prompt actually needs —
+  // mirrors recipe-coach's "inject existing data" idiom, no app-only fields.
+  function pairRecipeSubset(it) {
+    return {
+      name: it.name, subtitle: it.subtitle, section: it.section, tags: it.tags,
+      ingredients: it.ingredients, method: it.method, notes: it.notes
+    };
+  }
+
+  function renderPairKindButtons() {
+    [["cocktail", pairKindCocktailBtn], ["wine", pairKindWineBtn], ["beer", pairKindBeerBtn]].forEach(([k, btn]) => {
+      const on = pairKind === k;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-selected", String(on));
+    });
+  }
+
+  function openPairPanel(id) {
+    const it = byId[id];
+    if (!it) return;
+    pairRecipeId = id;
+    pairKind = null;
+    pairOptions = [];
+    pairPickedStyle = null;
+    pairLastPayload = { recipe: pairRecipeSubset(it), dietPrefs };
+    pairToken++;
+    pairRecipeName.textContent = `· ${it.name}`;
+    pairStatus.textContent = "";
+    pairLoading.hidden = true;
+    renderPairKindButtons();
+    pairOptionsEl.innerHTML = `<p class="coach-empty">Pick a drink type above.</p>`;
+    pairPanel.hidden = false;
+  }
+  function closePairPanel() {
+    pairToken++; // abandon any in-flight response
+    pairPanel.hidden = true;
+  }
+
+  function choosePairKind(kind) {
+    pairKind = kind;
+    pairPickedStyle = null;
+    renderPairKindButtons();
+    runPairOptions();
+  }
+
+  // Candidate bar recipes for the cocktail branch — the user's own saved
+  // cocktails, each cross-checked against inventory (inventoryHaveNeed),
+  // sorted so fully-in-stock recipes surface first if the list gets capped.
+  function buildBarCandidates() {
+    return DATA.cocktails
+      .map((it) => {
+        const hn = inventoryHaveNeed(it.ingredients);
+        return {
+          id: it.id,
+          name: it.name,
+          tags: it.tags,
+          ingredientsSummary: it.ingredients.map((i) => i.item).filter(Boolean).join(", "),
+          missing: hn ? hn.need : []
+        };
+      })
+      .sort((a, b) => a.missing.length - b.missing.length)
+      .slice(0, 25);
+  }
+
+  function pairInvoke(body) {
+    const invokePromise = supabaseClient.functions.invoke("pair-drink", { body }).catch((error) => ({ error }));
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(PAIR_TIMEOUT), PAIR_TIMEOUT_MS));
+    return Promise.race([invokePromise, timeoutPromise]);
+  }
+
+  async function runPairOptions() {
+    if (!pairKind || !pairLastPayload) return;
+    const token = ++pairToken;
+    pairStatus.textContent = "";
+    pairOptionsEl.innerHTML = "";
+    pairLoading.hidden = false;
+    const body = { kind: pairKind, mode: "options", recipe: pairLastPayload.recipe, dietPrefs: pairLastPayload.dietPrefs };
+    if (pairKind === "cocktail") body.barRecipes = buildBarCandidates();
+    const result = await pairInvoke(body);
+    if (token !== pairToken || pairPanel.hidden) return; // stale / cancelled
+    pairLoading.hidden = true;
+    if (result === PAIR_TIMEOUT) { pairStatus.textContent = "That's taking too long — check your connection and try again."; return; }
+    const { data, error } = result;
+    if (error || data?.error) { pairStatus.textContent = `Error: ${data?.error || error.message}`; return; }
+    pairOptions = Array.isArray(data.options) ? data.options : [];
+    if (!pairOptions.length) { pairStatus.textContent = "Couldn’t come up with pairings — try again."; return; }
+    renderPairOptions();
+  }
+
+  function renderPairOptions() {
+    if (pairKind === "cocktail") {
+      const candidates = buildBarCandidates(); // for the stock-tag lookup
+      pairOptionsEl.innerHTML = pairOptions.map((o, i) => {
+        const cand = o.matched_existing_id ? candidates.find((c) => c.id === o.matched_existing_id) : null;
+        const tag = o.matched_existing_id
+          ? (cand && cand.missing.length
+              ? `<span class="pair-stock-tag">🛒 need: ${esc(cand.missing.join(", "))}</span>`
+              : `<span class="pair-stock-tag is-in-stock">✓ in your bar</span>`)
+          : `<span class="pair-stock-tag">✨ new idea</span>`;
+        return `<button type="button" class="pair-option" data-pair-option="${i}">
+          <span class="gen-concept-title">${esc(o.title)}</span>
+          ${tag}
+          <span class="gen-concept-blurb">${esc(o.blurb)}</span>
+        </button>`;
+      }).join("");
+    } else {
+      pairOptionsEl.innerHTML = pairOptions.map((o, i) =>
+        `<button type="button" class="pair-option" data-pair-option="${i}">
+          <span class="gen-concept-title">${esc(o.recommendation)}</span>
+          <span class="pair-characteristics">${esc(o.characteristics)}</span>
+          <span class="gen-concept-blurb">${esc(o.blurb)}</span>
+        </button>`
+      ).join("");
+    }
+  }
+
+  // Switch to whichever tab/section a recipe lives in, clear anything that
+  // could be hiding it (filters, search, favorites/shared scope), expand its
+  // detail row, and scroll to it — used when a cocktail pairing matches an
+  // existing bar recipe (no AI call needed, just navigate to it).
+  function openExistingRecipe(id) {
+    const it = byId[id];
+    if (!it) return;
+    section = it.section === "bar" ? "cocktails" : "recipes";
+    document.querySelectorAll(".tab").forEach((b) => {
+      const on = b.dataset.section === section;
+      b.classList.toggle("is-active", on);
+      b.setAttribute("aria-selected", String(on));
+    });
+    document.body.classList.toggle("section-cocktails", section === "cocktails");
+    activeTags.clear();
+    searchTerm = "";
+    searchEl.value = "";
+    favoritesOnly = false;
+    toggleFavoritesBtn.setAttribute("aria-pressed", "false");
+    sharedOnly = false;
+    toggleSharedBtn.setAttribute("aria-pressed", "false");
+    syncScope();
+    openItems.add(id);
+    refreshViews();
+    const li = document.querySelector(`.item[data-id="${CSS.escape(id)}"]`);
+    if (li) li.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  async function pickPairOption(i) {
+    const opt = pairOptions[i];
+    if (!opt) return;
+
+    if (pairKind !== "cocktail") {
+      // Wine/beer: no further call — show the picked option's full detail.
+      pairPickedStyle = opt;
+      renderPairStyleResult();
+      return;
+    }
+
+    if (opt.matched_existing_id) {
+      // Existing bar recipe — free, no API call.
+      const targetId = opt.matched_existing_id;
+      closePairPanel();
+      openExistingRecipe(targetId);
+      return;
+    }
+
+    // Invented concept — capped "develop" call.
+    const token = ++pairToken;
+    pairStatus.textContent = "";
+    pairLoading.hidden = false;
+    pairOptionsEl.innerHTML = "";
+    const result = await pairInvoke({
+      kind: "cocktail", mode: "develop",
+      concept: { title: opt.title, blurb: opt.blurb },
+      recipe: pairLastPayload.recipe, dietPrefs: pairLastPayload.dietPrefs
+    });
+    if (token !== pairToken || pairPanel.hidden) return; // stale / cancelled
+    pairLoading.hidden = true;
+    if (result === PAIR_TIMEOUT) { pairStatus.textContent = "That's taking too long — check your connection and try again."; renderPairOptions(); return; }
+    const { data, error } = result;
+    if (error || data?.error) { pairStatus.textContent = `Error: ${data?.error || error.message}`; renderPairOptions(); return; }
+    closePairPanel();
+    openRecipeForm(null);
+    fillRecipeFormFromExtraction(data.recipe);
+    renderInventoryCheck(data.recipe);
+    recipeFormStatus.textContent = "AI paired this — review before saving.";
+  }
+
+  function renderPairStyleResult() {
+    const opt = pairPickedStyle;
+    pairOptionsEl.innerHTML = `
+      <div class="pair-result">
+        <p class="gen-concept-title">${esc(opt.recommendation)}</p>
+        <p class="pair-characteristics">${esc(opt.characteristics)}</p>
+        <p class="gen-concept-blurb">${esc(opt.blurb)}</p>
+        <div class="pair-result-actions">
+          <button type="button" class="ghost-btn small" id="pair-back-btn">← Back to options</button>
+          <button type="button" class="ghost-btn small" id="pair-add-grocery-btn">🛒 Add to grocery list</button>
+        </div>
+      </div>`;
+  }
+
+  pairKindCocktailBtn.addEventListener("click", () => choosePairKind("cocktail"));
+  pairKindWineBtn.addEventListener("click", () => choosePairKind("wine"));
+  pairKindBeerBtn.addEventListener("click", () => choosePairKind("beer"));
+  pairOptionsEl.addEventListener("click", (e) => {
+    const optBtn = e.target.closest("[data-pair-option]");
+    if (optBtn) { pickPairOption(Number(optBtn.dataset.pairOption)); return; }
+    if (e.target.closest("#pair-back-btn")) { pairPickedStyle = null; renderPairOptions(); return; }
+    if (e.target.closest("#pair-add-grocery-btn")) {
+      if (pairPickedStyle) addManualGroceryItem(pairPickedStyle.recommendation);
+      return;
+    }
+  });
+  $("#close-pair").addEventListener("click", closePairPanel);
+  pairPanel.addEventListener("click", (e) => {
+    if (e.target === pairPanel) closePairPanel();
+  });
+
   // ---------- Events ----------
   // Tabs
   document.querySelectorAll(".tab").forEach((btn) => {
@@ -3644,6 +3894,11 @@
 
     if (e.target.closest(".coach-btn")) {
       openCoachPanel(id);
+      return;
+    }
+
+    if (e.target.closest(".pair-btn")) {
+      openPairPanel(id);
       return;
     }
 

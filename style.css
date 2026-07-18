@@ -1376,6 +1376,43 @@ button:focus-visible, input:focus-visible {
   font-size: 0.9rem;
   margin: 8px 2px;
 }
+
+/* ===== AI drink pairing — reuses .coach-mode-btn (3-up) and .gen-concept card styling ===== */
+.pair-kind-toggle { display: flex; gap: 8px; margin-bottom: 12px; }
+.pair-kind-btn {
+  flex: 1;
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--faint);
+}
+.pair-kind-btn.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.pair-options { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 16px; }
+.pair-option {
+  display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 16px; cursor: pointer; transition: border-color 0.12s, background 0.12s;
+}
+.pair-option:hover { border-color: var(--accent); background: var(--accent-soft); }
+.pair-stock-tag {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--faint);
+  background: var(--chip);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.pair-stock-tag.is-in-stock { color: var(--accent); }
+.pair-characteristics { font-size: 0.85rem; color: var(--faint); font-style: italic; }
+.pair-result {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px; display: flex; flex-direction: column; gap: 6px;
+}
+.pair-result-actions { display: flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
 .coach-msg {
   max-width: 88%;
   padding: 10px 13px;
