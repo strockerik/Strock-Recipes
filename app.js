@@ -62,6 +62,7 @@
     seenIntro = loadLocal("seenIntro", false);
     planView = loadLocal("planView", "dinners");
     collapsedInvCats = new Set(loadLocal("invCollapsed", []));
+    pruneCoachStore(); // one global sweep of expired coach:v1:* threads
   }
   function maybeShowIntro() {
     introCardEl.hidden = seenIntro;
@@ -558,16 +559,18 @@
 
   // ---------- Data loading (Supabase) ----------
   function mapRecipe(row) {
-    return {
+    const tags = row.tags || [];
+    const ingredients = row.ingredients || [];
+    const it = {
       id: row.id,
       section: row.section,
       name: row.name,
       subtitle: row.subtitle,
       source: row.source,
-      tags: row.tags || [],
+      tags,
       baseServings: row.base_servings,
       servingsLabel: row.servings_label,
-      ingredients: row.ingredients || [],
+      ingredients,
       // Steps used to be plain strings; they're now {text, group} objects so a
       // step can belong to a sub-recipe section. Normalize legacy strings here
       // so the rest of the app always sees the object shape.
@@ -581,6 +584,15 @@
       isFavorite: !!row.is_favorite,
       userId: row.user_id
     };
+    // Precompute the lowercased search haystack once at load, so filtering on
+    // each keystroke is a plain substring test rather than rebuilding this
+    // string per recipe per keypress.
+    it.searchHay = [
+      it.name, it.subtitle || "", it.source || "",
+      tags.join(" "),
+      ingredients.map((i) => i.item).join(" ")
+    ].join(" ").toLowerCase();
+    return it;
   }
 
   async function loadProfiles() {
@@ -820,6 +832,11 @@
       } catch (e) { /* best-effort — the flag below still prevents retrying every load */ }
     }
     saveLocal("groceryMigratedV2", true);
+    // These legacy keys are read once above and never written again — drop the
+    // dead bytes now that grocery data lives in Supabase.
+    ["basket", "manualItems", "checked", "skipStaples", "aisleOrder"].forEach((k) => {
+      try { localStorage.removeItem(userKey(k)); } catch {}
+    });
   }
 
   // Re-render every view that depends on data / filters / basket state.
@@ -1454,12 +1471,7 @@
       if (!sharedOnly && favoritesOnly && !it.isFavorite) return false;
       if (activeTags.size && ![...activeTags].every((t) => it.tags.includes(t))) return false;
       if (!q) return true;
-      const hay = [
-        it.name, it.subtitle || "", it.source || "",
-        it.tags.join(" "),
-        it.ingredients.map((i) => i.item).join(" ")
-      ].join(" ").toLowerCase();
-      return hay.includes(q);
+      return (it.searchHay || "").includes(q);
     });
   }
 
@@ -1503,13 +1515,28 @@
   // Set a recipe's servings from any +/- control, keeping the grocery basket in
   // sync so the combined shopping list reflects the new scale immediately.
   const basketServingsTimers = new Map(); // recipeId -> timeout handle, debounces rapid +/- taps
+  let servingsRenderTimer = null;          // debounces the heavy re-render across a tap burst
   function setRecipeServings(id, n) {
     const v = Math.max(1, n);
     servingsByRecipe.set(id, v); // session-only override, never synced
     if (basket.has(id)) basket.get(id).servings = v;
-    renderList();
-    renderGroceryBar();
-    if (!groceryPanel.hidden) renderGroceryPanel();
+    // Immediate feedback: bump the visible number(s) for this row/detail now,
+    // then debounce the heavy full re-render (list + grocery panel, which
+    // re-scale every ingredient) so mashing +/- a dozen times settles into one
+    // repaint instead of one per tap.
+    const li = document.querySelector(`.item[data-id="${CSS.escape(id)}"]`);
+    if (li) {
+      const rowNum = li.querySelector(".serv-control .serv-num");
+      if (rowNum) rowNum.textContent = String(v);
+      const detailNum = li.querySelector(".detail-serv-num");
+      if (detailNum) detailNum.textContent = `${v} ${byId[id]?.servingsLabel ?? ""}`.trim();
+    }
+    clearTimeout(servingsRenderTimer);
+    servingsRenderTimer = setTimeout(() => {
+      renderList();
+      renderGroceryBar();
+      if (!groceryPanel.hidden) renderGroceryPanel();
+    }, 140);
     if (!session || !basket.has(id)) return;
     clearTimeout(basketServingsTimers.get(id));
     basketServingsTimers.set(id, setTimeout(async () => {
@@ -1927,7 +1954,10 @@
   }
 
   function renderGroceryPanel() {
-    const sections = groceryByCategory(allGroceryItems());
+    // Compute the combined list once; both the section render and the progress
+    // counter reuse it (each recompute re-scales every basket recipe).
+    const combined = allGroceryItems();
+    const sections = groceryByCategory(combined);
     const itemsHtml = sections.length
       ? sections.map((sec) => `
           <li class="g-category">${esc(sec.category)}</li>
@@ -1966,11 +1996,13 @@
             </ul>
           </div>`).join("")}
       </details>`;
-    renderGroceryProgress();
+    renderGroceryProgress(combined);
   }
 
-  function renderGroceryProgress() {
-    const items = allGroceryItems();
+  // `items` is optional — renderGroceryPanel passes its already-computed list
+  // so the combine work isn't repeated; standalone callers (check-off) omit it.
+  function renderGroceryProgress(items) {
+    if (!items) items = allGroceryItems();
     const total = items.length;
     const done = items.filter((it) => checkedGroceryItems.has(it.key)).length;
     groceryProgressEl.hidden = !shoppingModeOn || !total;
@@ -3321,6 +3353,32 @@
   const COACH_MAX_STORED_MESSAGES = 40;
   const coachStoreKey = (recipeId) => COACH_STORE_PREFIX + recipeId;
 
+  // Startup sweep: loadCoachStore only prunes a thread when its own recipe's
+  // panel reopens, so a thread coached once and never revisited lingers past
+  // its 24h TTL. Walk every coach:v1:* key once at sign-in and drop expired
+  // modes (removing the key entirely when nothing survives).
+  function pruneCoachStore() {
+    try {
+      const keys = Object.keys(localStorage).filter((k) => k.startsWith(COACH_STORE_PREFIX));
+      for (const key of keys) {
+        let store;
+        try { store = JSON.parse(localStorage.getItem(key) || "") || {}; }
+        catch { localStorage.removeItem(key); continue; }
+        let changed = false;
+        for (const mode of Object.keys(store)) {
+          if (!store[mode] || Date.now() - (store[mode].updatedAt || 0) > COACH_TTL_MS) {
+            delete store[mode];
+            changed = true;
+          }
+        }
+        if (changed) {
+          if (Object.keys(store).length) localStorage.setItem(key, JSON.stringify(store));
+          else localStorage.removeItem(key);
+        }
+      }
+    } catch { /* storage unavailable (private mode) — nothing to prune */ }
+  }
+
   // Read a recipe's stored conversations, dropping any mode older than 24h.
   function loadCoachStore(recipeId) {
     try {
@@ -3791,10 +3849,13 @@
     });
   });
 
-  // Search
+  // Search — debounce the re-render so a fast typist doesn't rebuild the whole
+  // list on every keystroke (the filter + innerHTML swap is the cost).
+  let searchDebounce = null;
   searchEl.addEventListener("input", () => {
     searchTerm = searchEl.value;
-    renderList();
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(renderList, 130);
   });
 
   // Filter panel toggle
