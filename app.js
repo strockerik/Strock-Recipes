@@ -1327,11 +1327,12 @@
     inventoryPanel.classList.toggle("is-pantry", invSection === "pantry");
     renderInvAddForm();
     const items = inventory.filter((i) => i.section === invSection);
-    // The bridge back to the generator: only worth showing once there's
-    // something in-stock to actually cook or mix with.
+    // The bridge back to the generator: bar only — your spirits ARE the
+    // cocktail's ingredients, so it's a natural one-tap handoff. Pantry
+    // items don't map onto a recipe the same direct way, so no bridge there.
     const avail = items.filter((i) => i.status !== "out");
-    invGenerateBtn.hidden = avail.length === 0;
-    invGenerateBtn.textContent = invSection === "bar" ? "🪄 Generate a cocktail from these" : "🪄 Generate a recipe from these";
+    invGenerateBtn.hidden = invSection !== "bar" || avail.length === 0;
+    invGenerateBtn.textContent = "🪄 Generate a cocktail from these";
     if (!items.length) {
       inventoryContent.innerHTML = `<p class="inv-empty">Nothing here yet — add what you have on hand above.</p>`;
       return;
@@ -1427,18 +1428,15 @@
       saveLocal("invCollapsed", [...collapsedInvCats]);
     }
   });
-  // The inventory -> generator bridge: hand off whatever's in-stock on the
-  // current sub-tab, forcing the generator into the matching kitchen/bar mode
-  // regardless of which main Kitchen/Bar tab is currently selected. For bar,
-  // your spirits ARE the cocktail's ingredients. For pantry we skip the
-  // seasoning aisle — the generator assumes common seasonings, so pre-filling
-  // spices as required ingredients is exactly the clutter we removed.
+  // The inventory -> generator bridge: bar only. Hand off whatever's
+  // in-stock, forcing the generator into bar mode regardless of which main
+  // Kitchen/Bar tab is currently selected — your spirits ARE the cocktail's
+  // ingredients, so this is a direct one-tap handoff.
   invGenerateBtn.addEventListener("click", () => {
-    let avail = inventory.filter((i) => i.section === invSection && i.status !== "out");
-    if (invSection === "pantry") avail = avail.filter((i) => i.category !== "Condiments, Sauces & Spices");
+    const avail = inventory.filter((i) => i.section === "bar" && i.status !== "out");
     if (!avail.length) return;
     inventoryPanel.hidden = true;
-    openGeneratePanel(invSection === "bar" ? "bar" : "kitchen");
+    openGeneratePanel("bar");
     avail.forEach((i) => addGenIngredient(genIngredientText(i)));
   });
 
