@@ -111,30 +111,40 @@ Use the app — no editing JS files:
 
 - **✨ Add with AI** — snap or choose a photo of a recipe (cookbook page,
   handwritten card, screenshot), paste a link to a recipe page, or paste text
-  (e.g. an Instagram caption); AI fills in the whole form for you to review,
+  (e.g. an Instagram caption); the whole form fills in for you to review,
   edit, and save. Photos are downscaled and converted to JPEG in the browser
-  before upload, so iPhone HEIC photos work. For links, the Edge Function
-  fetches the page server-side and prefers the site's embedded schema.org
-  Recipe data (JSON-LD) over raw page text — most recipe blogs have it.
-  **YouTube** links work too: the function reads the recipe out of the video's
-  description (and falls back to the auto-generated captions if the description
-  is just a teaser), so a cooking video whose creator listed the recipe extracts
-  like any other page. Login-walled or heavily scripted pages (Instagram,
-  TikTok) won't fetch; paste the caption text for those. Two other categories of
-  link can't be fetched either, and the app will tell you to paste text instead
-  (with a one-tap **📋 Paste text instead** button right on the error):
-  **bot-protected sites** (e.g. liquor.com, AllRecipes, Serious Eats) — their
-  Cloudflare-style protection blocks any non-browser request outright, no matter
-  the headers — and **JS-only "app" sites** (e.g. some recipe-card apps built
-  with React/Vite) whose server response is an empty shell with no content until
-  client-side JavaScript runs. Both are fundamental limits of fetching a page
-  server-side, not bugs to retry. Text and link extractions cost roughly half
-  a cent (Haiku); photo extractions a couple of cents (Sonnet, needed to read
-  messy handwriting). The AI completes cut-off recipes, infers proportions when
-  only ingredients are given, and ignores non-recipe clutter on the card or
+  before upload, so iPhone HEIC photos work. **Links are two-tier:** the Edge
+  Function fetches the page server-side, and when the site ships complete
+  schema.org Recipe data (JSON-LD — most recipe blogs do), it's parsed
+  **deterministically and returned without any AI call at all** — instant,
+  free, doesn't count against the daily cap, and the review form says so
+  ("Read straight from the site's recipe data"). Only when the structured
+  data is absent or too partial does the extraction fall back to the AI path
+  (which still receives the JSON-LD as context when present). **YouTube**
+  links (including Shorts) work too: the function reads the recipe out of the
+  video's description (and falls back to the auto-generated captions if the
+  description is just a teaser). **TikTok** links work via TikTok's official
+  oEmbed API, which serves the video's caption — where recipe TikToks
+  usually carry the recipe; if the recipe is only spoken in the video, the
+  app says so and routes you to Paste text. **Instagram** stays paste-only:
+  it exposes no server-readable caption without a Facebook developer app
+  token. Two other categories of link can't be fetched either, and the app
+  will tell you to paste text instead (with a one-tap **📋 Paste text
+  instead** button right on the error): **bot-protected sites** (e.g.
+  liquor.com, AllRecipes, Serious Eats) — their Cloudflare-style protection
+  blocks any non-browser request outright, no matter the headers — and
+  **JS-only "app" sites** (e.g. some recipe-card apps built with React/Vite)
+  whose server response is an empty shell with no content until client-side
+  JavaScript runs. Both are fundamental limits of fetching a page
+  server-side, not bugs to retry. Text and AI-path link extractions cost
+  roughly half a cent (Haiku); photo extractions a couple of cents (Sonnet,
+  needed to read messy handwriting); structured-data link extractions cost
+  nothing. The AI completes cut-off recipes, infers proportions when only
+  ingredients are given, and ignores non-recipe clutter on the card or
   screenshot — anything it guesses shows up as an "AI added:" line in Notes.
-  Each account is capped at **20 AI extractions/day** (resets at midnight UTC)
-  to keep API costs predictable.
+  Each account is capped at **20 AI extractions/day** (resets at midnight
+  UTC) to keep API costs predictable — structured-data parses don't consume
+  it.
   - **Multiple photos, one recipe:** if a recipe spans the front and back of a
     card, or several pages, tap "Take / choose photo" for each one (up to 4) —
     a thumbnail strip with an **+ Add another photo** button appears, and

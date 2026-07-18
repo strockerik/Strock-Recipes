@@ -243,9 +243,10 @@ function decodeEntities(s: string): string {
     .replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#0?39;|&apos;/gi, "'");
 }
 
-// Title + description from <title> / og: / meta tags — a dependable fallback to
-// give the model a head start on pages whose body text is thin.
-function pageMeta(html: string): { title: string; description: string } {
+// Title + description + site name from <title> / og: / meta tags — a dependable
+// fallback to give the model a head start on pages whose body text is thin, and
+// the source attribution for structured (tier-1) parses.
+function pageMeta(html: string): { title: string; description: string; siteName: string } {
   const pick = (re: RegExp) => { const m = html.match(re); return m ? decodeEntities(m[1].trim()) : ""; };
   const title =
     pick(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']*)["']/i) ||
@@ -253,7 +254,224 @@ function pageMeta(html: string): { title: string; description: string } {
   const description =
     pick(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']/i) ||
     pick(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i);
-  return { title, description };
+  const siteName = pick(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']*)["']/i);
+  return { title, description, siteName };
+}
+
+// ---------- Tier-1: deterministic schema.org Recipe → RECIPE_SCHEMA ----------
+// When a site's JSON-LD Recipe is complete enough, map it directly and skip
+// the model entirely: instant, free, no daily-cap consumption, and immune to
+// model mis-parses. Anything that doesn't pass the acceptance gate falls
+// through to the existing AI path (the JSON-LD stringified into the prompt),
+// so the worst case is exactly today's behavior.
+
+// schema.org values arrive as string | {"@value"} | {name} | arrays — flatten
+// to one plain string.
+function schemaText(v: unknown): string {
+  if (typeof v === "string") return decodeEntities(v).trim();
+  if (Array.isArray(v)) return v.map(schemaText).filter(Boolean).join(", ");
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return schemaText(o["@value"] ?? o["name"] ?? o["text"] ?? "");
+  }
+  return "";
+}
+
+// Split one recipeIngredient line into {amount, unit, item}. Handles decimals,
+// ASCII and unicode fractions, mixed numbers ("1 1/2"), and ranges ("1-2" →
+// first number). Lines with no leading quantity keep amount/unit null — the
+// review form and grocery engine treat that as a to-taste/garnish line.
+const UNICODE_FRACTIONS: Record<string, number> = {
+  "½": 0.5, "⅓": 1 / 3, "⅔": 2 / 3, "¼": 0.25, "¾": 0.75, "⅕": 0.2, "⅖": 0.4,
+  "⅗": 0.6, "⅘": 0.8, "⅙": 1 / 6, "⅚": 5 / 6, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875
+};
+const INGREDIENT_UNITS = new Set([
+  "cup", "cups", "c",
+  "tablespoon", "tablespoons", "tbsp", "tbs", "tb",
+  "teaspoon", "teaspoons", "tsp",
+  "ounce", "ounces", "oz",
+  "pound", "pounds", "lb", "lbs",
+  "gram", "grams", "g", "kilogram", "kilograms", "kg",
+  "milliliter", "milliliters", "millilitre", "millilitres", "ml",
+  "liter", "liters", "litre", "litres", "l",
+  "quart", "quarts", "qt", "pint", "pints", "pt", "gallon", "gallons", "gal",
+  "clove", "cloves", "can", "cans", "jar", "jars", "slice", "slices",
+  "stick", "sticks", "pinch", "pinches", "dash", "dashes", "package", "packages",
+  "pkg", "bunch", "bunches", "head", "heads", "sprig", "sprigs", "stalk", "stalks",
+  "piece", "pieces", "sheet", "sheets", "strip", "strips", "wedge", "wedges",
+  "handful", "handfuls", "bottle", "bottles", "bag", "bags", "box", "boxes", "envelope", "envelopes"
+]);
+function parseIngredientLine(raw: string): { amount: number | null; unit: string | null; item: string; group: null } {
+  const line = decodeEntities(raw).replace(/\s+/g, " ").trim();
+  // Leading quantity: "1", "1.5", "1/2", "1 1/2", "½", "1½", "1-2", "1 to 2".
+  // The mixed-number tail (group 2) accepts FRACTIONS only, so "2 10 oz cans"
+  // stays amount 2, not 12.
+  const num = String.raw`(\d+(?:\.\d+)?(?:\s*\/\s*\d+)?|[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞])`;
+  const frac = String.raw`([½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞]|\d+\s*\/\s*\d+)`;
+  // \s* (not \s+) before the remainder: sites like BBC Good Food write
+  // attached units ("750g beef mince") — the unit-peeling step below sorts
+  // "g lean beef mince" into unit + item.
+  const m = line.match(new RegExp(`^${num}(?:\\s*${frac})?(?:\\s*(?:-|–|to)\\s*${num})?\\s*(.+)$`));
+  if (!m) return { amount: null, unit: null, item: line, group: null };
+  const toNum = (s: string | undefined): number => {
+    if (!s) return 0;
+    if (UNICODE_FRACTIONS[s] != null) return UNICODE_FRACTIONS[s];
+    if (s.includes("/")) {
+      const [a, b] = s.split("/").map((x) => Number(x.trim()));
+      return b ? a / b : 0;
+    }
+    return Number(s) || 0;
+  };
+  const amount = toNum(m[1]) + toNum(m[2]); // "1 1/2" / "1½" → 1.5; a range keeps the first number
+  let rest = m[4] ? m[4].trim() : "";
+  if (!rest || amount <= 0) return { amount: null, unit: null, item: line, group: null };
+  // A leading unit word (with optional trailing "." as in "tbsp.")
+  const unitMatch = rest.match(/^([A-Za-z]+)\.?\s+(.+)$/);
+  let unit: string | null = null;
+  if (unitMatch && INGREDIENT_UNITS.has(unitMatch[1].toLowerCase())) {
+    unit = unitMatch[1].toLowerCase();
+    rest = unitMatch[2].trim();
+  }
+  // "of" after a unit ("2 cups of flour") is noise
+  rest = rest.replace(/^of\s+/i, "");
+  return { amount, unit, item: rest, group: null };
+}
+
+// recipeYield arrives as number | "4 servings" | "Makes 12" | array — first
+// sensible integer wins.
+function parseYield(v: unknown): number {
+  const s = schemaText(v);
+  const m = s.match(/\d+/);
+  const n = m ? Number(m[0]) : NaN;
+  return Number.isFinite(n) && n >= 1 && n <= 100 ? n : 4;
+}
+
+// recipeInstructions: string | string[] | HowToStep[] | HowToSection[] (each
+// section carrying itemListElement of steps). Sections become the app's
+// sub-recipe groups.
+function parseInstructions(v: unknown): { text: string; group: string | null }[] {
+  const out: { text: string; group: string | null }[] = [];
+  const addText = (raw: string, group: string | null) => {
+    const cleaned = htmlToText(raw).replace(/\s+/g, " ").trim();
+    if (cleaned) out.push({ text: cleaned, group });
+  };
+  const walk = (node: unknown, group: string | null) => {
+    if (typeof node === "string") {
+      // A single blob may hold every step — split on newlines when present.
+      node.split(/\r?\n+/).forEach((part) => addText(part, group));
+      return;
+    }
+    if (Array.isArray(node)) { node.forEach((child) => walk(child, group)); return; }
+    if (node && typeof node === "object") {
+      const o = node as Record<string, unknown>;
+      const types = Array.isArray(o["@type"]) ? o["@type"] : [o["@type"]];
+      if (types.some((t) => typeof t === "string" && t.toLowerCase() === "howtosection")) {
+        const name = schemaText(o["name"]) || null;
+        walk(o["itemListElement"], name);
+        return;
+      }
+      const text = schemaText(o["text"] ?? o["name"] ?? "");
+      if (text) addText(text, group);
+    }
+  };
+  walk(v, null);
+  return out;
+}
+
+// The mapper + acceptance gate. Returns a complete RECIPE_SCHEMA-shaped object
+// or null (→ caller falls through to the AI path).
+function schemaOrgToRecipe(node: unknown, url: URL, meta: { siteName: string }): Record<string, unknown> | null {
+  if (!node || typeof node !== "object") return null;
+  const o = node as Record<string, unknown>;
+
+  const name = schemaText(o["name"]);
+  if (!name) return null;
+
+  const ingredients = (Array.isArray(o["recipeIngredient"]) ? o["recipeIngredient"] : [])
+    .map((line: unknown) => schemaText(line))
+    .filter(Boolean)
+    .map(parseIngredientLine);
+  const method = parseInstructions(o["recipeInstructions"]);
+
+  // Acceptance gate: enough structure to trust, and enough of the ingredient
+  // lines parsed a quantity (short lines — "lime wedge", "salt" — are fine
+  // without one). Anything less falls back to the model.
+  if (ingredients.length < 3 || method.length < 2) return null;
+  const okLines = ingredients.filter((ing) => ing.amount != null || ing.item.split(/\s+/).length <= 4).length;
+  if (okLines / ingredients.length < 0.6) return null;
+
+  const categoryText = [schemaText(o["recipeCategory"]), schemaText(o["keywords"]), name].join(" ");
+  const section = /\b(cocktail|drink|beverage|mocktail)\b/i.test(categoryText) ? "bar" : "kitchen";
+
+  // Tags: only exact hits against the app's fixed taxonomy, max 3.
+  const tagSource = [schemaText(o["recipeCuisine"]), schemaText(o["recipeCategory"]), schemaText(o["keywords"])].join(",");
+  const tags = [...new Set(
+    tagSource.split(/[,;]/).map((t) => t.trim().toLowerCase()).filter((t) => ALL_TAGS.includes(t))
+  )].slice(0, 3);
+
+  const description = schemaText(o["description"]);
+  const subtitle = description
+    ? (description.length > 140 ? description.slice(0, 140).replace(/\s+\S*$/, "") + "…" : description)
+    : null;
+
+  const author = schemaText((o["author"] as Record<string, unknown>)?.["name"] ?? o["author"]);
+  const source = meta.siteName || author || url.hostname.replace(/^www\./, "");
+
+  return {
+    name,
+    subtitle,
+    source,
+    section,
+    tags,
+    base_servings: parseYield(o["recipeYield"]),
+    servings_label: "servings",
+    ingredients,
+    method,
+    notes: null
+  };
+}
+
+// ---------- TikTok ----------
+// TikTok's official, keyless oEmbed endpoint returns the video's caption
+// (`title`) and creator (`author_name`) — the legitimate channel for reading a
+// post server-side. Recipe TikToks usually carry the recipe in the caption;
+// there is no free, ToS-clean transcript source, so caption-only is the honest
+// ceiling here (thin captions get paste guidance instead).
+function tikTokUrl(raw: string): URL | null {
+  const url = raw ? parseAllowedUrl(raw) : null;
+  if (!url) return null;
+  const h = url.hostname.toLowerCase().replace(/^www\./, "");
+  return h === "tiktok.com" || h.endsWith(".tiktok.com") ? url : null;
+}
+
+async function fetchTikTokOEmbed(videoUrl: string): Promise<{ title?: string; author_name?: string } | null> {
+  try {
+    const res = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(videoUrl)}`, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(10_000),
+      headers: { "Accept": "application/json" }
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+// vm.tiktok.com / tiktok.com/t/ short links sometimes need resolving to the
+// canonical /video/ URL before oEmbed accepts them — one redirect-following
+// GET, reading the final URL.
+async function resolveTikTokShortLink(shortUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch(shortUrl, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(10_000),
+      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" }
+    });
+    return res.url || null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------- YouTube / video helpers ----------
@@ -435,18 +653,43 @@ Deno.serve(async (req) => {
       userContent = [
         { type: "text", text: `Extract the recipe from the following text by calling save_recipe:\n\n${body.text}` }
       ];
+    } else if (body.type === "url" && typeof body.url === "string" && tikTokUrl(body.url.trim())) {
+      // TikTok: the official keyless oEmbed endpoint serves the caption, which
+      // is where recipe TikToks carry the recipe. Caption-only is the honest
+      // ceiling (no free, ToS-clean transcript source exists); thin captions
+      // get paste guidance and the frontend's "Paste text instead" button.
+      const url = tikTokUrl(body.url.trim())!;
+      let tk = await fetchTikTokOEmbed(url.href);
+      if (!tk) {
+        // Short links (vm.tiktok.com, /t/) sometimes need resolving first.
+        const resolved = await resolveTikTokShortLink(url.href);
+        if (resolved && resolved !== url.href) tk = await fetchTikTokOEmbed(resolved);
+      }
+      const caption = (tk?.title || "").trim();
+      const author = (tk?.author_name || "").trim();
+      console.error(`extract-recipe tiktok: oembed=${tk ? "ok" : "null"} caption=${caption.length}`);
+      if (caption.replace(/\s/g, "").length < 80) {
+        return json({ error: "This TikTok’s caption doesn’t contain the recipe (it may only be spoken in the video). Copy the caption — and jot down any spoken steps — then use Paste text here." });
+      }
+      const sourceHint = author || "TikTok";
+      noRecipeMessage = "This TikTok’s caption didn’t contain a full recipe — copy the caption (and any spoken steps) and use Paste text instead.";
+      const content = `TIKTOK VIDEO CAPTION:\nCREATOR: ${author}\n\n${caption}`.slice(0, MAX_PAGE_CHARS);
+      userContent = [{
+        type: "text",
+        text: `Extract the recipe from this TikTok video's caption by calling save_recipe. Captions use emoji, hashtags, and casual shorthand — ignore that clutter and reconstruct clean ingredients and ordered method steps. If amounts or steps are missing, fill sensible gaps as instructed and flag them in notes. Use "${sourceHint}" as the source if no clearer attribution is given.\n\n${content}`
+      }];
     } else if (body.type === "url") {
       const url = typeof body.url === "string" ? parseAllowedUrl(body.url.trim()) : null;
       if (!url) return json({ error: "That doesn’t look like a valid link." });
-      // Instagram and TikTok are login-walled at the HTTP level — a server-side
-      // fetch gets a JS shell with no caption in it (verified 2026-07: the post
-      // page, the /embed/ endpoint, and every known API route all gate on
-      // login). Fail fast with instructions instead of fetching a known dead
-      // end; the frontend adds its "Paste text instead" button to this error.
+      // Instagram is login-walled at the HTTP level — a server-side fetch gets
+      // a JS shell with no caption in it (verified 2026-07: the post page, the
+      // /embed/ endpoint, and every known keyless API route all gate on login;
+      // the official oEmbed needs a Facebook app token). Fail fast with
+      // instructions instead of fetching a known dead end; the frontend adds
+      // its "Paste text instead" button to this error.
       const socialHost = url.hostname.toLowerCase().replace(/^www\./, "");
-      if (socialHost === "instagram.com" || socialHost.endsWith(".instagram.com") ||
-          socialHost === "tiktok.com" || socialHost.endsWith(".tiktok.com")) {
-        return json({ error: "Instagram and TikTok don’t let servers read posts. Copy the post’s caption and paste it here — and if the steps are only spoken in the video, jot those in too." });
+      if (socialHost === "instagram.com" || socialHost.endsWith(".instagram.com")) {
+        return json({ error: "Instagram doesn’t let servers read posts. Copy the post’s caption and paste it here — and if the steps are only spoken in the video, jot those in too." });
       }
       const onYouTube = isYouTube(url);
       let html = "";
@@ -496,7 +739,7 @@ Deno.serve(async (req) => {
         }
         const vid = await fetchYouTubeVideo(videoId);
         const yt = html ? extractYouTube(html) : null;
-        const meta = html ? pageMeta(html) : { title: "", description: "" };
+        const meta = html ? pageMeta(html) : { title: "", description: "", siteName: "" };
 
         // Merge sources: Innertube first, page scrape second, og: meta last.
         const title = vid?.title || yt?.title || meta.title;
@@ -541,6 +784,15 @@ Deno.serve(async (req) => {
       } else {
         const jsonLd = findJsonLdRecipe(html);
         if (jsonLd) {
+          // Tier 1: when the site's own JSON-LD Recipe is complete enough, map
+          // it deterministically and return BEFORE the cap RPC and model call —
+          // instant, free, no quota, no model mis-parses. A partial/odd node
+          // falls through to today's AI path (stringified into the prompt).
+          const structured = schemaOrgToRecipe(jsonLd, url, pageMeta(html));
+          console.error(`extract-recipe url: host=${url.hostname} jsonld=yes via=${structured ? "structured" : "ai"}`);
+          if (structured) {
+            return json({ recipe: structured, extracted_via: "structured" });
+          }
           content = JSON.stringify(jsonLd).slice(0, MAX_PAGE_CHARS);
         } else {
           // No structured recipe — give the model the page's title/description
@@ -619,7 +871,7 @@ Deno.serve(async (req) => {
       return json({ error: noRecipeMessage });
     }
 
-    return json({ recipe });
+    return json({ recipe, extracted_via: "ai" });
   } catch (err) {
     console.error("extract-recipe error:", err);
     return json({ error: "Something went wrong. Please try again." });

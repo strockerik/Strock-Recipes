@@ -2969,7 +2969,12 @@
     closeAiImport();
     openRecipeForm(null);
     fillRecipeFormFromExtraction(data.recipe);
-    recipeFormStatus.textContent = "AI extracted this recipe — please review before saving.";
+    // The server reports which tier ran: "structured" = the site's own
+    // schema.org recipe data, read directly (no AI call, doesn't count
+    // against the daily cap); anything else went through the model.
+    recipeFormStatus.textContent = data.extracted_via === "structured"
+      ? "Read straight from the site's recipe data (no AI needed) — please review before saving."
+      : "AI extracted this recipe — please review before saving.";
   }
 
   addRecipeAiBtn.addEventListener("click", openAiImport);
