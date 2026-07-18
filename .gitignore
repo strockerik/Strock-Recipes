@@ -2,12 +2,14 @@
 .env.local
 notes.md
 
+# Claude Code per-machine settings (local permission allowlist, not for the repo)
+.claude/settings.local.json
+
 # Personal recipe test photos — local calibration set, not for the public site
 data/Recipe Photos/
 
 # OS / editor
 .DS_Store
-data/Recipe App Competition
 
 # Python bytecode cache from one-off scripts/
 __pycache__/
