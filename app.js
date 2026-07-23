@@ -3681,6 +3681,25 @@
       .slice(0, 25);
   }
 
+  // The user's in-stock bar ingredients (spirits, liqueurs, mixers) — the raw
+  // inventory behind the "from your bar" cocktail option. Bar rows carry the
+  // meaningful name in `category` (mirrors inventoryHaveNeed). soda water,
+  // bitters, and citrus are ASSUMED on hand server-side, so they needn't be
+  // listed. Empty result => no bar option, just meal pairings.
+  function buildBarInventory() {
+    const seen = new Set();
+    const out = [];
+    inventory.forEach((i) => {
+      if (i.section !== "bar" || i.status !== "in") return;
+      const name = (i.category || i.name || "").trim();
+      const key = name.toLowerCase();
+      if (!name || seen.has(key)) return;
+      seen.add(key);
+      out.push(name);
+    });
+    return out.slice(0, 60);
+  }
+
   function pairInvoke(body) {
     const invokePromise = supabaseClient.functions.invoke("pair-drink", { body }).catch((error) => ({ error }));
     const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(PAIR_TIMEOUT), PAIR_TIMEOUT_MS));
@@ -3694,7 +3713,10 @@
     pairOptionsEl.innerHTML = "";
     pairLoading.hidden = false;
     const body = { kind: pairKind, mode: "options", recipe: pairLastPayload.recipe, dietPrefs: pairLastPayload.dietPrefs };
-    if (pairKind === "cocktail") body.barRecipes = buildBarCandidates();
+    if (pairKind === "cocktail") {
+      body.barRecipes = buildBarCandidates();
+      body.barInventory = buildBarInventory();
+    }
     const result = await pairInvoke(body);
     if (token !== pairToken || pairPanel.hidden) return; // stale / cancelled
     pairLoading.hidden = true;
@@ -3702,6 +3724,10 @@
     const { data, error } = result;
     if (error || data?.error) { pairStatus.textContent = `Error: ${data?.error || error.message}`; return; }
     pairOptions = Array.isArray(data.options) ? data.options : [];
+    // Bar-anchored option first, meal pairings after — deterministic order
+    // regardless of how the model returned them (keeps indices aligned with
+    // the rendered buttons + pick handler).
+    if (pairKind === "cocktail") pairOptions.sort((a, b) => (b.basis === "bar") - (a.basis === "bar"));
     if (!pairOptions.length) { pairStatus.textContent = "Couldn’t come up with pairings — try again."; return; }
     renderPairOptions();
   }
@@ -3711,11 +3737,17 @@
       const candidates = buildBarCandidates(); // for the stock-tag lookup
       pairOptionsEl.innerHTML = pairOptions.map((o, i) => {
         const cand = o.matched_existing_id ? candidates.find((c) => c.id === o.matched_existing_id) : null;
-        const tag = o.matched_existing_id
-          ? (cand && cand.missing.length
-              ? `<span class="pair-stock-tag">🛒 need: ${esc(cand.missing.join(", "))}</span>`
-              : `<span class="pair-stock-tag is-in-stock">✓ in your bar</span>`)
-          : `<span class="pair-stock-tag">✨ new idea</span>`;
+        let tag;
+        if (o.basis === "bar") {
+          // The one drink built from what's on hand right now.
+          tag = `<span class="pair-stock-tag is-in-stock">🍸 from your bar</span>`;
+        } else if (o.matched_existing_id) {
+          tag = cand && cand.missing.length
+            ? `<span class="pair-stock-tag">🛒 need: ${esc(cand.missing.join(", "))}</span>`
+            : `<span class="pair-stock-tag is-in-stock">✓ in your bar</span>`;
+        } else {
+          tag = `<span class="pair-stock-tag">✨ new idea</span>`;
+        }
         return `<button type="button" class="pair-option" data-pair-option="${i}">
           <span class="gen-concept-title">${esc(o.title)}</span>
           ${tag}
@@ -3785,9 +3817,12 @@
     pairStatus.textContent = "";
     pairLoading.hidden = false;
     pairOptionsEl.innerHTML = "";
+    const fromBar = opt.basis === "bar";
     const result = await pairInvoke({
       kind: "cocktail", mode: "develop",
       concept: { title: opt.title, blurb: opt.blurb },
+      fromBar,
+      barInventory: fromBar ? buildBarInventory() : undefined,
       recipe: pairLastPayload.recipe, dietPrefs: pairLastPayload.dietPrefs
     });
     if (token !== pairToken || pairPanel.hidden) return; // stale / cancelled

@@ -3,15 +3,19 @@
 // "Pair a drink with this meal" — given a kitchen recipe, propose 2-3 drink
 // pairings for a chosen kind (cocktail, wine, or beer).
 //
-//   - Cocktail: checks the user's OWN saved bar recipes (with their bar
-//     inventory cross-referenced client-side) for a genuinely good existing
-//     match first; invents a new cocktail idea only when nothing fits. This
-//     is a two-step flow, mirroring generate-recipe's concepts->full split:
-//     mode:"options" proposes 2-3 lightweight pairings (NOT capped — some or
-//     all may just point at an existing recipe, which costs nothing further
-//     to view); mode:"develop" turns a picked INVENTED concept into a full,
-//     saveable cocktail recipe (capped). Picking an EXISTING match needs no
-//     second call at all.
+//   - Cocktail: when the user has a bar inventory on record, the options step
+//     returns THREE picks — ONE drink built to be makeable right now from
+//     what's in stock (soda water, bitters, and citrus are assumed always on
+//     hand), then TWO chosen purely as the best flavor pairings for the dish
+//     regardless of stock. With no inventory recorded it returns 2-3 pure
+//     meal pairings. Any option may point at one of the user's OWN saved bar
+//     recipes (free to view) or be a new invented idea. This is a two-step
+//     flow, mirroring generate-recipe's concepts->full split: mode:"options"
+//     proposes the lightweight pairings (NOT capped — some or all may just
+//     point at an existing recipe, which costs nothing further to view);
+//     mode:"develop" turns a picked INVENTED concept into a full, saveable
+//     cocktail recipe (capped). Picking an EXISTING match needs no second
+//     call at all.
 //   - Wine / beer: a single call proposes 2-3 style/varietal recommendations
 //     (never a brand or bottle) — there's nothing to "develop" into a
 //     savable recipe, so this one call is the whole interaction and is what
@@ -34,7 +38,9 @@
 //     mode: "options" | "develop",   // "develop" is cocktail-only
 //     recipe: { name, section, tags, ingredients, method, notes, ... },
 //     barRecipes: [{ id, name, tags, ingredientsSummary, missing: string[] }], // cocktail+"options" only
+//     barInventory: string[],        // cocktail: in-stock bar ingredients (drives the "from your bar" option)
 //     concept: { title, blurb },     // cocktail+"develop" only
+//     fromBar: boolean,              // cocktail+"develop": keep the drink to stocked ingredients
 //     dietPrefs: { diets, allergies, avoid } }
 //
 // Response: always HTTP 200 — { options: [...] } | { recipe: {...} } | { error }.
@@ -134,11 +140,12 @@ const PAIR_OPTIONS_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          matched_existing_id: { type: ["string", "null"], description: "The id of the best-fitting recipe from the candidate list, if a genuinely good flavor pairing exists among the user's own bar recipes. Prefer one the candidate list marks as fully in stock, but a great flavor match with one missing ingredient beats a mediocre match that's fully in stock. null if none are a good fit — or if there is no candidate list." },
+          basis: { type: "string", enum: ["bar", "meal"], description: "\"bar\" for the single option built to be makeable right now from the user's bar inventory; \"meal\" for an option chosen purely as a best flavor pairing for the dish. Include exactly ONE \"bar\" option when a non-empty bar inventory is provided; otherwise every option is \"meal\"." },
+          matched_existing_id: { type: ["string", "null"], description: "The id of the best-fitting recipe from the candidate list, if a genuinely good flavor pairing exists among the user's own bar recipes. For a \"bar\" option prefer a candidate the list marks fully in stock; for a \"meal\" option a great flavor match with one missing ingredient beats a mediocre in-stock one. null if none fit — or if there is no candidate list." },
           title: { type: "string", description: "The existing recipe's name (if matched_existing_id is set) or a working title for a new cocktail idea." },
           blurb: { type: "string", description: "One sentence on why this pairs well with the dish — reference the actual dish, not generic praise." }
         },
-        required: ["matched_existing_id", "title", "blurb"]
+        required: ["basis", "matched_existing_id", "title", "blurb"]
       }
     }
   },
@@ -250,19 +257,31 @@ COCKTAIL BY DISH ARCHETYPE
 // state cocktail suggestions with the same certainty.
 const COCKTAIL_HEDGE = `Cocktail-food pairing is far less formally codified than wine or beer — frame these as what bartenders/trade sources reach for, not as fixed rules; a brief hedge in the blurb/notes is fine.`;
 
-const COCKTAIL_OPTIONS_PROMPT = `You help a home cook pick a cocktail to serve with a meal they're making. You answer by calling the propose_pairings tool — nothing else, no prose.
+// The options-step system prompt. Branches on whether the user has a bar
+// inventory: with one, the first pick is built to be makeable right now from
+// what's in stock and the other two are the best flavor pairings for the
+// dish; without one, all picks are pure meal pairings.
+function buildCocktailOptionsPrompt(hasInventory: boolean): string {
+  const structure = hasInventory
+    ? `Propose exactly 3 DISTINCT options, in this order:
+1. ONE "from your bar" option (basis:"bar"): a cocktail the user can make RIGHT NOW from their BAR INVENTORY (listed in the context below). Treat soda water, bitters, and citrus (lemon/lime) as ALWAYS on hand even if not listed. Prefer a saved candidate recipe that's marked fully in stock and pairs at least decently; if none fits, invent a simple drink that uses ONLY stocked ingredients plus those three assumed staples. This option must be genuinely makeable with what's on hand — never call for a spirit or mixer the user doesn't have.
+2. TWO "pairs with the meal" options (basis:"meal"): the two cocktails that pair BEST with this specific dish, chosen purely for flavor affinity — ignore what's in stock. Each may point at a saved candidate or be a new idea.`
+    : `The user has no bar inventory on record, so propose exactly 2-3 DISTINCT "pairs with the meal" options (basis:"meal") — the cocktails that pair BEST with this specific dish, chosen for flavor affinity. Each may point at a saved candidate or be a new idea.`;
 
-Given the dish (in the context below) and the user's own saved bar recipes (a candidate list, each with its id, name, tags, ingredients, and which ingredients — if any — the user doesn't currently have in stock), propose exactly 2-3 DISTINCT cocktail pairings.
+  return `You help a home cook pick a cocktail to serve with a meal they're making. You answer by calling the propose_pairings tool — nothing else, no prose.
 
-For each option:
-- If a candidate from the list is a genuinely good flavor pairing for this dish, set matched_existing_id to its id and title to its name. Strongly prefer a candidate marked fully in stock, but a great flavor match with one missing ingredient beats a mediocre match that's fully in stock — never pick a bad pairing just because it's available.
-- If no candidate is a good fit, invent a new cocktail idea instead: matched_existing_id null, a working title, and describe the idea in the blurb — do NOT write ingredients or a method here, that only happens if the user picks it.
-- Prefer an existing recipe over inventing whenever the candidate list has a genuinely good option — inventing is the fallback, not the default.
-- Make the 2-3 options genuinely different from each other (vary style/technique/spirit — e.g. a sour, a stirred spirit-forward drink, a highball — not three variations of the same drink).
+${structure}
+
+For any option:
+- To point at one of the user's saved bar recipes (the candidate list below — each with its id, name, tags, ingredients, and which ingredients, if any, are missing), set matched_existing_id to its id and title to its name.
+- To suggest a new drink, set matched_existing_id to null, give a working title, and describe the idea in the blurb — do NOT write ingredients or a method here; that only happens if the user picks it.
+- The blurb is one sentence on why it suits THIS dish — reference the actual dish, not generic praise. For the "bar" option, make clear it's built from what's on hand.
+- Make the options genuinely different from each other (vary style/technique/spirit — a sour, a stirred spirit-forward drink, a highball — not variations of one drink).
 
 ${COCKTAIL_HEDGE}
 
 ${COCKTAIL_PAIRING_BASES}`;
+}
 
 const COCKTAIL_DEVELOP_PROMPT = `You are a home-bartending recipe developer. The user picked a cocktail idea to pair with a dish they're making; develop it into ONE complete, realistic cocktail recipe and return it by calling the save_recipe tool. Produce exactly one recipe — never ask follow-up questions, never return prose.
 
@@ -406,10 +425,20 @@ Deno.serve(async (req) => {
       }
       if (usageError) console.error("pairing_usage check failed:", usageError);
 
+      // If this was the "from your bar" pick, keep the finished drink to
+      // what's actually in stock (plus the always-on-hand staples).
+      const developInventory = Array.isArray(body.barInventory)
+        ? body.barInventory.map((x: unknown) => String(x).trim()).filter(Boolean).slice(0, 60)
+        : [];
+      const barConstraint = body.fromBar === true && developInventory.length
+        ? `\nThis drink is meant to be made from the user's CURRENT BAR — use ONLY these stocked ingredients, plus soda water, bitters, and citrus (always on hand), and nothing else: ${developInventory.join(", ")}.`
+        : "";
+
       const userText = [
         dishContext,
         "",
         `The user picked this cocktail idea to pair with the dish above — develop it into the full recipe: "${String(concept.title)}"${concept.blurb ? ` — ${String(concept.blurb)}` : ""}.`,
+        barConstraint,
         "",
         dietLines,
         "",
@@ -433,28 +462,41 @@ Deno.serve(async (req) => {
     // ---- Cocktail, step 1: propose 2-3 pairings (NOT capped) ----
     if (kind === "cocktail") {
       const barRecipes = Array.isArray(body.barRecipes) ? body.barRecipes.slice(0, 40) : [];
+      const barInventory = Array.isArray(body.barInventory)
+        ? body.barInventory.map((x: unknown) => String(x).trim()).filter(Boolean).slice(0, 60)
+        : [];
+      const hasInventory = barInventory.length > 0;
+
       const candidatesText = barRecipes.length
         ? barRecipes.map((r: any) =>
             `- id:${r.id} "${r.name}" [${Array.isArray(r.tags) ? r.tags.join(", ") : ""}] ingredients: ${r.ingredientsSummary || ""}` +
             (Array.isArray(r.missing) && r.missing.length ? ` — MISSING: ${r.missing.join(", ")}` : ` — fully in stock`)
           ).join("\n")
-        : "(the user has no saved bar recipes yet — invent options)";
+        : "(the user has no saved bar recipes yet)";
 
       const userText = [
         dishContext,
         "",
-        `The user's own saved bar recipes (candidates — prefer a genuinely good match from this list over inventing):`,
+        `BAR INVENTORY — what the user has in stock right now (soda water, bitters, and citrus are ALSO always on hand and need not be listed):`,
+        hasInventory ? barInventory.join(", ") : "(the user hasn't recorded a bar inventory)",
+        "",
+        `The user's own saved bar recipes (candidates you may point any option at):`,
         candidatesText,
         "",
         dietLines,
         "",
-        `Call propose_pairings with 2-3 distinct cocktail pairing options.`
+        hasInventory
+          ? `Call propose_pairings with exactly 3 options: first one basis:"bar" makeable from the inventory above, then two basis:"meal" best-flavor pairings.`
+          : `Call propose_pairings with 2-3 distinct basis:"meal" cocktail pairing options.`
       ].join("\n");
 
-      const { input, error } = await runTool(COCKTAIL_OPTIONS_PROMPT, "propose_pairings", PAIR_OPTIONS_SCHEMA, userText);
+      const { input, error } = await runTool(buildCocktailOptionsPrompt(hasInventory), "propose_pairings", PAIR_OPTIONS_SCHEMA, userText);
       if (error) return json({ error });
       const options = Array.isArray(input?.options)
-        ? input.options.filter((o: { title?: string; blurb?: string }) => o?.title && o?.blurb).slice(0, 3)
+        ? input.options
+            .filter((o: { title?: string; blurb?: string }) => o?.title && o?.blurb)
+            .map((o: { basis?: string }) => ({ ...o, basis: o.basis === "bar" ? "bar" : "meal" }))
+            .slice(0, 3)
         : [];
       if (options.length === 0) return json({ error: "Couldn’t come up with cocktail pairings for that dish — try again." });
       return json({ options });
