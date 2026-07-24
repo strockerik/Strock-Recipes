@@ -40,6 +40,19 @@ Tooling gotchas (all verified the hard way):
   serving `/tmp`), so `test_*.html` files live in the repo root — which is why
   deleting them afterward is non-negotiable.
 
+**Reusable harness (committed):** `testing-skills/generator_smoke_test.py` boots
+the REAL `index.html` DOM + `app.js` against a **stubbed Supabase client** (fake
+signed-in user + fake bar inventory) and drives the generator through real DOM
+clicks — no backend, no spend. Run `python3 testing-skills/generator_smoke_test.py`
+from anywhere in the repo (it walks up to find the root); it serves a throwaway
+`test_generator.html` on an ephemeral port, runs headless Chrome, prints
+per-assertion pass/fail, and **deletes the fixture** on exit (`--keep` to inspect,
+`--keep` leaves it). It currently covers the "Clear all" + "From your bar"
+pick-row flow. It's the **template** for booting the full app headless — the
+Supabase stub (a chainable/thenable Proxy query builder + an `onAuthStateChange`
+that fires `INITIAL_SESSION`) is the reusable part; copy it to smoke-test other
+panels without stubs living only in the scratchpad.
+
 Architecture recap (so you test the right boundary):
 
 - **Frontend** — `index.html`, `style.css`, `app.js` (all client logic, wrapped
