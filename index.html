@@ -697,7 +697,14 @@
       <div id="generate-form">
         <p class="gen-hint" id="gen-hint">List your main ingredients and AI will suggest a few recipes to pick from. It assumes you have common seasonings.</p>
         <p class="gen-diet-line" id="gen-diet-line"></p>
+        <div id="gen-bar-picks" class="gen-bar-picks" hidden>
+          <span class="gen-opt-label">From your bar <span class="gen-bar-hint">· tap to add just what you want</span></span>
+          <div class="gen-chip-row" id="gen-bar-picks-row"></div>
+        </div>
         <div class="gen-ing">
+          <div class="gen-chips-head" id="gen-chips-head" hidden>
+            <button type="button" id="gen-clear" class="link-inline">Clear all</button>
+          </div>
           <div id="gen-ing-chips" class="gen-chips"></div>
           <div class="gen-ing-row">
             <input id="gen-ing-input" class="search" type="text" placeholder="Type a main ingredient (e.g. chicken thighs)" aria-label="Add an ingredient" enterkeyhint="done">

@@ -223,6 +223,10 @@
   const genIngChips = $("#gen-ing-chips");
   const genIngInput = $("#gen-ing-input");
   const genIngAddBtn = $("#gen-ing-add");
+  const genBarPicks = $("#gen-bar-picks");
+  const genBarPicksRow = $("#gen-bar-picks-row");
+  const genChipsHead = $("#gen-chips-head");
+  const genClearBtn = $("#gen-clear");
   const genSubmitBtn = $("#gen-submit");
   const genCuisineLabel = $("#gen-opt-cuisine-label");
   const rfInventoryCheck = $("#rf-inventory-check");
@@ -1349,7 +1353,7 @@
     // items don't map onto a recipe the same direct way, so no bridge there.
     const avail = items.filter((i) => i.status !== "out");
     invGenerateBtn.hidden = invSection !== "bar" || avail.length === 0;
-    invGenerateBtn.textContent = "🪄 Generate a cocktail from these";
+    invGenerateBtn.textContent = "🪄 Generate a cocktail from your bar";
     if (!items.length) {
       inventoryContent.innerHTML = `<p class="inv-empty">Nothing here yet — add what you have on hand above.</p>`;
       return;
@@ -1445,16 +1449,15 @@
       saveLocal("invCollapsed", [...collapsedInvCats]);
     }
   });
-  // The inventory -> generator bridge: bar only. Hand off whatever's
-  // in-stock, forcing the generator into bar mode regardless of which main
-  // Kitchen/Bar tab is currently selected — your spirits ARE the cocktail's
-  // ingredients, so this is a direct one-tap handoff.
+  // The inventory -> generator bridge: bar only. Opens the generator in bar
+  // mode (regardless of which main Kitchen/Bar tab is selected) and lets the
+  // "From your bar" pick row choose which spirits to use — so you can generate
+  // from just rum + campari instead of your whole shelf.
   invGenerateBtn.addEventListener("click", () => {
     const avail = inventory.filter((i) => i.section === "bar" && i.status !== "out");
     if (!avail.length) return;
     inventoryPanel.hidden = true;
     openGeneratePanel("bar");
-    avail.forEach((i) => addGenIngredient(genIngredientText(i)));
   });
 
   setAuthMode("signin"); // default the gate to sign-in
@@ -3106,6 +3109,33 @@
     genIngChips.innerHTML = genState.ingredients.map((ing, i) =>
       `<span class="gen-chip">${esc(ing)}<button type="button" class="gen-chip-x" data-gen-ing="${i}" aria-label="Remove ${esc(ing)}">×</button></span>`
     ).join("");
+    // "Clear all" only shows when there's something to clear.
+    genChipsHead.hidden = genState.ingredients.length === 0;
+    renderGenBarPicks();
+  }
+  // Bar mode only: offer the user's in-stock bar items as tap-to-toggle "quick
+  // add" chips, so they can pull just the spirits they want (e.g. rum + campari)
+  // into the generator instead of hand-typing them or clearing a full dump.
+  // A pick is highlighted when its exact ingredient text is already selected.
+  function renderGenBarPicks() {
+    if (!genIsBar()) { genBarPicks.hidden = true; return; }
+    const seen = new Set();
+    const picks = [];
+    inventory.forEach((it) => {
+      if (it.section !== "bar" || it.status === "out") return;
+      const text = genIngredientText(it);
+      const key = text.toLowerCase();
+      if (!text || seen.has(key)) return;
+      seen.add(key);
+      picks.push(text);
+    });
+    if (!picks.length) { genBarPicks.hidden = true; return; }
+    const chosen = new Set(genState.ingredients.map((x) => x.toLowerCase()));
+    genBarPicksRow.innerHTML = picks.map((text) => {
+      const on = chosen.has(text.toLowerCase());
+      return `<button type="button" class="tag-chip gen-optchip${on ? " is-on" : ""}" data-gen-barpick="${esc(text)}" aria-pressed="${on}">${esc(text)}</button>`;
+    }).join("");
+    genBarPicks.hidden = false;
   }
   function renderGenOptions() {
     const bar = genIsBar();
@@ -3268,6 +3298,22 @@
     const x = e.target.closest("[data-gen-ing]");
     if (!x) return;
     genState.ingredients.splice(Number(x.dataset.genIng), 1);
+    renderGenChips();
+  });
+  genClearBtn.addEventListener("click", () => {
+    genState.ingredients = [];
+    renderGenChips();
+    genIngInput.focus();
+  });
+  // Tap a "from your bar" chip to add/remove just that spirit.
+  genBarPicksRow.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-gen-barpick]");
+    if (!btn) return;
+    const text = btn.dataset.genBarpick;
+    const norm = text.toLowerCase();
+    const idx = genState.ingredients.findIndex((x) => x.toLowerCase() === norm);
+    if (idx >= 0) genState.ingredients.splice(idx, 1);
+    else genState.ingredients.push(text);
     renderGenChips();
   });
   generatePanel.addEventListener("click", (e) => {

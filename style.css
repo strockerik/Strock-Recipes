@@ -2002,6 +2002,12 @@ button:focus-visible, input:focus-visible {
 }
 .gen-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .gen-optchip { text-transform: capitalize; cursor: pointer; }
+/* "From your bar" quick-pick row + the Clear-all header above the chips */
+.gen-bar-picks { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.gen-bar-picks[hidden] { display: none; }
+.gen-bar-hint { text-transform: none; letter-spacing: 0; color: var(--faint); }
+.gen-chips-head { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.gen-chips-head[hidden] { display: none; }
 .gen-submit { width: 100%; margin-top: 4px; }
 .gen-tip { margin: 10px 0 0; font-size: 0.8rem; color: var(--faint); text-align: center; }
 
