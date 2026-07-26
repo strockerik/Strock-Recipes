@@ -719,13 +719,91 @@ The caps only increment with a real user's JWT, so the true test is in the app:
 use the feature and watch the count climb (the 21st same-day call returns the
 "used today's 20…" message). The same applies to `increment_extraction_usage`.
 
+## AI provider routing — the Groq cheap tier (optional)
+
+`extract-recipe`'s **text and URL** paths can run through a cheap open model
+(Groq, `openai/gpt-oss-20b`, with strict JSON-schema constrained decoding) first,
+**escalating to Claude on any miss** (error, timeout, or schema-invalid output).
+Image/vision extraction and the other three functions always use Claude. The tier
+is **opt-in and fail-open**: with no `GROQ_API_KEY` set, everything routes to
+Claude exactly as before, so deploying the function is a no-op until you enable it.
+
+Enable it with these Edge Function secrets (Edge Functions → Secrets, shared):
+
+- `GROQ_API_KEY` — a free key from console.groq.com (`gsk_…`). Server-side only,
+  never in the frontend. Unset = tier disabled.
+- `ALLOW_PROVIDER_OVERRIDE` — set to `1` **only** while running the old-vs-new
+  comparison test; it lets a request pin a provider via `force_provider` (and
+  skips the daily cap for those calls). Leave it unset in normal production.
+
+Notes: gpt-oss-20b is one of only two Groq models with strict `json_schema`
+support (llama-3.1-8b-instant does **not**), and Groq's free tier caps at 8000
+tokens/min — so the function keeps Groq's `max_tokens` small and only sends
+short-enough inputs to Groq; long pages/transcripts skip it and go straight to
+Claude. Responses carry `extracted_via`: `"structured"` (JSON-LD tier-1, free),
+`"groq"` (cheap tier), or `"ai"` (Claude).
+
+### Observability — the `ai_calls` log
+
+One row per extraction records which provider handled it, so you can measure the
+cheap model's real-world success rate. Run once in the SQL editor:
+
+```sql
+create table public.ai_calls (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  task text not null,
+  model text not null,
+  valid boolean not null,
+  latency_ms int,
+  escalated boolean not null default false,
+  created_at timestamptz not null default now()
+);
+alter table public.ai_calls enable row level security;
+-- No policies on purpose: written only via the SECURITY DEFINER function below.
+
+create or replace function public.log_ai_call(
+  p_task text, p_model text, p_valid boolean, p_latency_ms int, p_escalated boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.ai_calls (user_id, task, model, valid, latency_ms, escalated)
+  values (auth.uid(), p_task, p_model, p_valid, p_latency_ms, p_escalated);
+end;
+$$;
+
+-- Both PUBLIC and anon default-grant EXECUTE on a new function — revoke both.
+revoke execute on function public.log_ai_call(text, text, boolean, int, boolean) from public;
+revoke execute on function public.log_ai_call(text, text, boolean, int, boolean) from anon;
+grant execute on function public.log_ai_call(text, text, boolean, int, boolean) to authenticated;
+```
+
+Like the caps, `extract-recipe` fails open if this hasn't been run — logging is
+skipped, extraction still works. Inspect the cheap-tier success rate with:
+
+```sql
+select
+  count(*) filter (where model = 'openai/gpt-oss-20b')                as groq_ok,
+  count(*) filter (where escalated)                                   as escalated_to_claude,
+  count(*) filter (where model like 'claude%' and not escalated)      as claude_direct,
+  round(100.0 * count(*) filter (where model = 'openai/gpt-oss-20b')
+        / nullif(count(*) filter (where model = 'openai/gpt-oss-20b' or escalated), 0), 1) as groq_success_pct,
+  round(avg(latency_ms)) as avg_ms
+from public.ai_calls;
+```
+
 ## Edge Function deployment (AI)
 
 There are **four** Edge Functions, each deployed via the Supabase dashboard (Edge
 Functions → the in-browser editor), with the repo files as the source of truth —
 keep them in sync when editing:
 
-- **`extract-recipe`** — AI import (photo / text / link → recipe).
+- **`extract-recipe`** — AI import (photo / text / link → recipe). Its text/URL
+  paths optionally route through the Groq cheap tier first (see "AI provider
+  routing" above); image extraction stays on Claude.
 - **`recipe-coach`** — the AI coach (troubleshoot / improve an existing recipe).
   Deploy it the same way: create the function, paste in
   `supabase/functions/recipe-coach/index.ts`, Deploy.
@@ -739,6 +817,9 @@ keep them in sync when editing:
 Requirements (apply to **all four** functions):
 
 - Secret `ANTHROPIC_API_KEY` set under Edge Functions → Secrets (shared).
+- (Optional, `extract-recipe` only) `GROQ_API_KEY` to enable the cheap tier, and
+  `ALLOW_PROVIDER_OVERRIDE=1` only during comparison testing — see "AI provider
+  routing — the Groq cheap tier" above.
 - **Verify JWT: OFF** for each (they do their own auth check and handle the CORS
   preflight; leaving it on breaks browser calls).
 - Each has its **own** per-user daily cap: `extract-recipe` uses
@@ -921,6 +1002,7 @@ delete from public.extraction_usage  where usage_date < (now() at time zone 'utc
 delete from public.coach_usage       where usage_date < (now() at time zone 'utc')::date - 90;
 delete from public.generation_usage  where usage_date < (now() at time zone 'utc')::date - 90;
 delete from public.pairing_usage     where usage_date < (now() at time zone 'utc')::date - 90;
+delete from public.ai_calls          where created_at < (now() at time zone 'utc') - interval '90 days';
 ```
 
 If the `pg_cron` extension is enabled on the project, schedule the same

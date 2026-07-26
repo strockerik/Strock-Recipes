@@ -52,7 +52,17 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 // is added. Groq is OpenAI-compatible with strict JSON-schema constrained
 // decoding, which keeps an 8B model's structured output reliable.
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
-const GROQ = { model: "llama-3.1-8b-instant", url: "https://api.groq.com/openai/v1/chat/completions" };
+// gpt-oss-20b is one of only two Groq models with strict json_schema constrained
+// decoding (verified live 2026-07 — llama-3.1-8b-instant does NOT support it).
+// maxTokens stays well under the free tier's 8000 tokens/min budget (Groq
+// reserves max_tokens up front against TPM), and maxInputChars skips Groq for
+// long pages/transcripts that wouldn't fit — those escalate straight to Claude.
+const GROQ = {
+  model: "openai/gpt-oss-20b",
+  url: "https://api.groq.com/openai/v1/chat/completions",
+  maxTokens: 4096,
+  maxInputChars: 12_000
+};
 // When set (temporarily, for the old-vs-new equivalence comparison), a request
 // may pin a provider via body.force_provider = "claude" | "groq", which bypasses
 // escalation AND the daily cap and returns that provider's raw output. Leave it
@@ -673,7 +683,7 @@ async function runGroq(userText: string): Promise<{ recipe?: any; error?: string
   if (!GROQ_API_KEY) return { error: "groq disabled" };
   const payload = JSON.stringify({
     model: GROQ.model,
-    max_tokens: 8192,
+    max_tokens: GROQ.maxTokens,
     temperature: 0.2,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
@@ -986,9 +996,11 @@ Deno.serve(async (req) => {
     // user's quota. Ignored entirely unless ALLOW_PROVIDER_OVERRIDE is set.
     const forced = ALLOW_PROVIDER_OVERRIDE && (body.force_provider === "claude" || body.force_provider === "groq")
       ? body.force_provider as "claude" | "groq" : null;
-    // Groq handles only the non-image text/URL paths, and only when enabled.
-    const groqEligible = body.type !== "image" && !!GROQ_API_KEY;
     const userText = (userContent as Array<{ text?: string }>).map((c) => c.text).filter(Boolean).join("\n");
+    // Groq handles only the non-image text/URL paths, only when enabled, and only
+    // when the input fits the free-tier budget — longer pages/transcripts skip
+    // Groq (which would 413) and go straight to Claude.
+    const groqEligible = body.type !== "image" && !!GROQ_API_KEY && userText.length <= GROQ.maxInputChars;
 
     // Enforce the per-user daily cap right before the paid call, so requests
     // that fail validation above never consume quota. Fails open (logs and
