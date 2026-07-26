@@ -1,0 +1,18 @@
+[
+  { "label": "chili-messy", "type": "text",
+    "text": "grandmas chili - brown 1lb ground beef w/ an onion, add a can of kidney beans, 2 cans diced tomato, 2 tbsp chili powder, cumin, simmer 30 min. salt to taste." },
+  { "label": "marinara-clean", "type": "text",
+    "text": "Simple Marinara Sauce. Serves 4.\nIngredients:\n3 tbsp olive oil\n4 cloves garlic, minced\n28 oz can crushed tomatoes\nsalt and pepper to taste\n1/4 cup fresh basil\nMethod:\n1. Heat oil over medium, cook garlic 1 minute until fragrant.\n2. Add tomatoes, season, simmer 20 minutes.\n3. Stir in basil off the heat." },
+  { "label": "daiquiri-bar", "type": "text",
+    "text": "Classic Daiquiri (1 drink). 2 oz white rum, 1 oz fresh lime juice, 0.75 oz simple syrup. Shake with ice, strain into a chilled coupe. Garnish with a lime wheel." },
+  { "label": "pancakes-fractions", "type": "text",
+    "text": "Fluffy Pancakes, makes 8.\n1 1/2 cups all-purpose flour\n3 1/2 tsp baking powder\n1 tsp salt\n1 tbsp sugar\n1 1/4 cups milk\n1 egg\n3 tbsp melted butter\nMix dry, whisk in wet, cook on a greased griddle until bubbles form, flip." },
+  { "label": "stirfry-narrative", "type": "text",
+    "text": "So for this chicken stir fry I just grab about a pound of chicken thighs and cut them into strips, toss with a splash of soy sauce. Get a wok screaming hot with a bit of oil, sear the chicken, throw in a couple cloves of garlic and some ginger, then a bag of frozen stir fry veg. Finish with more soy and a drizzle of sesame oil. Serve over rice." },
+  { "label": "cookies-groups", "type": "text",
+    "text": "Glazed Lemon Cookies.\nFor the cookies: 2 cups flour, 1/2 tsp baking soda, 3/4 cup butter, 1 cup sugar, 1 egg, zest of 1 lemon.\nFor the glaze: 1 cup powdered sugar, 2 tbsp lemon juice.\nCream butter and sugar, add egg and zest, mix in dry, bake at 350 for 10 min. Whisk glaze and drizzle over cooled cookies." },
+  { "label": "soup-vague", "type": "text",
+    "text": "Weeknight veg soup: a knob of butter, a large onion diced, a couple handfuls of chopped carrots and celery, a splash of white wine, then cover with stock and simmer till soft. Blend if you like. Season well." },
+  { "label": "tacos-typical", "type": "text",
+    "text": "Ground Beef Tacos, serves 4. 1 lb ground beef, 1 packet taco seasoning, 2/3 cup water, 8 corn tortillas, 1 cup shredded cheddar, shredded lettuce, 1 diced tomato. Brown beef, add seasoning and water, simmer 5 min. Warm tortillas and fill." }
+]
