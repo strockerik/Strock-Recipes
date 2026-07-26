@@ -290,6 +290,17 @@
     }[c]));
   }
 
+  // A recipe's source rendered for display: a URL (an imported link — the
+  // TikTok, the blog) becomes a clickable link so a cook can jump back to the
+  // original and re-watch the technique; anything else is plain escaped text.
+  function sourceDisplayHtml(source) {
+    const s = String(source || "").trim();
+    if (/^https?:\/\/\S+$/i.test(s)) {
+      return `<a href="${esc(s)}" target="_blank" rel="noopener noreferrer">${esc(s)}</a>`;
+    }
+    return esc(s);
+  }
+
   // Format a scaled amount nicely (¼, ⅓, ½, etc. where clean)
   function fmtAmount(n) {
     if (n == null) return "";
@@ -1661,7 +1672,7 @@
         ).join("")}
       </div>`;
     const sourceLine = it.source || ownerNote
-      ? `<p class="detail-meta">${it.source ? `Source: ${esc(it.source)}` : ""}${ownerNote}</p>`
+      ? `<p class="detail-meta">${it.source ? `Source: ${sourceDisplayHtml(it.source)}` : ""}${ownerNote}</p>`
       : "";
     return `
     <div class="item-detail">
@@ -3030,6 +3041,12 @@
     closeAiImport();
     openRecipeForm(null);
     fillRecipeFormFromExtraction(data.recipe);
+    // Preserve provenance: if the extraction didn't capture a source, carry the
+    // pasted link onto the visible Source field so it saves with the recipe and
+    // stays a one-tap route back to the original video/blog.
+    if (payload.type === "url" && payload.url && !rfSource.value.trim()) {
+      rfSource.value = payload.url;
+    }
     // The server reports which tier ran: "structured" = the site's own
     // schema.org recipe data, read directly (no AI call, doesn't count
     // against the daily cap); anything else went through the model.
