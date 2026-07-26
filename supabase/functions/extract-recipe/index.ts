@@ -676,8 +676,10 @@ function isValidRecipe(r: any): boolean {
 }
 
 // One Groq (OpenAI-compatible) structured-output call with strict JSON schema.
-// Retries once on a 429/5xx or network error, then gives up. Returns
-// { recipe } or { error } — the caller validates and decides whether to escalate.
+// A 429 (rate limit) escalates to Claude IMMEDIATELY — the free-tier limit won't
+// clear in the time a retry takes, so retrying just wastes a round-trip on the
+// exact rapid-fire case where speed matters. Only a 5xx or network/timeout blip
+// gets one retry. Returns { recipe } or { error }; the caller decides to escalate.
 // deno-lint-ignore no-explicit-any
 async function runGroq(userText: string): Promise<{ recipe?: any; error?: string }> {
   if (!GROQ_API_KEY) return { error: "groq disabled" };
@@ -699,9 +701,13 @@ async function runGroq(userText: string): Promise<{ recipe?: any; error?: string
         body: payload,
         signal: AbortSignal.timeout(15_000)
       });
-      if (res.status === 429 || res.status >= 500) {   // transient — retry once
+      if (res.status === 429) {   // rate-limited — escalate now, don't retry
+        console.error("Groq rate-limited (429), escalating to Claude");
+        return { error: "groq 429" };
+      }
+      if (res.status >= 500) {   // server blip — retry once
         if (attempt === 0) continue;
-        console.error("Groq transient error:", res.status);
+        console.error("Groq server error:", res.status);
         return { error: `groq ${res.status}` };
       }
       if (!res.ok) { console.error("Groq error:", res.status, await res.text()); return { error: `groq ${res.status}` }; }
