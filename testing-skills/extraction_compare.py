@@ -94,7 +94,10 @@ for it in corpus:
     c = call(it, "claude")
     time.sleep(2)
     g = call(it, "groq")
-    time.sleep(9)  # pace Groq under the free-tier 8000 tok/min
+    # Pace Groq >60s apart: gpt-oss-20b reserves the full max_tokens (4096)
+    # against the free-tier 8000 tokens/min, so only ~one call fits per rolling
+    # minute. Tighter spacing 429s (which in prod would just escalate to Claude).
+    time.sleep(62)
     (OUT / f"{lbl}.claude.json").write_text(json.dumps(c, indent=2))
     (OUT / f"{lbl}.groq.json").write_text(json.dumps(g, indent=2))
 
