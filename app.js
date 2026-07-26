@@ -370,6 +370,32 @@
     slice: "slice", slices: "slice"
   };
 
+  // Canonical SHORT display form for any unit spelling — so a recipe saved with
+  // a verbose unit ("fluid ounces", "milliliters", "tablespoons") always renders
+  // as its compact abbreviation ("fl oz", "ml", "tbsp") and never overruns the
+  // ingredient line. Keys are punctuation-free + lowercased (see displayUnit).
+  // Units not in this map (custom ones like "dash", "sprig", "splash") pass
+  // through untouched, preserving their original text and case.
+  const UNIT_ABBREV = {
+    gram: "g", grams: "g", g: "g",
+    kilogram: "kg", kilograms: "kg", kg: "kg",
+    ounce: "oz", ounces: "oz", oz: "oz",
+    pound: "lb", pounds: "lb", lb: "lb", lbs: "lb",
+    "fluid ounce": "fl oz", "fluid ounces": "fl oz", "fluid oz": "fl oz", "fl oz": "fl oz", floz: "fl oz",
+    milliliter: "ml", milliliters: "ml", millilitre: "ml", millilitres: "ml", ml: "ml",
+    liter: "l", liters: "l", litre: "l", litres: "l", l: "l",
+    teaspoon: "tsp", teaspoons: "tsp", tsp: "tsp",
+    tablespoon: "tbsp", tablespoons: "tbsp", tbsp: "tbsp"
+  };
+  // Abbreviate a unit for display/storage: drop periods, collapse spacing, and
+  // map known long spellings to their short form. Unknown units return trimmed
+  // and otherwise unchanged.
+  function displayUnit(unit) {
+    if (!unit) return unit;
+    const key = String(unit).trim().toLowerCase().replace(/\./g, "").replace(/\s+/g, " ");
+    return UNIT_ABBREV[key] || String(unit).trim();
+  }
+
   // Convert (amount, unit) to a canonical form for combining across recipes:
   // weights -> grams, volumes -> milliliters, everything else is just
   // spelling-normalized (e.g. "cloves" -> "clove").
@@ -421,7 +447,7 @@
   // counts) and blank "to taste" amounts pass through unchanged — there's no
   // sensible metric form of "2 cloves garlic".
   function convertForDisplay(amount, unit, system) {
-    if (system === "original" || amount == null || !unit) return { amount, unit };
+    if (system === "original" || amount == null || !unit) return { amount, unit: displayUnit(unit) };
     const u = unit.trim().toLowerCase();
     const gramsPer = WEIGHT_TO_G[u];
     if (gramsPer != null) {
@@ -442,7 +468,7 @@
       if (ml / ML_PER_TBSP >= 1) return { amount: ml / ML_PER_TBSP, unit: "tbsp" };
       return { amount: ml / ML_PER_TSP, unit: "tsp" };
     }
-    return { amount, unit }; // not a convertible unit
+    return { amount, unit: displayUnit(unit) }; // not a convertible unit (still abbreviated)
   }
 
   // Always-on-hand items that don't belong on a shopping list. One precompiled
@@ -1966,7 +1992,7 @@
           <li class="g-category">${esc(sec.category)}</li>
           ${sec.items.map((it) => {
             const checked = checkedGroceryItems.has(it.key);
-            const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + it.unit : "");
+            const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + displayUnit(it.unit) : "");
             return `<li class="${checked ? "is-checked" : ""}">
               <label class="g-item">
                 <input type="checkbox" class="g-item-check" data-key="${esc(it.key)}" ${checked ? "checked" : ""}>
@@ -2040,7 +2066,7 @@
     groceryByCategory(remaining).forEach((sec) => {
       out += `\u2014 ${sec.category.toUpperCase()} \u2014\n`;
       sec.items.forEach((it) => {
-        const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + it.unit : "") + " ";
+        const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + displayUnit(it.unit) : "") + " ";
         out += `- ${amtStr}${it.item}\n`;
       });
       out += `\n`;
@@ -2683,7 +2709,9 @@
         const amount = row.querySelector(".rf-ing-amount").value;
         const unit = row.querySelector(".rf-ing-unit").value.trim();
         const itemName = row.querySelector(".rf-ing-item").value.trim();
-        if (itemName) ingredients.push({ amount: amount === "" ? null : Number(amount), unit: unit || null, item: itemName, group: ingGroup });
+        // Store the short unit form ("fluid ounces" -> "fl oz") so it's clean at
+        // the source going forward; custom units pass through unchanged.
+        if (itemName) ingredients.push({ amount: amount === "" ? null : Number(amount), unit: unit ? displayUnit(unit) : null, item: itemName, group: ingGroup });
       }
     });
 
@@ -4205,7 +4233,7 @@
     cookStepIngredients.hidden = !matches.length;
     if (!matches.length) return;
     cookStepIngredients.innerHTML = matches.map((ing) => {
-      const amtStr = ing.scaled == null ? "" : fmtAmount(ing.scaled) + (ing.unit ? " " + ing.unit : "");
+      const amtStr = ing.scaled == null ? "" : fmtAmount(ing.scaled) + (ing.unit ? " " + displayUnit(ing.unit) : "");
       return `<span class="cook-step-ing">${esc([amtStr, displayGroceryName(ing.item)].filter(Boolean).join(" "))}</span>`;
     }).join("");
   }

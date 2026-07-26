@@ -48,7 +48,11 @@ from anywhere in the repo (it walks up to find the root); it serves a throwaway
 `test_generator.html` on an ephemeral port, runs headless Chrome, prints
 per-assertion pass/fail, and **deletes the fixture** on exit (`--keep` to inspect,
 `--keep` leaves it). It currently covers the "Clear all" + "From your bar"
-pick-row flow. It's the **template** for booting the full app headless — the
+pick-row flow. A sibling, `testing-skills/unit_display_smoke_test.py`, uses the
+same scaffold to boot a recipe stored in verbose units ("fluid ounces",
+"Milliliters", "Tablespoons") and asserts the rendered amounts abbreviate to
+`fl oz` / `ml` / `tbsp` across Original/US/Metric views (custom units like
+"dash" pass through). It's the **template** for booting the full app headless — the
 Supabase stub (a chainable/thenable Proxy query builder + an `onAuthStateChange`
 that fires `INITIAL_SESSION`) is the reusable part; copy it to smoke-test other
 panels without stubs living only in the scratchpad.
