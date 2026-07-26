@@ -42,6 +42,23 @@ const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
+// ---- Cheap-LLM tier (Groq) --------------------------------------------------
+// Optional open-model tier for the mechanical text->JSON extraction paths (text
+// and URL), behind a validate-and-escalate wrapper: try Groq first, and if its
+// output is missing or fails schema validation, fall back to Claude. Image
+// (vision) extraction and every other AI function stay on Claude. If
+// GROQ_API_KEY is unset the tier is simply disabled and everything routes to
+// Claude exactly as before — so deploying this code is a no-op until the secret
+// is added. Groq is OpenAI-compatible with strict JSON-schema constrained
+// decoding, which keeps an 8B model's structured output reliable.
+const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
+const GROQ = { model: "llama-3.1-8b-instant", url: "https://api.groq.com/openai/v1/chat/completions" };
+// When set (temporarily, for the old-vs-new equivalence comparison), a request
+// may pin a provider via body.force_provider = "claude" | "groq", which bypasses
+// escalation AND the daily cap and returns that provider's raw output. Leave it
+// unset in normal production so this stays out of the user-facing path.
+const ALLOW_PROVIDER_OVERRIDE = !!Deno.env.get("ALLOW_PROVIDER_OVERRIDE");
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -106,6 +123,29 @@ const RECIPE_SCHEMA = {
   },
   required: ["name", "subtitle", "source", "section", "tags", "base_servings", "servings_label", "ingredients", "method", "notes"]
 };
+
+// Groq's strict json_schema mode (OpenAI-compatible) requires every object to set
+// additionalProperties:false and list all properties as required, and it ignores
+// validation keywords like maxItems — so derive a strict-safe copy of
+// RECIPE_SCHEMA rather than hand-maintaining a second schema. If Groq ever
+// rejects a keyword, extend the skip list here; a rejected schema just makes the
+// wrapper escalate to Claude, so it fails safe either way.
+// deno-lint-ignore no-explicit-any
+function strictify(node: any): any {
+  if (Array.isArray(node)) return node.map(strictify);
+  if (node && typeof node === "object") {
+    // deno-lint-ignore no-explicit-any
+    const out: any = {};
+    for (const [k, v] of Object.entries(node)) {
+      if (k === "maxItems" || k === "minItems") continue; // unsupported in strict mode
+      out[k] = strictify(v);
+    }
+    if (out.type === "object" && out.properties) out.additionalProperties = false;
+    return out;
+  }
+  return node;
+}
+const RECIPE_SCHEMA_STRICT = strictify(RECIPE_SCHEMA);
 
 const SYSTEM_PROMPT = `You extract recipes into a structured format by calling the save_recipe tool. The source may be a clean printed recipe, a sloppy handwritten card, a screenshot of a text message, or a casual narrative. Your goal is always a complete, cookable recipe.
 
@@ -603,6 +643,123 @@ async function fetchTranscriptFromUrl(baseUrl: string): Promise<string> {
   }
 }
 
+const TAG_SET = new Set(ALL_TAGS);
+
+// Shape check mirroring the RECIPE_SCHEMA contract — the escalation trigger for
+// the Groq tier. Kept dependency-free (no Ajv) to match the repo. A miss means
+// fall back to Claude. Intentionally lenient on optional fields; strict on the
+// things that make a recipe cookable and on tag-taxonomy validity.
+// deno-lint-ignore no-explicit-any
+function isValidRecipe(r: any): boolean {
+  if (!r || typeof r !== "object") return false;
+  if (typeof r.name !== "string" || !r.name.trim()) return false;
+  if (r.section !== "kitchen" && r.section !== "bar") return false;
+  if (!Array.isArray(r.ingredients) || r.ingredients.length === 0) return false;
+  for (const ing of r.ingredients) {
+    if (!ing || typeof ing !== "object") return false;
+    if (typeof ing.item !== "string" || !ing.item.trim()) return false;
+    if (!("amount" in ing) || !("unit" in ing)) return false;
+  }
+  if (!Array.isArray(r.method)) return false;
+  if (Array.isArray(r.tags) && !r.tags.every((t: unknown) => typeof t === "string" && TAG_SET.has(t as string))) return false;
+  return true;
+}
+
+// One Groq (OpenAI-compatible) structured-output call with strict JSON schema.
+// Retries once on a 429/5xx or network error, then gives up. Returns
+// { recipe } or { error } — the caller validates and decides whether to escalate.
+// deno-lint-ignore no-explicit-any
+async function runGroq(userText: string): Promise<{ recipe?: any; error?: string }> {
+  if (!GROQ_API_KEY) return { error: "groq disabled" };
+  const payload = JSON.stringify({
+    model: GROQ.model,
+    max_tokens: 8192,
+    temperature: 0.2,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userText }
+    ],
+    response_format: { type: "json_schema", json_schema: { name: "recipe", strict: true, schema: RECIPE_SCHEMA_STRICT } }
+  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(GROQ.url, {
+        method: "POST",
+        headers: { "content-type": "application/json", "authorization": `Bearer ${GROQ_API_KEY}` },
+        body: payload,
+        signal: AbortSignal.timeout(15_000)
+      });
+      if (res.status === 429 || res.status >= 500) {   // transient — retry once
+        if (attempt === 0) continue;
+        console.error("Groq transient error:", res.status);
+        return { error: `groq ${res.status}` };
+      }
+      if (!res.ok) { console.error("Groq error:", res.status, await res.text()); return { error: `groq ${res.status}` }; }
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (!content) return { error: "groq empty" };
+      return { recipe: JSON.parse(content) };
+    } catch (e) {
+      if (attempt === 0) continue;   // timeout / network — retry once
+      console.error("Groq call failed:", e);
+      return { error: "groq exception" };
+    }
+  }
+  return { error: "groq failed" };
+}
+
+// The Claude extraction call, factored out of the handler so it serves both the
+// normal escalation target and the forced-provider comparison path. Returns
+// { recipe } or { error } (friendly, already input-specific via noRecipeMessage).
+// deno-lint-ignore no-explicit-any
+async function runClaude(model: string, userContent: unknown, noRecipeMessage: string): Promise<{ recipe?: any; error?: string }> {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": ANTHROPIC_API_KEY!,
+      "anthropic-version": ANTHROPIC_VERSION
+    },
+    body: JSON.stringify({
+      // Billed on actual output, so a generous ceiling costs nothing but headroom.
+      model,
+      max_tokens: 8192,
+      system: SYSTEM_PROMPT,
+      tools: [{ name: "save_recipe", description: "Save the extracted recipe.", input_schema: RECIPE_SCHEMA }],
+      tool_choice: { type: "tool", name: "save_recipe" },
+      messages: [{ role: "user", content: userContent }]
+    })
+  });
+  if (!res.ok) {
+    console.error("Anthropic API error:", res.status, await res.text());
+    return { error: res.status === 429 ? "Rate limit or usage limit reached — try again later." : "AI extraction failed. Please try again." };
+  }
+  const data = await res.json();
+  if (data.stop_reason === "max_tokens") {
+    console.error("extract-recipe: response truncated at max_tokens");
+    return { error: "That recipe was too long to read in one go — try fewer photos or split it." };
+  }
+  const toolBlock = data.content?.find((c: { type: string }) => c.type === "tool_use");
+  const recipe = toolBlock?.input;
+  if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
+    return { error: noRecipeMessage };
+  }
+  return { recipe };
+}
+
+// Fire-and-forget observability: one row per operation via the log_ai_call RPC.
+// Never blocks or throws — logging must not break an extraction.
+// deno-lint-ignore no-explicit-any
+async function logAiCall(client: any, task: string, model: string, valid: boolean, latencyMs: number, escalated: boolean) {
+  try {
+    await client.rpc("log_ai_call", {
+      p_task: task, p_model: model, p_valid: valid, p_latency_ms: latencyMs, p_escalated: escalated
+    });
+  } catch (e) {
+    console.error("log_ai_call failed:", e);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -821,61 +978,66 @@ Deno.serve(async (req) => {
       return json({ error: "Invalid request." });
     }
 
+    // ---- Provider routing setup ----
+    const task = `extract_${body.type}`;
+    const started = Date.now();
+    // Comparison affordance (admin-gated): pin one provider, skip escalation, and
+    // skip the daily cap so the old-vs-new equivalence test can't exhaust a
+    // user's quota. Ignored entirely unless ALLOW_PROVIDER_OVERRIDE is set.
+    const forced = ALLOW_PROVIDER_OVERRIDE && (body.force_provider === "claude" || body.force_provider === "groq")
+      ? body.force_provider as "claude" | "groq" : null;
+    // Groq handles only the non-image text/URL paths, and only when enabled.
+    const groqEligible = body.type !== "image" && !!GROQ_API_KEY;
+    const userText = (userContent as Array<{ text?: string }>).map((c) => c.text).filter(Boolean).join("\n");
+
     // Enforce the per-user daily cap right before the paid call, so requests
     // that fail validation above never consume quota. Fails open (logs and
-    // proceeds) if the SQL migration for this hasn't been run yet.
-    const { data: usageResult, error: usageError } = await supabaseClient
-      .rpc("increment_extraction_usage", { daily_limit: DAILY_EXTRACTION_LIMIT });
-    if (!usageError && usageResult === -1) {
-      return json({ error: `You’ve used today’s ${DAILY_EXTRACTION_LIMIT} AI recipe extractions — it resets at midnight UTC. Try again tomorrow, or add this one manually.` });
-    }
-    if (usageError) console.error("extraction_usage check failed:", usageError);
-
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": ANTHROPIC_VERSION
-      },
-      body: JSON.stringify({
-        // Billed on actual output, so a generous ceiling costs nothing but
-        // headroom — it stops a long multi-page recipe from truncating the
-        // tool JSON mid-generation (which would arrive as an unparseable input).
-        model: pickModel(body.type),
-        max_tokens: 8192,
-        system: SYSTEM_PROMPT,
-        tools: [{ name: "save_recipe", description: "Save the extracted recipe.", input_schema: RECIPE_SCHEMA }],
-        tool_choice: { type: "tool", name: "save_recipe" },
-        messages: [{ role: "user", content: userContent }]
-      })
-    });
-
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      console.error("Anthropic API error:", anthropicRes.status, errText);
-      const friendly = anthropicRes.status === 429
-        ? "Rate limit or usage limit reached — try again later."
-        : "AI extraction failed. Please try again.";
-      return json({ error: friendly });
+    // proceeds) if the SQL migration for this hasn't been run yet. Skipped in
+    // forced comparison mode (admin-only, not user traffic).
+    if (!forced) {
+      const { data: usageResult, error: usageError } = await supabaseClient
+        .rpc("increment_extraction_usage", { daily_limit: DAILY_EXTRACTION_LIMIT });
+      if (!usageError && usageResult === -1) {
+        return json({ error: `You’ve used today’s ${DAILY_EXTRACTION_LIMIT} AI recipe extractions — it resets at midnight UTC. Try again tomorrow, or add this one manually.` });
+      }
+      if (usageError) console.error("extraction_usage check failed:", usageError);
     }
 
-    const anthropicData = await anthropicRes.json();
-    const toolBlock = anthropicData.content?.find((c: { type: string }) => c.type === "tool_use");
-    const recipe = toolBlock?.input;
-
-    // If generation hit the token ceiling the tool input is cut off — better to
-    // ask for a retry than hand the form a half-parsed recipe.
-    if (anthropicData.stop_reason === "max_tokens") {
-      console.error("extract-recipe: response truncated at max_tokens");
-      return json({ error: "That recipe was too long to read in one go — try fewer photos or split it." });
+    // Comparison mode: return the pinned provider's RAW output (no escalation),
+    // with a `valid` flag so the harness can see where Groq would have escalated.
+    if (forced === "groq") {
+      if (!groqEligible) return json({ error: "Groq tier not available for this input." });
+      const g = await runGroq(userText);
+      const valid = !!g.recipe && isValidRecipe(g.recipe);
+      await logAiCall(supabaseClient, task, GROQ.model, valid, Date.now() - started, false);
+      if (!g.recipe) return json({ error: g.error || noRecipeMessage });
+      return json({ recipe: g.recipe, extracted_via: "groq", valid });
+    }
+    if (forced === "claude") {
+      const c = await runClaude(pickModel(body.type), userContent, noRecipeMessage);
+      const valid = !!c.recipe && isValidRecipe(c.recipe);
+      await logAiCall(supabaseClient, task, pickModel(body.type), valid, Date.now() - started, false);
+      if (c.error) return json({ error: c.error });
+      return json({ recipe: c.recipe, extracted_via: "ai", valid });
     }
 
-    if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
-      return json({ error: noRecipeMessage });
+    // Normal path: cheap Groq tier first (text/URL only) → validate → escalate to
+    // Claude on any miss (error, timeout, or schema-invalid output).
+    if (groqEligible) {
+      const g = await runGroq(userText);
+      if (g.recipe && isValidRecipe(g.recipe)) {
+        await logAiCall(supabaseClient, task, GROQ.model, true, Date.now() - started, false);
+        return json({ recipe: g.recipe, extracted_via: "groq" });
+      }
+      console.error(`extract-recipe: groq miss (${g.error || "invalid output"}), escalating to Claude`);
     }
-
-    return json({ recipe, extracted_via: "ai" });
+    const c = await runClaude(pickModel(body.type), userContent, noRecipeMessage);
+    if (c.error) {
+      await logAiCall(supabaseClient, task, pickModel(body.type), false, Date.now() - started, groqEligible);
+      return json({ error: c.error });
+    }
+    await logAiCall(supabaseClient, task, pickModel(body.type), isValidRecipe(c.recipe), Date.now() - started, groqEligible);
+    return json({ recipe: c.recipe, extracted_via: "ai" });
   } catch (err) {
     console.error("extract-recipe error:", err);
     return json({ error: "Something went wrong. Please try again." });
