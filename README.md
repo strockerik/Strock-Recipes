@@ -843,10 +843,27 @@ alter table public.kroger_matches enable row level security;
 create policy "owners manage their kroger matches" on public.kroger_matches
   for all to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Stage B: per-user Kroger OAuth tokens (one row per user). Owner-only RLS; the
+-- frontend never reads this — only the kroger function does, via the user's JWT.
+create table public.kroger_tokens (
+  user_id uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  access_token text not null,
+  refresh_token text not null,
+  expires_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.kroger_tokens enable row level security;
+create policy "owners manage their kroger tokens" on public.kroger_tokens
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
 ```
 
 Until this runs (and the secrets are set), the feature fails open — the button
-just reports it isn't configured yet.
+just reports it isn't configured yet. **Stage B** additionally needs
+`KROGER_REDIRECT_URI` set and registered as the app's redirect URI (above), plus
+the `kroger_tokens` table; without them the "Connect King Soopers" step reports
+it isn't set up.
 
 ## Edge Function deployment (AI)
 

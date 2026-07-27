@@ -1938,6 +1938,9 @@ button:focus-visible, input:focus-visible {
 .kroger-row-item { font-weight: 600; font-size: 0.9rem; }
 .kroger-row-match { font-size: 0.8rem; color: var(--faint); }
 .kroger-row .ghost-btn { flex: 0 0 auto; }
+.kroger-row-tag { flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.7rem;
+  color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+.kroger-review-actions { margin-top: 14px; }
 .diet-tag {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink);

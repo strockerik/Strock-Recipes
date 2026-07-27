@@ -1075,6 +1075,10 @@
         if (userChanged) loadUserLocalState();
         if (userChanged && event !== "PASSWORD_RECOVERY") setTimeout(maybeShowIntro, 0);
         if (userChanged || event !== "TOKEN_REFRESHED") setTimeout(loadData, 0);
+        // Returning from a Kroger "Connect King Soopers" login (?code=…&state=…).
+        if (/[?&]code=/.test(window.location.search) && /[?&]state=/.test(window.location.search)) {
+          setTimeout(handleKrogerOAuthReturn, 0);
+        }
       } else if (wasSignedIn) {
         loadedUserId = null;
         setTimeout(clearData, 0);
@@ -4746,16 +4750,26 @@
   $("#close-kroger").addEventListener("click", closeKrogerPanel);
   krogerPanel.addEventListener("click", (e) => { if (e.target === krogerPanel) closeKrogerPanel(); });
 
-  // Stage A: match the list and show a review with per-item King Soopers search
-  // deep-links to add in the app. Stage B replaces these with a one-tap cart push.
+  // Review sheet: matched items get pushed to the cart in one tap (Stage B);
+  // unmatched items keep a King Soopers search deep-link (no UPC to add).
   const krogerSearchLink = (item) => `https://www.kingsoopers.com/search?query=${encodeURIComponent(item)}`;
+  let krogerLastResults = []; // last search results, source for the cart push
+  const krogerSendCartBtn = $("#kroger-send-cart");
+  const krogerOpenStore = $("#kroger-open-store");
+  function krogerCartItems() {
+    return krogerLastResults
+      .filter((r) => r.product && r.product.upc)
+      .map((r) => ({ upc: r.product.upc, quantity: 1 }));
+  }
   function renderKrogerReview(results) {
+    krogerLastResults = results;
     const matched = results.filter((r) => r.product).length;
+    const sendable = krogerCartItems().length;
     krogerReviewSummary.hidden = false;
-    krogerReviewSummary.textContent = `Matched ${matched} of ${results.length} — add them in the King Soopers app to fill your cart, then review and check out there.`;
+    krogerReviewSummary.textContent = `Matched ${matched} of ${results.length}.` +
+      (sendable ? ` Send the ${sendable} matched item${sendable === 1 ? "" : "s"} to your King Soopers cart, then check out in the app.` : "");
     krogerReviewList.innerHTML = results.map((r) => {
       const p = r.product;
-      const link = esc(krogerSearchLink(r.item));
       if (p) {
         const price = typeof p.price === "number" ? `$${p.price.toFixed(2)}` : "";
         const meta = [p.size, price, p.aisle ? `Aisle ${p.aisle}` : ""].filter(Boolean).join(" · ");
@@ -4764,7 +4778,7 @@
             <span class="kroger-row-item">${esc(r.item)}</span>
             <span class="kroger-row-match">${esc(p.description || "")}${meta ? ` — ${esc(meta)}` : ""}</span>
           </div>
-          <a class="ghost-btn small" href="${link}" target="_blank" rel="noopener noreferrer">Add in app</a>
+          <span class="kroger-row-tag">✓ in cart</span>
         </div>`;
       }
       return `<div class="kroger-row is-unmatched">
@@ -4772,10 +4786,97 @@
           <span class="kroger-row-item">${esc(r.item)}</span>
           <span class="kroger-row-match">No match — search the store</span>
         </div>
-        <a class="ghost-btn small" href="${link}" target="_blank" rel="noopener noreferrer">Search</a>
+        <a class="ghost-btn small" href="${esc(krogerSearchLink(r.item))}" target="_blank" rel="noopener noreferrer">Search</a>
       </div>`;
     }).join("");
+    krogerSendCartBtn.hidden = sendable === 0;
+    krogerSendCartBtn.textContent = `🛒 Send ${sendable} item${sendable === 1 ? "" : "s"} to cart`;
+    krogerSendCartBtn.disabled = false;
+    krogerOpenStore.hidden = true;
   }
+
+  // ---- Stage B: per-user OAuth ("Connect King Soopers") + one-tap cart push ----
+  // PKCE: a high-entropy verifier stays in sessionStorage; its SHA-256 challenge
+  // goes to Kroger. The verifier + a CSRF state + the pending cart survive the
+  // redirect so we can finish the exchange and auto-send after the user returns.
+  const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  function randToken(n = 48) {
+    const a = new Uint8Array(n); crypto.getRandomValues(a);
+    return b64url(a.buffer);
+  }
+  async function pkceChallenge(verifier) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+    return b64url(digest);
+  }
+  async function startKrogerConnect(pendingItems) {
+    const verifier = randToken(48);
+    const state = randToken(16);
+    try {
+      sessionStorage.setItem("kr_verifier", verifier);
+      sessionStorage.setItem("kr_state", state);
+      sessionStorage.setItem("kr_pending", JSON.stringify(pendingItems || []));
+    } catch { /* private mode — connect can still proceed, just no auto-resume */ }
+    const challenge = await pkceChallenge(verifier);
+    const result = await supabaseClient.functions.invoke("kroger", {
+      body: { mode: "auth-url", code_challenge: challenge, state }
+    }).catch((error) => ({ error }));
+    const { data, error } = result;
+    if (error || data?.error || !data?.url) {
+      krogerReviewStatus.textContent = data?.error || "Couldn’t start the King Soopers login — try again.";
+      return;
+    }
+    window.location.assign(data.url); // hand off to Kroger's consent screen
+  }
+  // Runs on load when we come back with ?code=…&state=…: verify state, exchange
+  // the code for tokens, clean the URL, then resume any pending cart send.
+  async function handleKrogerOAuthReturn() {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    let verifier = null, savedState = null, pending = [];
+    try {
+      verifier = sessionStorage.getItem("kr_verifier");
+      savedState = sessionStorage.getItem("kr_state");
+      pending = JSON.parse(sessionStorage.getItem("kr_pending") || "[]");
+    } catch { /* ignore */ }
+    // Always strip the OAuth params from the URL regardless of outcome.
+    history.replaceState(null, "", window.location.pathname);
+    if (!code || !state || !verifier || state !== savedState) return; // not ours / stale
+    try { sessionStorage.removeItem("kr_verifier"); sessionStorage.removeItem("kr_state"); sessionStorage.removeItem("kr_pending"); } catch {}
+    const result = await supabaseClient.functions.invoke("kroger", {
+      body: { mode: "connect", code, code_verifier: verifier }
+    }).catch((error) => ({ error }));
+    const { data, error } = result;
+    if (error || data?.error) { toast(data?.error || "King Soopers connection failed — try again."); return; }
+    toast("King Soopers connected");
+    if (Array.isArray(pending) && pending.length) {
+      krogerPanel.hidden = false;
+      krogerReviewStatus.textContent = "Connected — sending your list…";
+      await sendKrogerCart(pending);
+    }
+  }
+  // PUT the matched items into the user's real cart. On "not_connected" it kicks
+  // off the OAuth flow, stashing these items to auto-send on return.
+  async function sendKrogerCart(items) {
+    if (!items || !items.length) { krogerReviewStatus.textContent = "No matched items to send."; return; }
+    krogerSendCartBtn.disabled = true;
+    krogerReviewStatus.textContent = "Sending to your King Soopers cart…";
+    const result = await supabaseClient.functions.invoke("kroger", {
+      body: { mode: "cart", items, modality: krogerPrefs.modality }
+    }).catch((error) => ({ error }));
+    const { data, error } = result;
+    if (data?.error === "not_connected") {
+      krogerReviewStatus.textContent = "Connect your King Soopers account to finish…";
+      await startKrogerConnect(items);
+      return;
+    }
+    if (error || data?.error) { krogerReviewStatus.textContent = data?.error || "Couldn’t add to your cart — try again."; krogerSendCartBtn.disabled = false; return; }
+    krogerSendCartBtn.hidden = true;
+    krogerOpenStore.hidden = false;
+    krogerReviewStatus.textContent = `✓ ${data.added || items.length} item${(data.added || items.length) === 1 ? "" : "s"} added to your King Soopers cart. Open the app to review and check out.`;
+  }
+  krogerSendCartBtn.addEventListener("click", () => sendKrogerCart(krogerCartItems()));
   $("#send-to-kingsoopers").addEventListener("click", async () => {
     if (!session) { toast("Sign in to send your list."); return; }
     const items = allGroceryItems().filter((it) => !checkedGroceryItems.has(it.key))

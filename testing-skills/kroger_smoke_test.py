@@ -35,6 +35,9 @@ window.supabase={createClient:function(){return{from:function(t){return Bld(t)},
    if(body.mode==="search"){var results=(body.items||[]).map(function(it){var no=/dragon/i.test(it.item);
      return {key:it.key,item:it.item,product:no?null:{productId:"p"+it.key,upc:"1",description:"Kroger "+it.item,price:4.99,size:"1 lb",aisle:"12"}};});
      return Promise.resolve({data:{results:results,matched:results.filter(function(r){return r.product}).length,total:results.length},error:null});}
+   if(body.mode==="cart")return Promise.resolve({data:window.__CARTRES||{ok:true,added:(body.items||[]).length},error:null});
+   if(body.mode==="auth-url")return Promise.resolve({data:{url:"https://api.kroger.com/authorize?stub=1"},error:null});
+   if(body.mode==="connect")return Promise.resolve({data:{ok:true},error:null});
   }
   return Promise.resolve({data:{},error:null})}}}}};
 </script></head><body><pre id="smoke-results" style="display:none"></pre>
@@ -65,7 +68,17 @@ async function run(){try{
  var rows=qa('#kroger-review-list .kroger-row');
  A("review lists both items (2 rows)", rows.length===2, "n="+rows.length);
  A("one item unmatched (dragonfruit)", qa('#kroger-review-list .kroger-row.is-unmatched').length===1, "");
- A("matched item has an Add-in-app link", !!document.querySelector('#kroger-review-list .kroger-row:not(.is-unmatched) a[href*="kingsoopers.com/search"]'), "");
+ A("matched row shows in-cart tag", qa('#kroger-review-list .kroger-row:not(.is-unmatched) .kroger-row-tag').length>=1, "");
+
+ // Stage B: send-to-cart button + happy path
+ var sb=document.querySelector("#kroger-send-cart");
+ A("send-to-cart button visible", !sb.hidden, "hidden="+sb.hidden);
+ A("send button labeled with matched count (1)", /Send 1 item/.test(sb.textContent), sb.textContent);
+ window.__CARTRES={ok:true,added:1};
+ click(sb); await delay(150);
+ A("cart success message shown", /added to your King Soopers cart/i.test(document.querySelector("#kroger-review-status").textContent), document.querySelector("#kroger-review-status").textContent);
+ A("open-store link shown after send", !document.querySelector("#kroger-open-store").hidden, "");
+ A("send button hidden after success", document.querySelector("#kroger-send-cart").hidden, "");
 }catch(e){A("no exception",false,String(e&&e.stack||e))}fin()}
 fetch("index.html").then(function(r){return r.text()}).then(function(t){
  var doc=new DOMParser().parseFromString(t,"text/html"),f=document.createDocumentFragment();

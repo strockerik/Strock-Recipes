@@ -10,18 +10,25 @@
 //       line to a store product (organic-preferred / cheapest / best), caching
 //       each pick per-user in `kroger_matches` so re-cooking a recipe re-resolves
 //       to the same product for free.
-// Stage B (later): mode "connect" (per-user OAuth code->token) and mode "cart"
-//   (PUT the confirmed items into the user's real cart). Not in this file yet.
+// Stage B (this file): the per-user OAuth half —
+//   - mode "auth-url": { code_challenge, state } -> the Kroger authorize URL the
+//       browser redirects to (client_id + redirect_uri live server-side).
+//   - mode "connect":  { code, code_verifier } -> exchange the returned code for
+//       access + refresh tokens (authorization_code + PKCE), store per-user in
+//       `kroger_tokens`.
+//   - mode "cart":     { items, modality } -> load the user's token (refresh if
+//       expired) and PUT the whole list into their real cart in one call.
 //
 // Mirrors the other functions: POST + forced JWT auth, always-200 json(), secrets
 // server-side only. Fail-safe: with no Kroger credentials set, every mode returns
 // a friendly "not configured" error, so deploying this is a no-op until the user
-// adds KROGER_CLIENT_ID / KROGER_CLIENT_SECRET.
+// adds KROGER_CLIENT_ID / KROGER_CLIENT_SECRET (+ KROGER_REDIRECT_URI for Stage B).
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const KROGER_CLIENT_ID = Deno.env.get("KROGER_CLIENT_ID");
 const KROGER_CLIENT_SECRET = Deno.env.get("KROGER_CLIENT_SECRET");
+const KROGER_REDIRECT_URI = Deno.env.get("KROGER_REDIRECT_URI"); // the deployed app URL (Stage B OAuth)
 const KROGER_BASE = "https://api.kroger.com/v1";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -132,6 +139,55 @@ function pickDefault(products: any[], pref: string): any | null {
   return shaped[0]; // "best" — Kroger's own top result
 }
 
+// ---- Stage B: per-user OAuth token helpers ----------------------------------
+// POST to Kroger's token endpoint with HTTP Basic client auth. Shared by the
+// authorization_code exchange (connect) and the refresh_token rotation (cart).
+async function tokenPost(params: Record<string, string>): Promise<any | null> {
+  try {
+    const res = await fetch(`${KROGER_BASE}/connect/oauth2/token`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "authorization": `Basic ${btoa(`${KROGER_CLIENT_ID}:${KROGER_CLIENT_SECRET}`)}`
+      },
+      body: new URLSearchParams(params).toString(),
+      signal: AbortSignal.timeout(15_000)
+    });
+    if (!res.ok) { console.error("Kroger token exchange error:", res.status, await res.text()); return null; }
+    return await res.json();
+  } catch (e) {
+    console.error("Kroger token exchange failed:", e);
+    return null;
+  }
+}
+
+// Load the caller's stored Kroger access token (RLS returns only their row),
+// refreshing it via the refresh_token when expired. Returns the access token, or
+// null when the user hasn't connected / the refresh failed (they must re-auth).
+// deno-lint-ignore no-explicit-any
+async function getUserAccessToken(client: any): Promise<string | null> {
+  const { data: rows } = await client
+    .from("kroger_tokens").select("access_token, refresh_token, expires_at").limit(1);
+  const row = Array.isArray(rows) && rows[0] ? rows[0] : null;
+  if (!row?.refresh_token) return null;
+  const notExpired = row.access_token && row.expires_at && Date.parse(row.expires_at) > Date.now() + 30_000;
+  if (notExpired) return row.access_token;
+  // Refresh.
+  const t = await tokenPost({ grant_type: "refresh_token", refresh_token: row.refresh_token });
+  if (!t?.access_token) return null;
+  const expiresAt = new Date(Date.now() + (Number(t.expires_in) || 1800) * 1000).toISOString();
+  try {
+    await client.from("kroger_tokens").upsert({
+      user_id: (await client.auth.getUser()).data.user.id,
+      access_token: t.access_token,
+      refresh_token: t.refresh_token || row.refresh_token, // Kroger may rotate the refresh token
+      expires_at: expiresAt,
+      updated_at: new Date().toISOString()
+    }, { onConflict: "user_id" });
+  } catch (e) { console.error("kroger_tokens refresh upsert failed:", e); }
+  return t.access_token;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -153,9 +209,76 @@ Deno.serve(async (req) => {
     if (userError || !userData?.user) return json({ error: "Please sign in first." });
 
     const body = await req.json();
-    const mode = body.mode === "search" ? "search" : body.mode === "stores" ? "stores" : null;
+    const mode = ["stores", "search", "auth-url", "connect", "cart"].includes(body.mode) ? body.mode : null;
     if (!mode) return json({ error: "Unsupported request." });
 
+    // ---- Stage B modes (per-user OAuth; no client-credentials token needed) ----
+
+    // mode "auth-url": build the Kroger login URL (client_id + redirect_uri are
+    // server-side); the browser does PKCE and passes us its code_challenge+state.
+    if (mode === "auth-url") {
+      if (!KROGER_REDIRECT_URI) return json({ error: "King Soopers login isn’t set up yet (missing redirect URI)." });
+      const codeChallenge = String(body.code_challenge || "");
+      const state = String(body.state || "");
+      if (!codeChallenge || !state) return json({ error: "Couldn’t start the King Soopers login." });
+      const url = `${KROGER_BASE}/connect/oauth2/authorize?` + new URLSearchParams({
+        response_type: "code",
+        client_id: KROGER_CLIENT_ID!,
+        redirect_uri: KROGER_REDIRECT_URI,
+        scope: "cart.basic:write profile.compact",
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+        state
+      }).toString();
+      return json({ url });
+    }
+
+    // mode "connect": exchange the returned code for tokens and store them.
+    if (mode === "connect") {
+      if (!KROGER_REDIRECT_URI) return json({ error: "King Soopers login isn’t set up yet (missing redirect URI)." });
+      const code = String(body.code || "");
+      const codeVerifier = String(body.code_verifier || "");
+      if (!code || !codeVerifier) return json({ error: "Couldn’t finish the King Soopers login — try again." });
+      const t = await tokenPost({ grant_type: "authorization_code", code, redirect_uri: KROGER_REDIRECT_URI, code_verifier: codeVerifier });
+      if (!t?.access_token || !t?.refresh_token) return json({ error: "King Soopers login failed — please try connecting again." });
+      const expiresAt = new Date(Date.now() + (Number(t.expires_in) || 1800) * 1000).toISOString();
+      const { error: upErr } = await supabaseClient.from("kroger_tokens").upsert({
+        user_id: userData.user.id,
+        access_token: t.access_token,
+        refresh_token: t.refresh_token,
+        expires_at: expiresAt,
+        updated_at: new Date().toISOString()
+      }, { onConflict: "user_id" });
+      if (upErr) { console.error("kroger_tokens store failed:", upErr); return json({ error: "Connected, but couldn’t save the link — try again." }); }
+      return json({ ok: true });
+    }
+
+    // mode "cart": push the whole matched list into the user's real cart at once.
+    if (mode === "cart") {
+      const accessToken = await getUserAccessToken(supabaseClient);
+      if (!accessToken) return json({ error: "not_connected" });
+      const modality = body.modality === "DELIVERY" ? "DELIVERY" : "PICKUP";
+      const items = (Array.isArray(body.items) ? body.items : [])
+        .map((i: any) => ({ upc: String(i?.upc || "").trim(), quantity: Math.max(1, Math.min(Number(i?.quantity) || 1, 99)), modality }))
+        .filter((i: any) => i.upc);
+      if (!items.length) return json({ error: "No matched items to send." });
+      try {
+        const res = await fetch(`${KROGER_BASE}/cart/add`, {
+          method: "PUT",
+          headers: { "authorization": `Bearer ${accessToken}`, "content-type": "application/json" },
+          body: JSON.stringify({ items }),
+          signal: AbortSignal.timeout(20_000)
+        });
+        if (res.status === 401) return json({ error: "not_connected" }); // token revoked upstream
+        if (!res.ok) { console.error("Kroger cart error:", res.status, await res.text()); return json({ error: "Couldn’t add to your King Soopers cart — try again." }); }
+        return json({ ok: true, added: items.length });
+      } catch (e) {
+        console.error("Kroger cart failed:", e);
+        return json({ error: "Couldn’t reach King Soopers — try again." });
+      }
+    }
+
+    // ---- Stage A modes (client-credentials token) ----
     let token = await clientToken();
     if (!token) return json({ error: "Couldn’t reach King Soopers right now — try again in a moment." });
 
