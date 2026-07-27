@@ -160,6 +160,7 @@
         <button id="share-grocery" class="solid-btn">Send to phone / Keep</button>
         <button id="copy-grocery" class="ghost-btn">Copy list</button>
         <button id="download-grocery" class="ghost-btn">Download .txt</button>
+        <button id="send-to-kingsoopers" class="ghost-btn">🛒 Send to King Soopers</button>
       </div>
       <p class="keep-hint">On your phone, <strong>Send to phone / Keep</strong> opens the share sheet — pick
         Google Keep to drop the list straight into a note. In Keep, tap <strong>⋮ → Convert to checklist</strong>
@@ -220,6 +221,29 @@
           </label>
         </div>
 
+        <div class="kroger-prefs">
+          <p class="diet-prefs-h">🛒 King Soopers ordering</p>
+          <p class="diet-prefs-sub">Set your store and how to pick products, then use <strong>Send to King Soopers</strong> on the grocery list.</p>
+          <label class="diet-field" for="kroger-zip">
+            <span>Your store</span>
+            <div class="kroger-store-row">
+              <input id="kroger-zip" class="search" type="text" inputmode="numeric" maxlength="5" placeholder="ZIP code (e.g. 80202)" aria-label="ZIP code">
+              <button type="button" id="kroger-find-store" class="ghost-btn small">Find store</button>
+            </div>
+            <p id="kroger-store-current" class="kroger-store-current"></p>
+            <div id="kroger-store-results" class="kroger-store-results"></div>
+          </label>
+          <label class="diet-field">
+            <span>When there are options, prefer</span>
+            <div id="kroger-pref" class="diet-chips" role="group" aria-label="Product preference"></div>
+          </label>
+          <label class="diet-field">
+            <span>Fulfillment</span>
+            <div id="kroger-modality" class="diet-chips" role="group" aria-label="Pickup or delivery"></div>
+          </label>
+          <p id="kroger-prefs-status" class="auth-status" aria-live="polite"></p>
+        </div>
+
         <div class="grocery-actions">
           <button id="account-change-pw" class="ghost-btn">Change password</button>
           <button id="account-backup" class="ghost-btn">⬇ Back up recipes</button>
@@ -244,6 +268,23 @@
         <button type="button" id="account-reset-cancel" class="auth-link">Cancel</button>
         <p id="account-reset-status" class="auth-status" aria-live="polite"></p>
       </form>
+    </div>
+  </div>
+
+  <!-- King Soopers "review your matches" sheet -->
+  <div id="kroger-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Send to King Soopers" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title">🛒 Send to King Soopers</h2>
+        <button id="close-kroger" class="ghost-btn small" aria-label="Close">Close</button>
+      </div>
+      <div id="kroger-loading" class="ai-import-loading" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Matching your list to King Soopers…</p>
+      </div>
+      <p id="kroger-review-summary" class="g-progress" hidden></p>
+      <div id="kroger-review-list" class="kroger-review-list"></div>
+      <p id="kroger-review-status" class="auth-status" aria-live="polite"></p>
     </div>
   </div>
 

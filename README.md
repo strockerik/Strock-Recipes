@@ -795,9 +795,62 @@ select
 from public.ai_calls;
 ```
 
+## King Soopers ordering (Kroger)
+
+Turns the grocery list into a King Soopers order (King Soopers is a Kroger
+banner, same public API). The **🛒 Send to King Soopers** button on the grocery
+panel matches each still-needed item to a store product and (Stage B) pushes the
+whole list into the user's real Kroger cart to check out in the Kroger app.
+
+**Stage A (shipped): store setup + product matching.** No user login — the
+`kroger` Edge Function mints a client-credentials token server-side to look up
+stores by ZIP and match products. It's **fail-safe**: with no Kroger credentials
+set, the button returns a friendly "not set up yet" message, so deploying is a
+no-op until you enable it. **Stage B (later): OAuth login + cart push.**
+
+**Enable it** — register a free app at developer.kroger.com (Public tier,
+self-service) and set these Edge Function secrets (Edge Functions → Secrets):
+
+- `KROGER_CLIENT_ID`, `KROGER_CLIENT_SECRET` — from the Kroger app. Server-side
+  only, never in the frontend. Unset = the feature shows "not set up yet".
+- `KROGER_REDIRECT_URI` (Stage B, for OAuth) — the deployed app URL,
+  `https://strockerik.github.io/Strock-Recipes/`. Register this **same** URI in
+  the Kroger app's redirect list (the field is marked optional but the login
+  flow fails without it).
+
+**One-time SQL (Supabase SQL editor):**
+
+```sql
+-- Ordering preferences on the profile row (owner-only RLS already covers it).
+-- Shape: { locationId, storeName, zip, productPref: "organic"|"cheapest"|"best", modality: "PICKUP"|"DELIVERY" }
+alter table public.profiles
+  add column if not exists kroger_prefs jsonb not null default '{}'::jsonb;
+
+-- Per-ingredient product-match cache (re-order memory): cooking a recipe again
+-- re-resolves its items to the same product for free. One small row per distinct
+-- item ever matched. Owner-only, same pattern as inventory_items.
+create table public.kroger_matches (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  ingredient_key text not null,
+  product_id text,
+  upc text,
+  description text,
+  image_url text,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, ingredient_key)
+);
+alter table public.kroger_matches enable row level security;
+create policy "owners manage their kroger matches" on public.kroger_matches
+  for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+```
+
+Until this runs (and the secrets are set), the feature fails open — the button
+just reports it isn't configured yet.
+
 ## Edge Function deployment (AI)
 
-There are **four** Edge Functions, each deployed via the Supabase dashboard (Edge
+There are **five** Edge Functions, each deployed via the Supabase dashboard (Edge
 Functions → the in-browser editor), with the repo files as the source of truth —
 keep them in sync when editing:
 
@@ -813,8 +866,14 @@ keep them in sync when editing:
 - **`pair-drink`** — 🍷 Pair a drink (cocktail/wine/beer pairings for a kitchen
   recipe). Same deploy: create the function, paste in
   `supabase/functions/pair-drink/index.ts`, Deploy.
+- **`kroger`** — 🛒 Send to King Soopers (grocery list → store product matches;
+  Stage B adds cart push). Same deploy: paste in
+  `supabase/functions/kroger/index.ts`, Deploy. **Not an AI function** — it uses
+  the `KROGER_*` secrets (see "King Soopers ordering"), not `ANTHROPIC_API_KEY`,
+  and has no daily cap (Kroger's own rate limits apply).
 
-Requirements (apply to **all four** functions):
+Requirements (JWT/deploy rules apply to **all five** functions; the cap note
+applies only to the four AI functions):
 
 - Secret `ANTHROPIC_API_KEY` set under Edge Functions → Secrets (shared).
 - (Optional, `extract-recipe` only) `GROQ_API_KEY` to enable the cheap tier, and

@@ -33,6 +33,8 @@
   let seenPickHint = false; // dismissed the "check recipes to build a grocery list" hint
   let seenIntro = false; // dismissed the first-run Cook/Plan/Shop pointer card
   let planView = "dinners"; // meal-plan grid density: "dinners" | "all"
+  // King Soopers (Kroger) ordering prefs, profile-backed (cross-device).
+  let krogerPrefs = { locationId: null, storeName: "", zip: "", productPref: "best", modality: "PICKUP" };
   // Bar & pantry inventory (Supabase-backed, source of truth): {id,section,category,name,status}
   let inventory = [];
   let invSection = "bar"; // which sub-tab the inventory panel is showing: "bar" | "pantry"
@@ -704,6 +706,34 @@
     groceryPrefsSaveTimer = setTimeout(saveGroceryPrefs, 400);
   }
 
+  // ---------- King Soopers (Kroger) prefs (profile-backed, cross-device) ----------
+  // Same jsonb-on-profile shape as dietPrefs/groceryPrefs: the chosen store +
+  // how to pick among product options. Not list contents.
+  function normalizeKrogerPrefs(raw) {
+    const pref = ["organic", "cheapest", "best"].includes(raw?.productPref) ? raw.productPref : "best";
+    const modality = raw?.modality === "DELIVERY" ? "DELIVERY" : "PICKUP";
+    return {
+      locationId: raw?.locationId || null,
+      storeName: typeof raw?.storeName === "string" ? raw.storeName : "",
+      zip: typeof raw?.zip === "string" ? raw.zip : "",
+      productPref: pref,
+      modality
+    };
+  }
+  async function loadMyKrogerPrefs() {
+    if (!session) { krogerPrefs = normalizeKrogerPrefs(null); return; }
+    const { data, error } = await supabaseClient
+      .from("profiles").select("kroger_prefs").eq("id", session.user.id).single();
+    krogerPrefs = normalizeKrogerPrefs(error ? null : data?.kroger_prefs);
+  }
+  async function saveKrogerPrefs() {
+    if (!session) return;
+    await ensureProfile();
+    const { error } = await supabaseClient.from("profiles")
+      .upsert({ id: session.user.id, kroger_prefs: krogerPrefs }, { onConflict: "id" });
+    if (error) toast("Couldn’t save King Soopers settings — try again.");
+  }
+
   // ---------- Bar & pantry inventory (Supabase-backed) ----------
   function mapInventoryRow(r) {
     return { id: r.id, section: r.section, category: r.category, name: r.name, status: r.status };
@@ -919,6 +949,7 @@
     // meal plan, which only loads lazily when its tab opens.
     const groceryPromise = loadGroceryList();
     const groceryPrefsPromise = loadMyGroceryPrefs();
+    const krogerPrefsPromise = loadMyKrogerPrefs();
     const sharesPromise = supabaseClient
       .from("recipe_shares")
       .select("recipe_id, shared_with_user_id")
@@ -956,6 +987,7 @@
     await dietPrefsPromise;
     await groceryPromise;
     await groceryPrefsPromise;
+    await krogerPrefsPromise;
     await migrateLegacyGroceryLocalStorage(); // one-time, no-ops after the first run
 
     // Note: we deliberately do NOT blanket-clear basket / activeTags / openItems
@@ -1231,6 +1263,7 @@
     showAccountView(view || "menu");
     accountHouseholdInput.value = householdServings || "";
     renderDietPrefs();
+    renderKrogerPrefs();
     accountPanel.hidden = false;
   }
   accountBtn.addEventListener("click", () => openAccountPanel("menu"));
@@ -4639,6 +4672,135 @@
         toast("Use Copy or Download on this device");
       }
     }
+  });
+
+  // ---------- King Soopers (Kroger) ordering UI ----------
+  const KROGER_PREF_OPTS = [["organic", "Organic"], ["cheapest", "Cheapest"], ["best", "Best match"]];
+  const KROGER_MODALITY_OPTS = [["PICKUP", "Pickup"], ["DELIVERY", "Delivery"]];
+  const krogerZipInput = $("#kroger-zip");
+  const krogerStoreCurrent = $("#kroger-store-current");
+  const krogerStoreResults = $("#kroger-store-results");
+  const krogerPrefEl = $("#kroger-pref");
+  const krogerModalityEl = $("#kroger-modality");
+  const krogerPrefsStatus = $("#kroger-prefs-status");
+  const krogerPanel = $("#kroger-panel");
+  const krogerLoading = $("#kroger-loading");
+  const krogerReviewSummary = $("#kroger-review-summary");
+  const krogerReviewList = $("#kroger-review-list");
+  const krogerReviewStatus = $("#kroger-review-status");
+
+  function krogerChipRow(el, opts, current, attr) {
+    el.innerHTML = opts.map(([v, label]) =>
+      `<button type="button" class="tag-chip diet-chip${current === v ? " is-on" : ""}" ${attr}="${v}" aria-pressed="${current === v}">${label}</button>`
+    ).join("");
+  }
+  // Render the account-panel King Soopers section from krogerPrefs.
+  function renderKrogerPrefs() {
+    if (!krogerZipInput) return;
+    krogerZipInput.value = krogerPrefs.zip || "";
+    krogerStoreCurrent.textContent = krogerPrefs.locationId
+      ? `Store: ${krogerPrefs.storeName || krogerPrefs.locationId}`
+      : "No store chosen yet.";
+    krogerStoreResults.innerHTML = "";
+    krogerChipRow(krogerPrefEl, KROGER_PREF_OPTS, krogerPrefs.productPref, "data-kroger-pref");
+    krogerChipRow(krogerModalityEl, KROGER_MODALITY_OPTS, krogerPrefs.modality, "data-kroger-modality");
+  }
+  krogerPrefEl.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-kroger-pref]"); if (!b) return;
+    krogerPrefs.productPref = b.dataset.krogerPref; renderKrogerPrefs(); saveKrogerPrefs();
+  });
+  krogerModalityEl.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-kroger-modality]"); if (!b) return;
+    krogerPrefs.modality = b.dataset.krogerModality; renderKrogerPrefs(); saveKrogerPrefs();
+  });
+  $("#kroger-find-store").addEventListener("click", async () => {
+    const zip = (krogerZipInput.value || "").replace(/[^0-9]/g, "").slice(0, 5);
+    if (zip.length !== 5) { krogerPrefsStatus.textContent = "Enter a 5-digit ZIP."; return; }
+    krogerPrefsStatus.textContent = "Finding stores…";
+    krogerStoreResults.innerHTML = "";
+    const result = await supabaseClient.functions.invoke("kroger", { body: { mode: "stores", zip } }).catch((error) => ({ error }));
+    const { data, error } = result;
+    if (error || data?.error) { krogerPrefsStatus.textContent = data?.error || "Couldn’t look up stores."; return; }
+    const stores = Array.isArray(data.stores) ? data.stores : [];
+    if (!stores.length) { krogerPrefsStatus.textContent = "No stores found near that ZIP."; return; }
+    krogerPrefsStatus.textContent = "";
+    krogerStoreResults.dataset.zip = zip;
+    krogerStoreResults.innerHTML = stores.map((s) =>
+      `<button type="button" class="kroger-store-opt" data-store-id="${esc(s.locationId)}" data-store-name="${esc(s.name)}">
+         <span class="kroger-store-name">${esc(s.name)}</span>
+         <span class="kroger-store-addr">${esc(s.address || "")}</span>
+       </button>`
+    ).join("");
+  });
+  krogerStoreResults.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-store-id]"); if (!b) return;
+    krogerPrefs.locationId = b.dataset.storeId;
+    krogerPrefs.storeName = b.dataset.storeName;
+    krogerPrefs.zip = krogerStoreResults.dataset.zip || krogerPrefs.zip;
+    saveKrogerPrefs();
+    renderKrogerPrefs();
+    toast("King Soopers store saved");
+  });
+
+  function closeKrogerPanel() { krogerPanel.hidden = true; }
+  $("#close-kroger").addEventListener("click", closeKrogerPanel);
+  krogerPanel.addEventListener("click", (e) => { if (e.target === krogerPanel) closeKrogerPanel(); });
+
+  // Stage A: match the list and show a review with per-item King Soopers search
+  // deep-links to add in the app. Stage B replaces these with a one-tap cart push.
+  const krogerSearchLink = (item) => `https://www.kingsoopers.com/search?query=${encodeURIComponent(item)}`;
+  function renderKrogerReview(results) {
+    const matched = results.filter((r) => r.product).length;
+    krogerReviewSummary.hidden = false;
+    krogerReviewSummary.textContent = `Matched ${matched} of ${results.length} — add them in the King Soopers app to fill your cart, then review and check out there.`;
+    krogerReviewList.innerHTML = results.map((r) => {
+      const p = r.product;
+      const link = esc(krogerSearchLink(r.item));
+      if (p) {
+        const price = typeof p.price === "number" ? `$${p.price.toFixed(2)}` : "";
+        const meta = [p.size, price, p.aisle ? `Aisle ${p.aisle}` : ""].filter(Boolean).join(" · ");
+        return `<div class="kroger-row">
+          <div class="kroger-row-main">
+            <span class="kroger-row-item">${esc(r.item)}</span>
+            <span class="kroger-row-match">${esc(p.description || "")}${meta ? ` — ${esc(meta)}` : ""}</span>
+          </div>
+          <a class="ghost-btn small" href="${link}" target="_blank" rel="noopener noreferrer">Add in app</a>
+        </div>`;
+      }
+      return `<div class="kroger-row is-unmatched">
+        <div class="kroger-row-main">
+          <span class="kroger-row-item">${esc(r.item)}</span>
+          <span class="kroger-row-match">No match — search the store</span>
+        </div>
+        <a class="ghost-btn small" href="${link}" target="_blank" rel="noopener noreferrer">Search</a>
+      </div>`;
+    }).join("");
+  }
+  $("#send-to-kingsoopers").addEventListener("click", async () => {
+    if (!session) { toast("Sign in to send your list."); return; }
+    const items = allGroceryItems().filter((it) => !checkedGroceryItems.has(it.key))
+      .map((it) => ({ key: it.key, item: it.item, amount: it.amount, unit: it.unit }));
+    if (!items.length) { toast("Your grocery list is empty."); return; }
+    if (!krogerPrefs.locationId) {
+      toast("Pick your King Soopers store in Account first.");
+      groceryPanel.hidden = true;
+      openAccountPanel("menu");
+      setTimeout(() => krogerZipInput && krogerZipInput.focus(), 60);
+      return;
+    }
+    groceryPanel.hidden = true;
+    krogerPanel.hidden = false;
+    krogerLoading.hidden = false;
+    krogerReviewSummary.hidden = true;
+    krogerReviewList.innerHTML = "";
+    krogerReviewStatus.textContent = "";
+    const result = await supabaseClient.functions.invoke("kroger", {
+      body: { mode: "search", items, locationId: krogerPrefs.locationId, productPref: krogerPrefs.productPref }
+    }).catch((error) => ({ error }));
+    const { data, error } = result;
+    krogerLoading.hidden = true;
+    if (error || data?.error) { krogerReviewStatus.textContent = data?.error || "Couldn’t reach King Soopers — try again."; return; }
+    renderKrogerReview(Array.isArray(data.results) ? data.results : []);
   });
 
   // ---------- Backup / export ----------

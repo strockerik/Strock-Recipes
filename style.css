@@ -1916,6 +1916,28 @@ button:focus-visible, input:focus-visible {
 .diet-soft { color: var(--faint); font-size: 0.8rem; }
 .diet-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .diet-tags:empty { display: none; }
+
+/* King Soopers (Kroger) ordering — account section + review sheet */
+.kroger-prefs { border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.kroger-store-row { display: flex; gap: 8px; align-items: center; }
+.kroger-store-row .search { flex: 1 1 auto; min-width: 0; }
+.kroger-store-row .ghost-btn { flex: 0 0 auto; }
+.kroger-store-current { margin: 4px 0 0; font-size: 0.85rem; color: var(--faint); }
+.kroger-store-results { display: flex; flex-direction: column; gap: 6px; }
+.kroger-store-results:empty { display: none; }
+.kroger-store-opt { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); cursor: pointer; }
+.kroger-store-opt:hover { border-color: var(--accent); }
+.kroger-store-name { font-weight: 600; font-size: 0.9rem; }
+.kroger-store-addr { font-size: 0.8rem; color: var(--faint); }
+.kroger-review-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.kroger-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.kroger-row.is-unmatched { border-style: dashed; }
+.kroger-row-main { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.kroger-row-item { font-weight: 600; font-size: 0.9rem; }
+.kroger-row-match { font-size: 0.8rem; color: var(--faint); }
+.kroger-row .ghost-btn { flex: 0 0 auto; }
 .diet-tag {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink);
