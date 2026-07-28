@@ -3492,7 +3492,7 @@
 
   const COACH_PLACEHOLDERS = {
     troubleshoot: "Describe what happened — e.g. “the caramel turned out grainy and the apples were watery.”",
-    tweak: "What would you like changed? e.g. “it’s too sweet” or “the sauce feels like it’s missing something.”"
+    tweak: "Change it, scale it, or do the math — e.g. “it’s too sweet”, “scale to 8 limes”, or “how much for 12 servings?”"
   };
 
   // --- 24h conversation persistence (per recipe, per mode) ---
@@ -3632,7 +3632,7 @@
     const mine = it && it.userId === session?.user?.id;
     if (!coachMessages.length) {
       const hint = coachMode === "tweak"
-        ? "Tell me what to improve and I’ll suggest specific changes — and can rewrite the recipe for you to review."
+        ? "Tell me how to adjust it, scale it (to servings or to what you have, like “8 limes”), or a quantity to work out — I’ll give amounts and can rewrite the recipe for you to review."
         : "Tell me what went wrong and I’ll help you figure out why. I may ask a couple of questions first.";
       coachThread.innerHTML = `<p class="coach-empty">${esc(hint)}</p>`;
       return;
