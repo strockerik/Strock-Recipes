@@ -1664,7 +1664,7 @@
       const mine = it.userId === session?.user?.id;
       const inTray = mealPlanTray.has(it.id);
       return `
-      <li class="item${open ? " is-open" : ""}" data-id="${esc(it.id)}">
+      <li class="item${open ? " is-open" : ""}${picked ? " has-serv" : ""}" data-id="${esc(it.id)}">
         <div class="item-row">
           <label class="pick-wrap" title="${picked ? "On your grocery list" : "Add to grocery list"}">
             <input type="checkbox" class="pick" ${picked ? "checked" : ""}

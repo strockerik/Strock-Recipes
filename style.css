@@ -374,6 +374,19 @@ button:focus-visible, input:focus-visible {
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
+  position: relative; /* positioning context for the corner servings stepper */
+}
+/* When a recipe is on the grocery list its servings stepper moves to the card's
+   bottom-right corner (out of the flex flow) so it no longer squeezes the
+   title/subtitle column — which forced long subtitles to wrap and stretch the
+   card. Top-align the row's controls and reserve a min-height so the corner
+   stepper always has room below them. */
+.item.has-serv .item-row { align-items: flex-start; min-height: 84px; }
+.item.has-serv .serv-control {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  margin-left: 0;
 }
 
 /* grocery checkbox — wrapped with a cart glyph (dim -> lit) so the row reads
