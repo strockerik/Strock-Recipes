@@ -508,6 +508,10 @@
     s = s.replace(/\([^)]*\)/g, " ");        // drop parentheticals "(sauce)", "(⅔ cup)"
     s = s.split(/\s[—–-]\s/)[0];             // drop a trailing dash note ("olive oil — a splash")
     s = s.replace(PREP_CLAUSE_RE, " ");      // drop known prep clauses (keeps "boneless, skinless …")
+    // Fat/milk-content qualifiers describe the same shelf product — drop a
+    // trailing ", whole milk" / ", full-fat" / ", 2%" so e.g. "Greek yogurt,
+    // whole milk" and "Greek yogurt, full-fat" land on one line.
+    s = s.replace(/,\s*(?:whole[-\s]?milk|full[-\s]?fat|low[-\s]?fat|reduced[-\s]?fat|non[-\s]?fat|fat[-\s]?free|part[-\s]?skim|2\s*%|1\s*%|skim)\s*$/, "");
     s = s
       .replace(/\b(?:black|white|freshly ground|ground)\s+pepper\b/g, "pepper")
       .replace(/\b(?:kosher|sea|maldon|flaky|fine|table)\s+salt\b/g, "salt")
@@ -515,8 +519,13 @@
       .replace(/\bevoo\b/g, "olive oil")
       .replace(/\bscallions?\b/g, "green onion")
       .replace(/\bconfectioners'?\s+sugar\b/g, "powdered sugar")
-      .replace(/\bgarbanzos?\b/g, "chickpea");
-    return s.replace(/\s+/g, " ").trim();
+      .replace(/\bgarbanzos?\b/g, "chickpea")
+      // A flexible cut like "breasts or thighs" combines with a thighs-only line
+      // — treat it as thighs (the forgiving, commonly-preferred cut).
+      .replace(/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/g, "thighs");
+    // Commas only separated descriptors ("boneless, skinless") — drop them so a
+    // comma alone can't split two otherwise-identical items onto two lines.
+    return s.replace(/,/g, " ").replace(/\s+/g, " ").trim();
   }
 
   // The name shown on the grocery list: keep the original wording, casing, and
