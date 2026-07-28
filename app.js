@@ -4826,6 +4826,7 @@
     krogerSendCartBtn.textContent = `🛒 Send ${sendable} item${sendable === 1 ? "" : "s"} to cart`;
     krogerSendCartBtn.disabled = false;
     krogerOpenStore.hidden = true;
+    krogerDownloadBtn.hidden = results.length === 0;
   }
   // Remove an item before sending (or add a removed/pantry item back).
   krogerReviewList.addEventListener("click", (e) => {
@@ -4833,6 +4834,41 @@
     const rs = e.target.closest("[data-kroger-restore]");
     if (rm) { krogerExcluded.add(rm.dataset.krogerRemove); renderKrogerReview(krogerLastResults); }
     else if (rs) { krogerExcluded.delete(rs.dataset.krogerRestore); renderKrogerReview(krogerLastResults); }
+  });
+
+  // A plain-text match report — the grocery line, the term actually searched,
+  // and what Kroger matched (with size/price/upc/aisle) plus status. Download it
+  // to share for tuning the ingredient→product matching.
+  const krogerDownloadBtn = $("#kroger-download-matches");
+  function krogerMatchReport() {
+    const store = krogerPrefs.storeName || krogerPrefs.locationId || "(no store set)";
+    const out = [
+      "King Soopers match report",
+      `Store: ${store}   ·   Preference: ${krogerPrefs.productPref}   ·   ${new Date().toLocaleString()}`,
+      "".padEnd(60, "-")
+    ];
+    krogerLastResults.forEach((r) => {
+      const p = r.product;
+      const status = !p ? "NO MATCH"
+        : krogerExcluded.has(r.key) ? (r.inPantry ? "SKIPPED (in pantry)" : "REMOVED")
+        : "IN CART";
+      const searched = r.term && r.term !== String(r.item).toLowerCase() ? `  [searched: "${r.term}"]` : "";
+      out.push(`[${status}] "${r.item}"${searched}`);
+      if (p) {
+        const price = typeof p.price === "number" ? `$${p.price.toFixed(2)}` : "";
+        const meta = [p.size, price, p.aisle ? `aisle ${p.aisle}` : "", p.upc ? `upc ${p.upc}` : ""].filter(Boolean).join(" · ");
+        out.push(`      -> ${p.description || "(no description)"}${meta ? `  (${meta})` : ""}`);
+      }
+    });
+    return out.join("\n");
+  }
+  krogerDownloadBtn.addEventListener("click", () => {
+    const blob = new Blob([krogerMatchReport()], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "king-soopers-match-report.txt";
+    a.click();
+    URL.revokeObjectURL(a.href);
   });
 
   // ---- Stage B: per-user OAuth ("Connect King Soopers") + one-tap cart push ----

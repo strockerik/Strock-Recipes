@@ -73,6 +73,7 @@ async function run(){try{
  // Stage B: send-to-cart button + happy path
  var sb=document.querySelector("#kroger-send-cart");
  A("send-to-cart button visible", !sb.hidden, "hidden="+sb.hidden);
+ A("download match-report button visible", !document.querySelector("#kroger-download-matches").hidden, "");
  A("send button labeled with matched count (1)", /Send 1 item/.test(sb.textContent), sb.textContent);
  // remove item before sending -> nothing to send; then add it back
  click(document.querySelector('[data-kroger-remove]')); await delay(40);
