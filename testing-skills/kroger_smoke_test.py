@@ -15,7 +15,8 @@ HTML=r"""<!doctype html><html><head><meta charset="utf-8"><title>RUN</title>
 <script>
 var SUPABASE_URL="x",SUPABASE_ANON_KEY="y",USER_ID="u1";
 var MANUAL=[{id:"m1",name:"chicken thighs",source_inventory_id:null,created_at:"2026-01-01T00:00:00Z"},
-            {id:"m2",name:"exotic dragonfruit",source_inventory_id:null,created_at:"2026-01-02T00:00:00Z"}];
+            {id:"m2",name:"exotic dragonfruit",source_inventory_id:null,created_at:"2026-01-02T00:00:00Z"},
+            {id:"m3",name:"salt and black pepper",source_inventory_id:null,created_at:"2026-01-03T00:00:00Z"}];
 function Bld(t){var v=function(){
   if(t==="grocery_manual_items")return{data:MANUAL,error:null};
   if(t==="profiles")return{data:{id:USER_ID,display_name:"T",diet_prefs:null,grocery_prefs:null,kroger_prefs:null},error:null};
@@ -66,9 +67,12 @@ async function run(){try{
  click(document.querySelector("#send-to-kingsoopers")); await delay(120);
  A("review sheet opens", !document.querySelector("#kroger-panel").hidden, "hidden="+document.querySelector("#kroger-panel").hidden);
  var rows=qa('#kroger-review-list .kroger-row');
- A("review lists both items (2 rows)", rows.length===2, "n="+rows.length);
+ A("review lists all items (3 rows)", rows.length===3, "n="+rows.length);
  A("one item unmatched (dragonfruit)", qa('#kroger-review-list .kroger-row.is-unmatched').length===1, "");
- A("matched row shows in-cart tag", qa('#kroger-review-list .kroger-row:not(.is-unmatched) .kroger-row-tag').length>=1, "");
+ A("matched row shows in-cart tag", qa('#kroger-review-list .kroger-row .kroger-row-tag').length>=1, "");
+ var exc=qa('#kroger-review-list .kroger-row.is-excluded');
+ A("salt+pepper auto-excluded as staple", exc.length===1 && /staple/i.test(exc[0].textContent), exc.length? exc[0].textContent : "none");
+ A("summary notes skipped-on-hand", /keep on hand/i.test(document.querySelector("#kroger-review-summary").textContent), document.querySelector("#kroger-review-summary").textContent);
 
  // Stage B: send-to-cart button + happy path
  var sb=document.querySelector("#kroger-send-cart");

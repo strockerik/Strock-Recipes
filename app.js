@@ -2608,6 +2608,17 @@
       .filter(Boolean)
       .some((k) => k === norm || norm.includes(k) || k.includes(norm));
   }
+  // Why a King Soopers cart line should be skipped by default: a pantry staple
+  // (salt/pepper/oil/… — never ordered per recipe, assumed on hand regardless of
+  // inventory) or something already stocked in the user's pantry. Returns
+  // "staple" | "pantry" | null.
+  function krogerSkipReason(itemName) {
+    const norm = normalizeItemName(flattenText(itemName));
+    if (!norm) return null;
+    if (isPantryStaple(norm)) return "staple";
+    if (isInPantryStock(itemName)) return "pantry";
+    return null;
+  }
 
   // After the generator fills the form, show a quiet "have / need" line
   // against the user's inventory.
@@ -4786,13 +4797,26 @@
     krogerLastResults = results;
     const matched = results.filter((r) => r.product).length;
     const sendable = krogerCartItems().length;
-    const skipped = results.filter((r) => r.product && krogerExcluded.has(r.key)).length;
+    const skipped = results.filter((r) => krogerExcluded.has(r.key)).length;
     krogerReviewSummary.hidden = false;
     krogerReviewSummary.textContent = `Matched ${matched} of ${results.length}.` +
-      (skipped ? ` Skipped ${skipped} you already have.` : "") +
+      (skipped ? ` Skipped ${skipped} you keep on hand.` : "") +
       (sendable ? ` Sending ${sendable} to your King Soopers cart — check out in the app.` : ` Nothing to send.`);
     krogerReviewList.innerHTML = results.map((r) => {
       const p = r.product;
+      // Excluded (staple / already-stocked / removed) — show the reason and an
+      // Add-back, regardless of whether it matched a product.
+      if (krogerExcluded.has(r.key)) {
+        const reason = r.skipReason === "staple" ? "staple — keep on hand"
+          : r.skipReason === "pantry" ? "already in your pantry" : "removed";
+        return `<div class="kroger-row is-excluded">
+          <div class="kroger-row-main">
+            <span class="kroger-row-item">${esc(r.item)}</span>
+            <span class="kroger-row-match">${esc(reason)}</span>
+          </div>
+          <button type="button" class="ghost-btn small" data-kroger-restore="${esc(r.key)}">Add back</button>
+        </div>`;
+      }
       if (!p) {
         return `<div class="kroger-row is-unmatched">
           <div class="kroger-row-main">
@@ -4804,15 +4828,6 @@
       }
       const price = typeof p.price === "number" ? `$${p.price.toFixed(2)}` : "";
       const meta = [p.size, price, p.aisle ? `Aisle ${p.aisle}` : ""].filter(Boolean).join(" · ");
-      if (krogerExcluded.has(r.key)) {
-        return `<div class="kroger-row is-excluded">
-          <div class="kroger-row-main">
-            <span class="kroger-row-item">${esc(r.item)}</span>
-            <span class="kroger-row-match">${r.inPantry ? "already in your pantry" : "removed"}</span>
-          </div>
-          <button type="button" class="ghost-btn small" data-kroger-restore="${esc(r.key)}">Add back</button>
-        </div>`;
-      }
       return `<div class="kroger-row">
         <div class="kroger-row-main">
           <span class="kroger-row-item">${esc(r.item)}</span>
@@ -4849,8 +4864,9 @@
     ];
     krogerLastResults.forEach((r) => {
       const p = r.product;
-      const status = !p ? "NO MATCH"
-        : krogerExcluded.has(r.key) ? (r.inPantry ? "SKIPPED (in pantry)" : "REMOVED")
+      const status = krogerExcluded.has(r.key)
+          ? (r.skipReason === "staple" ? "SKIPPED (staple)" : r.skipReason === "pantry" ? "SKIPPED (in pantry)" : "REMOVED")
+        : !p ? "NO MATCH"
         : "IN CART";
       const searched = r.term && r.term !== String(r.item).toLowerCase() ? `  [searched: "${r.term}"]` : "";
       out.push(`[${status}] "${r.item}"${searched}`);
@@ -4977,13 +4993,14 @@
     const { data, error } = result;
     krogerLoading.hidden = true;
     if (error || data?.error) { krogerReviewStatus.textContent = data?.error || "Couldn’t reach King Soopers — try again."; return; }
-    // Fresh review: reset removals and default-exclude anything already in the
-    // pantry (don't buy duplicates), which the user can add back per row.
+    // Fresh review: reset removals and default-exclude staples (salt/pepper/oil)
+    // and anything already in the pantry — don't order what you keep on hand.
+    // Each is one tap to add back.
     const searchResults = Array.isArray(data.results) ? data.results : [];
     krogerExcluded.clear();
     searchResults.forEach((r) => {
-      r.inPantry = isInPantryStock(r.item);
-      if (r.inPantry && r.product) krogerExcluded.add(r.key);
+      r.skipReason = krogerSkipReason(r.item); // "staple" | "pantry" | null
+      if (r.skipReason) krogerExcluded.add(r.key);
     });
     renderKrogerReview(searchResults);
   });
