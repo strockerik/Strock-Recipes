@@ -5040,15 +5040,23 @@
     }
     groceryPanel.hidden = true;
     krogerPanel.hidden = false;
+    const krLoadMsg = krogerLoading.querySelector("p");
+    if (krLoadMsg) krLoadMsg.textContent = items.length > 40
+      ? `Matching ${items.length} items to King Soopers… a large list can take a minute.`
+      : "Matching your list to King Soopers…";
     krogerLoading.hidden = false;
     krogerReviewSummary.hidden = true;
     krogerReviewList.innerHTML = "";
     krogerReviewStatus.textContent = "";
-    const result = await supabaseClient.functions.invoke("kroger", {
+    // Safety net so a very large list can't leave the spinner hanging forever.
+    const KR_TIMEOUT = Symbol("kr-search-timeout");
+    const krInvoke = supabaseClient.functions.invoke("kroger", {
       body: { mode: "search", items, locationId: krogerPrefs.locationId, productPref: krogerPrefs.productPref }
     }).catch((error) => ({ error }));
-    const { data, error } = result;
+    const result = await Promise.race([krInvoke, new Promise((res) => setTimeout(() => res(KR_TIMEOUT), 150_000))]);
     krogerLoading.hidden = true;
+    if (result === KR_TIMEOUT) { krogerReviewStatus.textContent = "That took too long — try fewer recipes at once, or re-run (any matches found are cached)."; return; }
+    const { data, error } = result;
     if (error || data?.error) { krogerReviewStatus.textContent = data?.error || "Couldn’t reach King Soopers — try again."; return; }
     // Fresh review: reset removals and default-exclude staples (salt/pepper/oil)
     // and anything already in the pantry — don't order what you keep on hand.
