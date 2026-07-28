@@ -74,6 +74,13 @@ async function run(){try{
  var sb=document.querySelector("#kroger-send-cart");
  A("send-to-cart button visible", !sb.hidden, "hidden="+sb.hidden);
  A("send button labeled with matched count (1)", /Send 1 item/.test(sb.textContent), sb.textContent);
+ // remove item before sending -> nothing to send; then add it back
+ click(document.querySelector('[data-kroger-remove]')); await delay(40);
+ A("remove hides send button", document.querySelector("#kroger-send-cart").hidden, "");
+ A("removed row offers Add back", !!document.querySelector('[data-kroger-restore]'), "");
+ click(document.querySelector('[data-kroger-restore]')); await delay(40);
+ A("add back re-includes item", !document.querySelector("#kroger-send-cart").hidden && /Send 1 item/.test(document.querySelector("#kroger-send-cart").textContent), document.querySelector("#kroger-send-cart").textContent);
+ sb=document.querySelector("#kroger-send-cart");
  window.__CARTRES={ok:true,added:1};
  click(sb); await delay(150);
  A("cart success message shown", /added to your King Soopers cart/i.test(document.querySelector("#kroger-review-status").textContent), document.querySelector("#kroger-review-status").textContent);

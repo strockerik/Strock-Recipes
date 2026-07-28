@@ -740,7 +740,7 @@ button:focus-visible, input:focus-visible {
   position: fixed;
   inset: 0;
   background: rgba(42,37,32,0.45);
-  z-index: 40;
+  z-index: 45; /* above the mobile add-fab (40) so a full-screen panel (Ask AI, grocery, …) covers it */
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -1940,6 +1940,10 @@ button:focus-visible, input:focus-visible {
 .kroger-row .ghost-btn { flex: 0 0 auto; }
 .kroger-row-tag { flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.7rem;
   color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+.kroger-row.is-excluded { opacity: 0.6; border-style: dashed; }
+.kroger-row-x { flex: 0 0 auto; border: 0; background: transparent; color: var(--faint);
+  font-size: 1rem; line-height: 1; cursor: pointer; padding: 6px; border-radius: 6px; }
+.kroger-row-x:hover { color: var(--campari); background: var(--campari-soft); }
 .kroger-review-actions { margin-top: 14px; }
 .diet-tag {
   display: inline-flex; align-items: center; gap: 4px;

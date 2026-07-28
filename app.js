@@ -1554,8 +1554,13 @@
 
   // ---------- Rendering ----------
   function renderTagFilters() {
+    // Count tags only over items that ALREADY match the current selection, so a
+    // tag that would yield zero results if added (an "impossible" combo like two
+    // cuisines on one recipe) drops out of the list instead of leading to an
+    // empty result set. With no active tags this is the whole section pool.
+    const base = activePool().filter((it) => [...activeTags].every((t) => it.tags.includes(t)));
     const counts = {};
-    activePool().forEach((it) => it.tags.forEach((t) => (counts[t] = (counts[t] || 0) + 1)));
+    base.forEach((it) => it.tags.forEach((t) => (counts[t] = (counts[t] || 0) + 1)));
     const tags = Object.keys(counts).sort();
     tagFiltersEl.innerHTML = tags.map((t) =>
       `<button class="tag-chip${activeTags.has(t) ? " is-on" : ""}" data-tag="${esc(t)}">${esc(t)} \u00B7 ${counts[t]}</button>`
@@ -2587,6 +2592,21 @@
       (matched ? have : need).push(displayGroceryName(raw));
     });
     return { have, need };
+  }
+
+  // Is a single grocery-line name something the user already has in stock (bar
+  // or pantry, status "in")? Same matching as inventoryHaveNeed; used to skip
+  // pantry duplicates from the King Soopers cart. Staples aren't "duplicates" —
+  // they're assumed-on-hand and already excluded from the list separately.
+  function isInPantryStock(itemName) {
+    if (!inventory.length) return false;
+    const norm = normalizeItemName(flattenText(itemName));
+    if (!norm || isPantryStaple(norm)) return false;
+    return inventory
+      .filter((i) => i.status === "in")
+      .map((i) => normalizeItemName(i.section === "bar" ? i.category : (i.name || i.category)))
+      .filter(Boolean)
+      .some((k) => k === norm || norm.includes(k) || k.includes(norm));
   }
 
   // After the generator fills the form, show a quiet "have / need" line
@@ -4754,39 +4774,52 @@
   // unmatched items keep a King Soopers search deep-link (no UPC to add).
   const krogerSearchLink = (item) => `https://www.kingsoopers.com/search?query=${encodeURIComponent(item)}`;
   let krogerLastResults = []; // last search results, source for the cart push
+  const krogerExcluded = new Set(); // result keys the user removed / already has in pantry
   const krogerSendCartBtn = $("#kroger-send-cart");
   const krogerOpenStore = $("#kroger-open-store");
   function krogerCartItems() {
     return krogerLastResults
-      .filter((r) => r.product && r.product.upc)
+      .filter((r) => r.product && r.product.upc && !krogerExcluded.has(r.key))
       .map((r) => ({ upc: r.product.upc, quantity: 1 }));
   }
   function renderKrogerReview(results) {
     krogerLastResults = results;
     const matched = results.filter((r) => r.product).length;
     const sendable = krogerCartItems().length;
+    const skipped = results.filter((r) => r.product && krogerExcluded.has(r.key)).length;
     krogerReviewSummary.hidden = false;
     krogerReviewSummary.textContent = `Matched ${matched} of ${results.length}.` +
-      (sendable ? ` Send the ${sendable} matched item${sendable === 1 ? "" : "s"} to your King Soopers cart, then check out in the app.` : "");
+      (skipped ? ` Skipped ${skipped} you already have.` : "") +
+      (sendable ? ` Sending ${sendable} to your King Soopers cart — check out in the app.` : ` Nothing to send.`);
     krogerReviewList.innerHTML = results.map((r) => {
       const p = r.product;
-      if (p) {
-        const price = typeof p.price === "number" ? `$${p.price.toFixed(2)}` : "";
-        const meta = [p.size, price, p.aisle ? `Aisle ${p.aisle}` : ""].filter(Boolean).join(" · ");
-        return `<div class="kroger-row">
+      if (!p) {
+        return `<div class="kroger-row is-unmatched">
           <div class="kroger-row-main">
             <span class="kroger-row-item">${esc(r.item)}</span>
-            <span class="kroger-row-match">${esc(p.description || "")}${meta ? ` — ${esc(meta)}` : ""}</span>
+            <span class="kroger-row-match">No match — search the store</span>
           </div>
-          <span class="kroger-row-tag">✓ in cart</span>
+          <a class="ghost-btn small" href="${esc(krogerSearchLink(r.item))}" target="_blank" rel="noopener noreferrer">Search</a>
         </div>`;
       }
-      return `<div class="kroger-row is-unmatched">
+      const price = typeof p.price === "number" ? `$${p.price.toFixed(2)}` : "";
+      const meta = [p.size, price, p.aisle ? `Aisle ${p.aisle}` : ""].filter(Boolean).join(" · ");
+      if (krogerExcluded.has(r.key)) {
+        return `<div class="kroger-row is-excluded">
+          <div class="kroger-row-main">
+            <span class="kroger-row-item">${esc(r.item)}</span>
+            <span class="kroger-row-match">${r.inPantry ? "already in your pantry" : "removed"}</span>
+          </div>
+          <button type="button" class="ghost-btn small" data-kroger-restore="${esc(r.key)}">Add back</button>
+        </div>`;
+      }
+      return `<div class="kroger-row">
         <div class="kroger-row-main">
           <span class="kroger-row-item">${esc(r.item)}</span>
-          <span class="kroger-row-match">No match — search the store</span>
+          <span class="kroger-row-match">${esc(p.description || "")}${meta ? ` — ${esc(meta)}` : ""}</span>
         </div>
-        <a class="ghost-btn small" href="${esc(krogerSearchLink(r.item))}" target="_blank" rel="noopener noreferrer">Search</a>
+        <span class="kroger-row-tag">✓ in cart</span>
+        <button type="button" class="kroger-row-x" data-kroger-remove="${esc(r.key)}" aria-label="Remove ${esc(r.item)}">✕</button>
       </div>`;
     }).join("");
     krogerSendCartBtn.hidden = sendable === 0;
@@ -4794,6 +4827,13 @@
     krogerSendCartBtn.disabled = false;
     krogerOpenStore.hidden = true;
   }
+  // Remove an item before sending (or add a removed/pantry item back).
+  krogerReviewList.addEventListener("click", (e) => {
+    const rm = e.target.closest("[data-kroger-remove]");
+    const rs = e.target.closest("[data-kroger-restore]");
+    if (rm) { krogerExcluded.add(rm.dataset.krogerRemove); renderKrogerReview(krogerLastResults); }
+    else if (rs) { krogerExcluded.delete(rs.dataset.krogerRestore); renderKrogerReview(krogerLastResults); }
+  });
 
   // ---- Stage B: per-user OAuth ("Connect King Soopers") + one-tap cart push ----
   // PKCE: a high-entropy verifier stays in sessionStorage; its SHA-256 challenge
@@ -4901,7 +4941,15 @@
     const { data, error } = result;
     krogerLoading.hidden = true;
     if (error || data?.error) { krogerReviewStatus.textContent = data?.error || "Couldn’t reach King Soopers — try again."; return; }
-    renderKrogerReview(Array.isArray(data.results) ? data.results : []);
+    // Fresh review: reset removals and default-exclude anything already in the
+    // pantry (don't buy duplicates), which the user can add back per row.
+    const searchResults = Array.isArray(data.results) ? data.results : [];
+    krogerExcluded.clear();
+    searchResults.forEach((r) => {
+      r.inPantry = isInPantryStock(r.item);
+      if (r.inPantry && r.product) krogerExcluded.add(r.key);
+    });
+    renderKrogerReview(searchResults);
   });
 
   // ---------- Backup / export ----------
