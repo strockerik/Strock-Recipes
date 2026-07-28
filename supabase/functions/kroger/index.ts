@@ -85,13 +85,40 @@ async function krogerGet(path: string, token: string): Promise<any | null> {
 // A grocery line -> a compact Kroger search term AND the per-user cache key.
 // Deterministic so the same ingredient re-resolves from cache next time. The
 // frontend already hands us `item` as a shopper-facing name (prep stripped).
+// We also (a) collapse "A, B, or C" alternatives to the first option and (b) drop
+// descriptors that over-constrain a store search — long recipe phrasings like
+// "vermicelli, angel hair, or spaghetti pasta" or "yellow baby potatoes" were
+// returning no products. Progressive relaxation (searchProduct) handles the rest.
 function searchTerm(item: string): string {
-  return String(item || "")
-    .toLowerCase()
-    .replace(/\([^)]*\)/g, " ")     // drop parentheticals
-    .replace(/[^a-z0-9 ]/g, " ")    // punctuation -> space
-    .replace(/\s+/g, " ")
-    .trim();
+  let s = String(item || "").toLowerCase().replace(/\([^)]*\)/g, " ");
+  // Drop over-constraining descriptors FIRST (so a descriptor comma like
+  // "boneless, skinless" doesn't get mistaken for an alternative separator).
+  s = s.replace(/\b(?:boneless|skinless|baby|fresh|freshly|organic)\b/g, " ");
+  s = s.replace(/[^a-z0-9, ]/g, " ").replace(/\s+/g, " ").replace(/^[\s,]+/, "").trim();
+  // Then take the first of an "A, B, or C" / "X or Y" alternative list.
+  s = s.split(/\s*,\s*|\s+or\s+/)[0];
+  return s.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Search products for a term, relaxing on a miss: if the full term returns
+// nothing, drop the leading word and retry (up to a few times) so "yellow baby
+// potatoes" -> "potatoes" and "chicken breasts" still resolve. Returns the picked
+// product (or null) plus whether the token expired.
+// deno-lint-ignore no-explicit-any
+async function searchProduct(term: string, locationId: string, token: string, pref: string): Promise<{ product: any | null; unauth?: boolean }> {
+  const words = term.split(" ").filter(Boolean);
+  const maxTries = Math.min(words.length, 3);
+  for (let start = 0; start < maxTries; start++) {
+    const q = words.slice(start).join(" ");
+    if (!q) break;
+    const res = await krogerGet(`/products?filter.term=${encodeURIComponent(q)}&filter.locationId=${encodeURIComponent(locationId)}&filter.limit=10`, token);
+    if (res?._unauth) return { product: null, unauth: true };
+    if (res && Array.isArray(res.data) && res.data.length) {
+      const product = pickDefault(res.data, pref);
+      if (product) return { product };
+    }
+  }
+  return { product: null };
 }
 
 // Pull the fields we show/order from a Kroger product node, tolerating the
@@ -327,9 +354,9 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      let res = await krogerGet(`/products?filter.term=${encodeURIComponent(term)}&filter.locationId=${encodeURIComponent(locationId)}&filter.limit=10`, token);
-      if (res?._unauth) { token = await clientToken(); res = token ? await krogerGet(`/products?filter.term=${encodeURIComponent(term)}&filter.locationId=${encodeURIComponent(locationId)}&filter.limit=10`, token) : null; }
-      const product = res && Array.isArray(res.data) ? pickDefault(res.data, pref) : null;
+      let sr = await searchProduct(term, locationId, token!, pref);
+      if (sr.unauth) { const t = await clientToken(); if (t) { token = t; sr = await searchProduct(term, locationId, token, pref); } }
+      const product = sr.product;
       results.push({ key, item: raw.item, term, product });
       if (product) {
         toCache.push({ ingredient_key: term, product_id: product.productId, upc: product.upc,

@@ -520,6 +520,12 @@
       .replace(/\bscallions?\b/g, "green onion")
       .replace(/\bconfectioners'?\s+sugar\b/g, "powdered sugar")
       .replace(/\bgarbanzos?\b/g, "chickpea")
+      // "fresh" / "freshly squeezed" is a freshness note, not a product — drop it
+      // so "fresh lemon juice" and "lemon juice" combine (and both match cleanly).
+      .replace(/\bfreshly\s+squeezed\b/g, " ")
+      .replace(/\bfresh\b/g, " ")
+      // Singularize "cloves" so "1 garlic clove" and "3 garlic cloves" combine.
+      .replace(/\bcloves\b/g, "clove")
       // A flexible cut like "breasts or thighs" combines with a thighs-only line
       // — treat it as thighs (the forgiving, commonly-preferred cut).
       .replace(/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/g, "thighs");
@@ -1998,6 +2004,10 @@
       scaledIngredients(it, servings).forEach((ing) => {
         if (!ing.item) return;
         const nameKey = normalizeItemName(ing.item);
+        // Plain tap water is never shopped — drop it from the list entirely
+        // (a named water like "distilled"/"sparkling"/"coconut water" normalizes
+        // to that, not bare "water", so those still come through).
+        if (nameKey === "water") return;
         if (skipPantryStaples && isPantryStaple(nameKey)) return;
         const { amount, family, unit } = canonicalQuantity(ing.scaled, ing.unit);
         const key = `${nameKey}__${family || unit || ""}`;
@@ -2586,6 +2596,44 @@
   // Basic staples (salt/pepper/oil…) are assumed on hand and skipped
   // entirely, so the "need" list stays signal, not noise. Returns null when
   // there's no inventory to check against.
+  // Compare a grocery-line name to a pantry-stock name — tolerant of spelling and
+  // word order, but STRICT about product form. A distinguishing form word
+  // (powder/flakes/dried/…) in one but not the other means different products, so
+  // "onion" never matches "onion powder"; a misspelling like "tumeric" still
+  // matches "turmeric" (edit distance 1). Pure string math — no AI.
+  const PANTRY_FORM_RE = /\b(?:powder|flakes?|granulated|dried|dehydrated|paste)\b/;
+  // Non-distinguishing descriptors — the base item with these is the same shelf
+  // product (unlike the FORM words), so strip them before comparing words.
+  const PANTRY_SOFT_RE = /\b(?:ground|whole|fresh|large|small|baby|boneless|skinless)\b/g;
+  function editDistance(a, b) {
+    const m = a.length, n = b.length;
+    if (!m) return n; if (!n) return m;
+    let prev = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) {
+      const cur = [i];
+      for (let j = 1; j <= n; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+      prev = cur;
+    }
+    return prev[n];
+  }
+  function fuzzyWordEq(w1, w2) {
+    if (w1 === w2) return true;
+    if (w1.length < 5 || w2.length < 5) return false;   // too short to fuzz safely (beef≠beet)
+    if (Math.abs(w1.length - w2.length) > 2) return false;
+    return editDistance(w1, w2) <= (Math.max(w1.length, w2.length) <= 7 ? 1 : 2);
+  }
+  function pantryNameMatch(itemNorm, keyNorm) {
+    if (!itemNorm || !keyNorm) return false;
+    if (itemNorm === keyNorm) return true;
+    if (PANTRY_FORM_RE.test(itemNorm) !== PANTRY_FORM_RE.test(keyNorm)) return false;
+    const iw = itemNorm.replace(PANTRY_SOFT_RE, " ").split(/\s+/).filter(Boolean);
+    const kw = keyNorm.replace(PANTRY_SOFT_RE, " ").split(/\s+/).filter(Boolean);
+    if (!iw.length || !kw.length) return false;
+    const [short, long] = kw.length <= iw.length ? [kw, iw] : [iw, kw];
+    return short.every((w) => long.some((x) => fuzzyWordEq(w, x)));
+  }
   function inventoryHaveNeed(ingredients) {
     if (!inventory.length) return null;
     const stockKeys = inventory
@@ -2597,7 +2645,7 @@
       const raw = flattenText(ing && ing.item != null ? ing.item : ing);
       const norm = normalizeItemName(raw);
       if (!norm || isPantryStaple(norm)) return; // assumed on hand — skip both lists
-      const matched = stockKeys.some((k) => k === norm || norm.includes(k) || k.includes(norm));
+      const matched = stockKeys.some((k) => pantryNameMatch(norm, k));
       (matched ? have : need).push(displayGroceryName(raw));
     });
     return { have, need };
@@ -2615,7 +2663,7 @@
       .filter((i) => i.status === "in")
       .map((i) => normalizeItemName(i.section === "bar" ? i.category : (i.name || i.category)))
       .filter(Boolean)
-      .some((k) => k === norm || norm.includes(k) || k.includes(norm));
+      .some((k) => pantryNameMatch(norm, k));
   }
   // Why a King Soopers cart line should be skipped by default: a pantry staple
   // (salt/pepper/oil/… — never ordered per recipe, assumed on hand regardless of
