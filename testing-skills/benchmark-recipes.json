@@ -1,0 +1,2432 @@
+{
+  "app": "The House Index",
+  "version": 1,
+  "exportedAt": "2026-07-29T00:00:00.000Z",
+  "account": "houseindextest (benchmark corpus)",
+  "recipes": [
+    {
+      "section": "kitchen",
+      "name": "Spaghetti and Meatballs",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "italian",
+        "beef",
+        "pasta"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "spaghetti",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "ground beef",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "breadcrumbs",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "egg",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "can (28 oz)",
+          "item": "crushed tomatoes",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "parmesan cheese",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "onion",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "olive oil",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "dried oregano",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "black pepper",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Mix beef, breadcrumbs, egg, half the garlic, salt and pepper; roll into meatballs and brown.",
+          "group": null
+        },
+        {
+          "text": "Soften the onion and remaining garlic in olive oil, add crushed tomatoes and oregano, simmer with the meatballs 30 min.",
+          "group": null
+        },
+        {
+          "text": "Boil the spaghetti, toss with sauce, finish with parmesan.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Baked Macaroni and Cheese",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "vegetarian",
+        "pasta"
+      ],
+      "base_servings": 6,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 3,
+          "unit": "tbsp",
+          "item": "butter",
+          "group": "Cheese Sauce"
+        },
+        {
+          "amount": 3,
+          "unit": "tbsp",
+          "item": "all-purpose flour",
+          "group": "Cheese Sauce"
+        },
+        {
+          "amount": 3,
+          "unit": "cup",
+          "item": "whole milk",
+          "group": "Cheese Sauce"
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "sharp cheddar",
+          "group": "Cheese Sauce"
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "elbow macaroni",
+          "group": "Assembly"
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "cheese sauce",
+          "group": "Assembly"
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "breadcrumbs",
+          "group": "Assembly"
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": "Assembly"
+        }
+      ],
+      "method": [
+        {
+          "text": "Melt butter, whisk in flour, then whisk in the milk gradually; melt in the cheddar to make a smooth cheese sauce.",
+          "group": "Cheese Sauce"
+        },
+        {
+          "text": "Boil the macaroni, fold through the cheese sauce, top with breadcrumbs and bake until bubbling.",
+          "group": "Assembly"
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Chocolate Chip Cookies",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "dessert"
+      ],
+      "base_servings": 24,
+      "servings_label": "cookies",
+      "ingredients": [
+        {
+          "amount": 2.25,
+          "unit": "cup",
+          "item": "all-purpose flour",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "butter",
+          "group": null
+        },
+        {
+          "amount": 0.75,
+          "unit": "cup",
+          "item": "brown sugar",
+          "group": null
+        },
+        {
+          "amount": 0.75,
+          "unit": "cup",
+          "item": "granulated sugar",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": null,
+          "item": "eggs",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "tsp",
+          "item": "vanilla extract",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "baking soda",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "salt",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "dark chocolate",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Cream butter and sugars, beat in eggs and vanilla.",
+          "group": null
+        },
+        {
+          "text": "Fold in flour, baking soda, salt, then the chopped dark chocolate; bake in spoonfuls at 375°F for 11 min.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Buttermilk Pancakes",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "breakfast"
+      ],
+      "base_servings": 12,
+      "servings_label": "pancakes",
+      "ingredients": [
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "all-purpose flour",
+          "group": "Dry Mix"
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "granulated sugar",
+          "group": "Dry Mix"
+        },
+        {
+          "amount": 2,
+          "unit": "tsp",
+          "item": "baking powder",
+          "group": "Dry Mix"
+        },
+        {
+          "amount": 0.5,
+          "unit": "tsp",
+          "item": "baking soda",
+          "group": "Dry Mix"
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "salt",
+          "group": "Dry Mix"
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "dry mix",
+          "group": "Batter"
+        },
+        {
+          "amount": 1.75,
+          "unit": "cup",
+          "item": "buttermilk",
+          "group": "Batter"
+        },
+        {
+          "amount": 2,
+          "unit": null,
+          "item": "eggs",
+          "group": "Batter"
+        },
+        {
+          "amount": 3,
+          "unit": "tbsp",
+          "item": "butter",
+          "group": "Batter"
+        }
+      ],
+      "method": [
+        {
+          "text": "Whisk the flour, sugar, baking powder, baking soda and salt into a dry mix.",
+          "group": "Dry Mix"
+        },
+        {
+          "text": "Whisk 1 cup dry mix with buttermilk, eggs and melted butter; griddle in pools until bubbling.",
+          "group": "Batter"
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Pizza - Margherita",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "italian",
+        "vegetarian",
+        "pizza"
+      ],
+      "base_servings": 1,
+      "servings_label": "14-inch pizza",
+      "ingredients": [
+        {
+          "amount": 250,
+          "unit": "g",
+          "item": "“00” flour",
+          "group": "Dough"
+        },
+        {
+          "amount": 160,
+          "unit": "g",
+          "item": "water",
+          "group": "Dough"
+        },
+        {
+          "amount": 3,
+          "unit": "g",
+          "item": "instant yeast",
+          "group": "Dough"
+        },
+        {
+          "amount": 5,
+          "unit": "g",
+          "item": "salt",
+          "group": "Dough"
+        },
+        {
+          "amount": 1,
+          "unit": "can (14 oz)",
+          "item": "whole San Marzano tomatoes, for the sauce",
+          "group": "Assembly"
+        },
+        {
+          "amount": 6,
+          "unit": "oz",
+          "item": "fresh mozzarella",
+          "group": "Assembly"
+        },
+        {
+          "amount": 6,
+          "unit": null,
+          "item": "fresh basil leaves",
+          "group": "Assembly"
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "olive oil",
+          "group": "Assembly"
+        }
+      ],
+      "method": [
+        {
+          "text": "Mix the 00 flour, water, instant yeast and salt; knead and prove 6 hours.",
+          "group": "Dough"
+        },
+        {
+          "text": "Crush the tomatoes for the sauce, top the stretched dough with sauce, mozzarella and basil; bake as hot as the oven goes.",
+          "group": "Assembly"
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Beef Tacos",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "mexican",
+        "beef",
+        "taco"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "ground beef",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "packet",
+          "item": "taco seasoning",
+          "group": null
+        },
+        {
+          "amount": 8,
+          "unit": null,
+          "item": "corn tortillas",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "shredded cheddar cheese",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "ripe tomato",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "shredded iceberg lettuce",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": null,
+          "item": "onion",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "salsa",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Brown the beef, stir in taco seasoning and a splash of water.",
+          "group": null
+        },
+        {
+          "text": "Warm the tortillas and build with cheese, diced tomato, lettuce, onion and salsa.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Caesar Salad",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "salad"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 2,
+          "unit": null,
+          "item": "romaine lettuce hearts",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "Parmigiano-Reggiano",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "lemon juice and zest",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": null,
+          "item": "anchovy fillets",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "egg yolk",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "olive oil",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "bread",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Whisk garlic, anchovy, egg yolk, lemon juice and zest, then stream in the oil.",
+          "group": null
+        },
+        {
+          "text": "Toss the chopped romaine with dressing, croutons from the bread, and grated Parmigiano-Reggiano.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Guacamole",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "mexican",
+        "vegetarian",
+        "side-dish"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 3,
+          "unit": null,
+          "item": "avocado",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "lime juice and zest",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": null,
+          "item": "red onion",
+          "group": null
+        },
+        {
+          "amount": 0.25,
+          "unit": "cup",
+          "item": "cilantro",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "jalapeno",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Mash the avocado with lime juice and zest and salt.",
+          "group": null
+        },
+        {
+          "text": "Fold in finely diced red onion, cilantro, jalapeno and garlic.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Chili con Carne",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "beef",
+        "soup"
+      ],
+      "base_servings": 6,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 2,
+          "unit": "lb",
+          "item": "ground beef",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "can (15 oz)",
+          "item": "kidney beans",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "can (28 oz)",
+          "item": "crushed tomatoes",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "onion",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "chili powder",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tbsp",
+          "item": "ground cumin",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "beef broth",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Brown the beef with the onion and garlic.",
+          "group": null
+        },
+        {
+          "text": "Add chili powder, cumin, crushed tomatoes, beans and broth; simmer 1 hour.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Banana Bread",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "bread",
+        "dessert"
+      ],
+      "base_servings": 1,
+      "servings_label": "loaf",
+      "ingredients": [
+        {
+          "amount": 3,
+          "unit": null,
+          "item": "ripe bananas",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "all-purpose flour",
+          "group": null
+        },
+        {
+          "amount": 0.75,
+          "unit": "cup",
+          "item": "granulated sugar",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "butter",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": null,
+          "item": "eggs",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "baking soda",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "tsp",
+          "item": "salt",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "walnuts",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Cream butter and sugar, beat in eggs and mashed bananas.",
+          "group": null
+        },
+        {
+          "text": "Fold in flour, baking soda, salt and walnuts; bake in a loaf tin at 350°F for 55 min.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Apple Pie",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "dessert"
+      ],
+      "base_servings": 1,
+      "servings_label": "pie",
+      "ingredients": [
+        {
+          "amount": 2.5,
+          "unit": "cup",
+          "item": "all-purpose flour",
+          "group": "Pie Crust"
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "butter",
+          "group": "Pie Crust"
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "ice water",
+          "group": "Pie Crust"
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "salt",
+          "group": "Pie Crust"
+        },
+        {
+          "amount": 2,
+          "unit": null,
+          "item": "pie crust",
+          "group": "Filling"
+        },
+        {
+          "amount": 6,
+          "unit": null,
+          "item": "Granny Smith apples",
+          "group": "Filling"
+        },
+        {
+          "amount": 0.75,
+          "unit": "cup",
+          "item": "granulated sugar",
+          "group": "Filling"
+        },
+        {
+          "amount": 1,
+          "unit": "tbsp",
+          "item": "cinnamon",
+          "group": "Filling"
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "cornstarch",
+          "group": "Filling"
+        }
+      ],
+      "method": [
+        {
+          "text": "Cut the butter into the flour with salt and ice water; chill, then roll two pie crusts.",
+          "group": "Pie Crust"
+        },
+        {
+          "text": "Toss sliced apples with sugar, cinnamon and cornstarch, fill the crust, top with the second pie crust and bake at 400°F.",
+          "group": "Filling"
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Fettuccine Alfredo",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "italian",
+        "vegetarian",
+        "pasta"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "fettuccine",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "Parmigiano Reggiano",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "heavy cream",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "butter",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "black pepper",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Warm the cream, butter and garlic.",
+          "group": null
+        },
+        {
+          "text": "Toss the cooked fettuccine through with grated Parmigiano Reggiano and black pepper.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Grilled Cheese Sandwich",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "sandwich"
+      ],
+      "base_servings": 2,
+      "servings_label": "sandwiches",
+      "ingredients": [
+        {
+          "amount": 4,
+          "unit": "slice",
+          "item": "bread",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "cheese, if wanted",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "butter",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Butter the bread, fill with cheese, and griddle until golden and molten.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Classic Cheeseburgers",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "beef",
+        "burger"
+      ],
+      "base_servings": 4,
+      "servings_label": "burgers",
+      "ingredients": [
+        {
+          "amount": 1.5,
+          "unit": "lb",
+          "item": "ground beef",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": null,
+          "item": "hamburger buns",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": "slice",
+          "item": "American cheese",
+          "group": null
+        },
+        {
+          "amount": 8,
+          "unit": "slice",
+          "item": "ripe tomato",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": "slice",
+          "item": "onion",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "shredded iceberg lettuce",
+          "group": null
+        },
+        {
+          "amount": 0.25,
+          "unit": "cup",
+          "item": "ketchup",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Form and season 4 patties; sear hard on both sides, melting a slice of cheese on each.",
+          "group": null
+        },
+        {
+          "text": "Build on toasted buns with tomato, onion, lettuce and ketchup.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Mashed Potatoes",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "side-dish"
+      ],
+      "base_servings": 6,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 2.5,
+          "unit": "lb",
+          "item": "floury potatoes",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "butter",
+          "group": null
+        },
+        {
+          "amount": 0.75,
+          "unit": "cup",
+          "item": "whole milk",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Boil the peeled potatoes until tender.",
+          "group": null
+        },
+        {
+          "text": "Mash with warm milk and butter; season with salt.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Roast Chicken",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "chicken",
+        "main-dish"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "whole chicken",
+          "group": null
+        },
+        {
+          "amount": 0.25,
+          "unit": "cup",
+          "item": "butter",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "lemon",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": null,
+          "item": "fresh thyme sprigs",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "black pepper",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Rub the chicken with butter, salt and pepper; stuff with lemon, garlic and fresh thyme.",
+          "group": null
+        },
+        {
+          "text": "Roast at 425°F until the juices run clear, about 75 min.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Classic Pot Roast",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "beef",
+        "main-dish"
+      ],
+      "base_servings": 6,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 3,
+          "unit": "lb",
+          "item": "beef chuck roast",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "carrots",
+          "group": null
+        },
+        {
+          "amount": 1.5,
+          "unit": "lb",
+          "item": "Yukon gold potatoes",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "onion",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "cup",
+          "item": "hot beef stock",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "red wine",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "tomato paste",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Sear the chuck, then soften onion and garlic with tomato paste.",
+          "group": null
+        },
+        {
+          "text": "Deglaze with red wine, add hot beef stock and vegetables, braise 3 hours.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Meatloaf",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "beef",
+        "main-dish"
+      ],
+      "base_servings": 6,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 2,
+          "unit": "lb",
+          "item": "ground beef",
+          "group": null
+        },
+        {
+          "amount": 0.75,
+          "unit": "cup",
+          "item": "breadcrumbs",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": null,
+          "item": "eggs",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "milk",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "onion",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "ketchup",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tbsp",
+          "item": "Worcestershire sauce",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Mix beef, breadcrumbs, eggs, milk, onion, Worcestershire and salt; press into a loaf.",
+          "group": null
+        },
+        {
+          "text": "Glaze with ketchup and bake at 375°F for 55 min.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Southern Fried Chicken",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "chicken",
+        "main-dish"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 8,
+          "unit": null,
+          "item": "bone-in chicken thighs",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "buttermilk",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "all-purpose flour",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tbsp",
+          "item": "paprika",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tbsp",
+          "item": "garlic powder",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": "cup",
+          "item": "neutral oil",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Marinate the chicken thighs in seasoned buttermilk overnight.",
+          "group": null
+        },
+        {
+          "text": "Dredge in seasoned flour and fry at 350°F until deep golden and cooked through.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Lasagna",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "italian",
+        "beef",
+        "pasta"
+      ],
+      "base_servings": 8,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "lasagna noodles",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "ground beef",
+          "group": null
+        },
+        {
+          "amount": 15,
+          "unit": "oz",
+          "item": "ricotta",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "whole-milk low-moisture mozzarella",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "parmesan cheese",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "cup",
+          "item": "tomato sauce",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "egg",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Brown the beef with garlic and simmer in the tomato sauce.",
+          "group": null
+        },
+        {
+          "text": "Mix ricotta with egg and parmesan; layer noodles, meat sauce, ricotta and mozzarella; bake 45 min.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Mushroom Risotto",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "italian",
+        "vegetarian",
+        "main-dish"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 1.5,
+          "unit": "cup",
+          "item": "arborio rice",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "mushrooms",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": null,
+          "item": "shallots",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "dry white wine",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "Parmigiano-Reggiano",
+          "group": null
+        },
+        {
+          "amount": 5,
+          "unit": "cup",
+          "item": "vegetable broth",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "tbsp",
+          "item": "butter",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Soften shallots and garlic in butter, toast the rice, deglaze with white wine.",
+          "group": null
+        },
+        {
+          "text": "Ladle in warm vegetable broth until creamy; fold through mushrooms and Parmigiano-Reggiano.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Chicken Tikka Masala",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "asian",
+        "chicken",
+        "main-dish"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 1,
+          "unit": "tbsp",
+          "item": "garam masala",
+          "group": "Spice Blend"
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "ground cumin",
+          "group": "Spice Blend"
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "ground coriander",
+          "group": "Spice Blend"
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "ground turmeric",
+          "group": "Spice Blend"
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "paprika",
+          "group": "Spice Blend"
+        },
+        {
+          "amount": 2,
+          "unit": "lb",
+          "item": "boneless skinless chicken thighs",
+          "group": "Curry"
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "spice blend",
+          "group": "Curry"
+        },
+        {
+          "amount": 1,
+          "unit": "can (28 oz)",
+          "item": "crushed tomatoes",
+          "group": "Curry"
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "heavy cream",
+          "group": "Curry"
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "plain whole-milk yogurt",
+          "group": "Curry"
+        },
+        {
+          "amount": 4,
+          "unit": "clove",
+          "item": "garlic",
+          "group": "Curry"
+        },
+        {
+          "amount": 1,
+          "unit": "tbsp",
+          "item": "ginger",
+          "group": "Curry"
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "onion",
+          "group": "Curry"
+        }
+      ],
+      "method": [
+        {
+          "text": "Stir the ground spices into a spice blend.",
+          "group": "Spice Blend"
+        },
+        {
+          "text": "Marinate the chicken in yogurt and half the spice blend; sear.",
+          "group": "Curry"
+        },
+        {
+          "text": "Soften onion, garlic and ginger with the rest of the spice blend, add crushed tomatoes and cream, simmer the chicken through.",
+          "group": "Curry"
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Pad Thai",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "asian",
+        "seafood",
+        "main-dish"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 8,
+          "unit": "oz",
+          "item": "rice noodles",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "tbsp",
+          "item": "tamarind paste",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "tbsp",
+          "item": "fish sauce",
+          "group": null
+        },
+        {
+          "amount": 8,
+          "unit": "oz",
+          "item": "shrimp",
+          "group": null
+        },
+        {
+          "amount": 6,
+          "unit": "oz",
+          "item": "tofu",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "bean sprouts",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "peanuts",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "lime zest",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": null,
+          "item": "scallions",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": null,
+          "item": "eggs",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Soak the rice noodles; whisk tamarind and fish sauce into a sauce.",
+          "group": null
+        },
+        {
+          "text": "Stir-fry tofu, shrimp and egg, add noodles and sauce, finish with sprouts, peanuts, scallions and lime zest.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Beef Bourguignon",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "french",
+        "beef",
+        "main-dish"
+      ],
+      "base_servings": 6,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 3,
+          "unit": "lb",
+          "item": "beef chuck",
+          "group": null
+        },
+        {
+          "amount": 6,
+          "unit": "oz",
+          "item": "pancetta, alternative to bacon",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "red wine",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "pearl onions",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "carrots",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "mushrooms",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "beef broth",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "tomato paste",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "tbsp",
+          "item": "all-purpose flour",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Render the pancetta, brown the floured beef, soften garlic with tomato paste.",
+          "group": null
+        },
+        {
+          "text": "Deglaze with red wine, add beef broth, carrots and pearl onions; braise 3 hours, adding mushrooms at the end.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Seafood Paella",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "mediterranean",
+        "seafood",
+        "main-dish"
+      ],
+      "base_servings": 6,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 2,
+          "unit": "cup",
+          "item": "bomba rice",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "pinch",
+          "item": "saffron",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "shrimp",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "mussels",
+          "group": null
+        },
+        {
+          "amount": 8,
+          "unit": "oz",
+          "item": "chorizo",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "red bell pepper",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "ripe tomato",
+          "group": null
+        },
+        {
+          "amount": 5,
+          "unit": "cup",
+          "item": "chicken broth",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": 0.25,
+          "unit": "cup",
+          "item": "olive oil",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Soften pepper, tomato and garlic in olive oil; toast the rice with saffron.",
+          "group": null
+        },
+        {
+          "text": "Add hot chicken broth and chorizo, then nestle in the shrimp and mussels; do not stir, let the socarrat form.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Tiramisu",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "italian",
+        "dessert"
+      ],
+      "base_servings": 8,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 16,
+          "unit": "oz",
+          "item": "mascarpone",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": null,
+          "item": "egg yolks",
+          "group": null
+        },
+        {
+          "amount": 0.75,
+          "unit": "cup",
+          "item": "granulated sugar",
+          "group": null
+        },
+        {
+          "amount": 24,
+          "unit": null,
+          "item": "ladyfingers",
+          "group": null
+        },
+        {
+          "amount": 1.5,
+          "unit": "cup",
+          "item": "espresso",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "Grand Marnier",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "tbsp",
+          "item": "cocoa powder",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Whisk yolks and sugar over a bain-marie, fold in the mascarpone.",
+          "group": null
+        },
+        {
+          "text": "Dip ladyfingers in espresso spiked with Grand Marnier, layer with the cream, dust with cocoa and chill.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Miso Ramen",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "asian",
+        "pork",
+        "soup"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 4,
+          "unit": null,
+          "item": "portions ramen noodles",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "pork belly",
+          "group": null
+        },
+        {
+          "amount": 4,
+          "unit": null,
+          "item": "eggs",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "cup",
+          "item": "miso paste",
+          "group": null
+        },
+        {
+          "amount": 6,
+          "unit": "cup",
+          "item": "chicken broth",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": null,
+          "item": "scallions",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tbsp",
+          "item": "ginger",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Simmer the pork belly, build a broth with chicken broth, miso, garlic and ginger.",
+          "group": null
+        },
+        {
+          "text": "Cook the noodles, add soft-boiled eggs, sliced pork and scallions.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Homemade Croissants",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "french",
+        "bread",
+        "breakfast"
+      ],
+      "base_servings": 12,
+      "servings_label": "croissants",
+      "ingredients": [
+        {
+          "amount": 500,
+          "unit": "g",
+          "item": "bread flour",
+          "group": null
+        },
+        {
+          "amount": 1.25,
+          "unit": "cup",
+          "item": "butter",
+          "group": null
+        },
+        {
+          "amount": 10,
+          "unit": "g",
+          "item": "instant yeast",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "whole milk",
+          "group": null
+        },
+        {
+          "amount": 50,
+          "unit": "g",
+          "item": "granulated sugar",
+          "group": null
+        },
+        {
+          "amount": 10,
+          "unit": "g",
+          "item": "salt",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Make a dough with bread flour, instant yeast, warm milk, sugar and salt; chill.",
+          "group": null
+        },
+        {
+          "text": "Laminate with the butter block through three folds, shape and prove, then bake at 400°F.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "bar",
+      "name": "Boulevardier",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "whiskey",
+        "stirred",
+        "classic"
+      ],
+      "base_servings": 1,
+      "servings_label": "drink",
+      "ingredients": [
+        {
+          "amount": 1.5,
+          "unit": "oz",
+          "item": "bourbon",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "oz",
+          "item": "Campari",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "oz",
+          "item": "sweet vermouth",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "orange zest",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Stir bourbon, Campari and sweet vermouth over ice; strain over a big cube and express the orange zest.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "bar",
+      "name": "Espresso Martini",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "vodka",
+        "classic"
+      ],
+      "base_servings": 1,
+      "servings_label": "drink",
+      "ingredients": [
+        {
+          "amount": 2,
+          "unit": "oz",
+          "item": "vodka",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "oz",
+          "item": "coffee liqueur",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "oz",
+          "item": "espresso",
+          "group": null
+        },
+        {
+          "amount": 0.5,
+          "unit": "oz",
+          "item": "simple syrup",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Shake vodka, coffee liqueur, espresso and simple syrup hard over ice; strain into a coupe.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Bucatini Cacio e Pepe",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "italian",
+        "pasta"
+      ],
+      "base_servings": 4,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 1,
+          "unit": "lb",
+          "item": "bucatini (or any pasta)",
+          "group": null
+        },
+        {
+          "amount": 1.5,
+          "unit": "cup",
+          "item": "pecorino romano",
+          "group": null
+        },
+        {
+          "amount": 2,
+          "unit": "tsp",
+          "item": "black pepper",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "stick",
+          "item": "butter (1/4 to 1/3 stick)",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Toast the black pepper, cook the pasta, and emulsify with pecorino romano, butter and starchy water into a glossy sauce.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Dinner Rolls",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "bread"
+      ],
+      "base_servings": 12,
+      "servings_label": "rolls",
+      "ingredients": [
+        {
+          "amount": 500,
+          "unit": "g",
+          "item": "bread flour",
+          "group": null
+        },
+        {
+          "amount": 7,
+          "unit": "g",
+          "item": "active dry yeast",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "cup",
+          "item": "warm milk",
+          "group": null
+        },
+        {
+          "amount": 0.25,
+          "unit": "cup",
+          "item": "butter",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "egg",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "tbsp",
+          "item": "granulated sugar",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": "tsp",
+          "item": "salt",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Bloom the active dry yeast in warm milk with sugar.",
+          "group": null
+        },
+        {
+          "text": "Mix into a soft dough with bread flour, butter, egg and salt; prove, shape into rolls, prove again and bake.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    },
+    {
+      "section": "kitchen",
+      "name": "Chicken Noodle Soup",
+      "subtitle": null,
+      "source": "Benchmark corpus",
+      "tags": [
+        "american",
+        "chicken",
+        "soup"
+      ],
+      "base_servings": 6,
+      "servings_label": "servings",
+      "ingredients": [
+        {
+          "amount": 1.5,
+          "unit": "lb",
+          "item": "chicken breast",
+          "group": null
+        },
+        {
+          "amount": 8,
+          "unit": "oz",
+          "item": "pasta (spaghetti or bucatini)",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": null,
+          "item": "carrots",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": null,
+          "item": "celery stalks",
+          "group": null
+        },
+        {
+          "amount": 1,
+          "unit": null,
+          "item": "onion",
+          "group": null
+        },
+        {
+          "amount": 8,
+          "unit": "cup",
+          "item": "chicken broth",
+          "group": null
+        },
+        {
+          "amount": 3,
+          "unit": "clove",
+          "item": "garlic",
+          "group": null
+        },
+        {
+          "amount": null,
+          "unit": null,
+          "item": "salt",
+          "group": null
+        }
+      ],
+      "method": [
+        {
+          "text": "Poach the chicken breast in the broth, shred it back in.",
+          "group": null
+        },
+        {
+          "text": "Simmer carrots, celery, onion and garlic; add the pasta and cook until tender.",
+          "group": null
+        }
+      ],
+      "specs": null,
+      "notes": null,
+      "is_favorite": false
+    }
+  ]
+}

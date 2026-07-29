@@ -865,6 +865,61 @@ just reports it isn't configured yet. **Stage B** additionally needs
 the `kroger_tokens` table; without them the "Connect King Soopers" step reports
 it isn't set up.
 
+### How ingredients are matched & combined
+
+Before your list goes to the store, the app cleans it up and matches each line to
+a product. Here's what it assumes — so you know when to override a pick (you can
+always change or remove any item in the review sheet, and substitute in the
+Kroger app). The behaviour lives in `app.js` (combining/pantry) and the `kroger`
+Edge Function (store search); this is a plain-language summary, and
+`testing-skills/benchmark_corpus.py` guards it against regressions.
+
+**Combining — different wording, one line.** These are treated as the same
+product and merged:
+
+- Chicken cuts: "boneless/skinless" dropped; "breast or thighs" → breast.
+- Yeast: instant / rapid-rise / bread-machine yeast → "instant yeast". *(Active-dry
+  and fresh yeast stay separate — they really are different.)*
+- Onion: colour/size/prep words ("yellow", "grated", "medium"…) → "onion". "Green
+  onion" and "onion powder" stay their own thing.
+- Milk: "whole/warm/2% milk" → "milk" (nut milks like "almond milk" stay distinct;
+  a trailing "…, whole milk" fat note on another item, e.g. yogurt, is left alone).
+- Scallion → green onion. Parmesan ≡ Parmigiano-Reggiano. Mozzarella descriptors in
+  either order are one product. "Spaghetti pasta" → spaghetti.
+- Flexible pasta ("bucatini (or any pasta)", "pasta (spaghetti or bucatini)") →
+  one generic "pasta" line; a plain named shape ("spaghetti") is left as-is.
+- **Kept separate on purpose:** tomato products (crushed / whole / puree / paste /
+  sauce), Pecorino vs Parmesan, active-dry vs instant yeast.
+
+**Serving sizes.** A recipe measured in *people* ("servings", "drinks") scales to
+your household size (set in Account). A recipe measured in a *batch/yield* ("1
+tart", "1 pizza", "24 cookies", "1 loaf") makes its stated amount — it isn't
+multiplied by your household, because one tart already feeds the table.
+
+**Pantry & staples.** Salt, pepper, oil, water, sugar, butter and plain flour are
+assumed on hand and skipped. Specialty flours (00, bread/high-gluten, cake, almond…)
+*are* bought. Fresh produce and herbs are never treated as "already in your pantry"
+(you rebuy them); dried/ground spices are. A processed form ("garlic powder") is
+pantry; the fresh form ("garlic cloves") is bought.
+
+**Quantities.** Each cart line shows the amount in parentheses and how many recipes
+it's for — "(5 lb) Ground Beef · for 3 recipes". Produce you buy whole is shown in
+purchase units: garlic cloves → "≈ N bulbs", tomato slices → "≈ N tomatoes".
+Lines that resolve to the same product are added once.
+
+**Store matching — the plainest form of what you asked for.** Unless the recipe is
+specific, the app prefers the basic product: raw produce over processed ("carrots",
+not "cut & peeled baby carrots"); real spirits over sauces ("vodka", not "vodka
+sauce"); baking chocolate as chips; a bare "cheese" as shredded cheddar; a "zest"
+ingredient as the whole fruit; "tomatoes for sauce" as canned crushed; raw meat over
+deli/lunchmeat. If the recipe *does* say canned, shredded, sliced, etc., that form is
+matched.
+
+**Left off the list.** Things the recipe makes itself (a component it builds from
+other listed ingredients — e.g. a "Dry Mix" or "Pie Crust" the recipe assembles),
+plain water, and "alternative to…" / "substitute for…" fallbacks (the primary
+ingredient is already on the list).
+
 ## Edge Function deployment (AI)
 
 There are **five** Edge Functions, each deployed via the Supabase dashboard (Edge
