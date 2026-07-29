@@ -778,12 +778,12 @@ const INGREDIENT_ALIASES: [RegExp, string][] = [
   [/\bchicken\s+breasts\b/gi, "chicken breast"],
   [/\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b/gi, "instant yeast"],
   [/\b(?:(?:yellow|red|white|sweet|spanish|vidalia|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
-  [/\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b/gi, "milk"],
+  [/(?<!,\s)\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b/gi, "milk"],
   [/\bscallions?\b/gi, "green onion"],
   [/\bspaghetti\s+pasta\b/gi, "spaghetti"],
 ];
 function canonicalizeItem(name: string): string {
-  let s = String(name || "").replace(/\//g, " ");
+  let s = String(name || "").replace(/([a-z])\/([a-z])/gi, "$1 $2"); // slash between letters only
   for (const [re, to] of INGREDIENT_ALIASES) s = s.replace(re, to);
   return s.replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ")
     .replace(/,\s*,/g, ",").replace(/(^[\s,]+)|([\s,]+$)/g, "").trim();

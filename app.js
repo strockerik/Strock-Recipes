@@ -523,15 +523,19 @@
     // "green onion" and "onion powder" — different products — untouched).
     [/\b(?:(?:yellow|red|white|sweet|spanish|vidalia|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
     // Milk: fat-content / temperature phrasings are one carton (nut milks keep
-    // their qualifier — "almond milk" stays distinct).
-    [/\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b/gi, "milk"],
+    // their qualifier — "almond milk" stays distinct). The negative lookbehind
+    // leaves a trailing fat qualifier alone ("Greek yogurt, whole milk" is not a
+    // milk purchase), which a later rule strips as a descriptor.
+    [/(?<!,\s)\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b/gi, "milk"],
     // Scallion == green onion.
     [/\bscallions?\b/gi, "green onion"],
     // Pasta wording: "spaghetti pasta" is just spaghetti.
     [/\bspaghetti\s+pasta\b/gi, "spaghetti"],
   ];
   function canonicalizeItem(name) {
-    let s = String(name || "").replace(/\//g, " "); // "boneless/skinless" -> spaces
+    // Slash only between letters ("boneless/skinless" -> spaces); leave numeric
+    // fractions intact ("1/4 to 1/3 stick").
+    let s = String(name || "").replace(/([a-z])\/([a-z])/gi, "$1 $2");
     for (const [re, to] of INGREDIENT_ALIASES) s = s.replace(re, to);
     // Tidy leftovers from dropped descriptors: normalize comma spacing, collapse
     // doubled commas, and trim stray edge commas ("chicken breast, ,", ", onion").
