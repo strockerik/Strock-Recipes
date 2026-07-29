@@ -493,7 +493,14 @@
     // (almond/coconut/etc.) trip the staple match — only true staples skip.
     const n = nameLower
       .replace(/\b(?:bell|red|green|chili|chilli|sweet|cayenne|lemon|jalape\w*)\s+pepper/g, " ")
-      .replace(/\b(?:almond|coconut|oat|rice|chickpea|nut)\s+flour/g, " ");
+      // Specialty flours are their own product, not the "flour" staple.
+      .replace(/\b(?:almond|coconut|oat|rice|chickpea|nut|cake|bread|pastry|potato|corn|semolina|tapioca|spelt|rye)\s+flour/g, " ")
+      // "butter" as a modifier isn't the butter staple (puff pastry, nut butters).
+      .replace(/\bpuff pastry\b/g, " ")
+      .replace(/\ball[-\s]?butter\b/g, " ")
+      .replace(/\b(?:peanut|almond|apple|cocoa|shea|nut|cashew)\s+butter\b/g, " ")
+      // Canned packing liquid isn't the "water"/"oil" staple.
+      .replace(/\b(?:packed\s+)?in\s+(?:water|brine|oil|juice)\b/g, " ");
     return PANTRY_STAPLE_RE.test(n);
   }
 
@@ -501,7 +508,7 @@
   // shown in the list keeps its original wording. Strips prep notes and folds
   // common descriptor synonyms so e.g. "Salt and Black Pepper, to taste" and
   // "salt and pepper", or "guanciale, diced" and "guanciale", land on one line.
-  const PREP_WORDS = "to taste|diced|chopped|finely chopped|roughly chopped|minced|grated|finely grated|freshly grated|shredded|sliced|thinly sliced|cubed|crushed|melted|softened|room temperature|at room temperature|sifted|divided|drained|rinsed|optional|peeled|seeded|deseeded|halved|quartered|crumbled|beaten|packed|cooked|uncooked|toasted|warmed|chilled";
+  const PREP_WORDS = "to taste|diced|finely diced|roughly diced|chopped|finely chopped|roughly chopped|minced|finely minced|grated|finely grated|freshly grated|shredded|sliced|thinly sliced|finely sliced|cubed|crushed|melted|softened|room temperature|at room temperature|very cold|sifted|divided|drained|rinsed|optional|peeled|seeded|deseeded|halved|quartered|crumbled|beaten|packed|cooked|uncooked|toasted|warmed|chilled";
   const PREP_CLAUSE_RE = new RegExp(`,\\s*(?:${PREP_WORDS}|plus more\\b.*|for\\b.*|to top\\b.*|to serve\\b.*|to garnish\\b.*)[^,]*`, "gi");
   function normalizeItemName(name) {
     let s = String(name).toLowerCase().trim();
@@ -526,6 +533,13 @@
       .replace(/\bfresh\b/g, " ")
       // Singularize "cloves" so "1 garlic clove" and "3 garlic cloves" combine.
       .replace(/\bcloves\b/g, "clove")
+      // You buy eggs for yolks/whites — so they combine with an "eggs" line.
+      .replace(/\begg\s+(?:yolks?|whites?)\b/g, "eggs")
+      // Whipping-cream variants are one product (bare "cream" left separate).
+      .replace(/\b(?:heavy\s+)?whipping cream\b/g, "heavy cream")
+      // Singularize common produce plurals so "carrot" and "carrots" combine.
+      .replace(/\b(carrot|onion|shallot|pepper|mushroom|scallion)s\b/g, "$1")
+      .replace(/\b(potato|tomato)es\b/g, "$1")
       // A flexible cut like "breasts or thighs" combines with a thighs-only line
       // — treat it as thighs (the forgiving, commonly-preferred cut).
       .replace(/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/g, "thighs");
@@ -2004,10 +2018,10 @@
       scaledIngredients(it, servings).forEach((ing) => {
         if (!ing.item) return;
         const nameKey = normalizeItemName(ing.item);
-        // Plain tap water is never shopped — drop it from the list entirely
-        // (a named water like "distilled"/"sparkling"/"coconut water" normalizes
-        // to that, not bare "water", so those still come through).
-        if (nameKey === "water") return;
+        // Plain tap water and a bare "liquid" placeholder ("liquid (water, beer,
+        // or milk)") are never shopped — drop them (a named water like
+        // "distilled"/"coconut water" normalizes to that, not bare "water").
+        if (nameKey === "water" || nameKey === "liquid") return;
         if (skipPantryStaples && isPantryStaple(nameKey)) return;
         const { amount, family, unit } = canonicalQuantity(ing.scaled, ing.unit);
         const key = `${nameKey}__${family || unit || ""}`;
@@ -2601,10 +2615,15 @@
   // (powder/flakes/dried/…) in one but not the other means different products, so
   // "onion" never matches "onion powder"; a misspelling like "tumeric" still
   // matches "turmeric" (edit distance 1). Pure string math — no AI.
-  const PANTRY_FORM_RE = /\b(?:powder|flakes?|granulated|dried|dehydrated|paste)\b/;
+  // Distinguishing *processed* forms — "onion powder" is a different product from
+  // fresh onion. Note "dried"/"ground" are NOT here: a dried/ground spice IS the
+  // pantry form (rule: fresh = buy, dried/ground = pantry), so it should match
+  // the base spice ("dried oregano" ↔ "oregano").
+  const PANTRY_FORM_RE = /\b(?:powder|flakes?|granulated|dehydrated|paste)\b/;
   // Non-distinguishing descriptors — the base item with these is the same shelf
-  // product (unlike the FORM words), so strip them before comparing words.
-  const PANTRY_SOFT_RE = /\b(?:ground|whole|fresh|large|small|baby|boneless|skinless)\b/g;
+  // product, so strip them before comparing words. (fresh is handled earlier as
+  // a hard "not pantry" signal, so it never reaches here.)
+  const PANTRY_SOFT_RE = /\b(?:ground|dried|whole|large|small|baby|boneless|skinless)\b/g;
   function editDistance(a, b) {
     const m = a.length, n = b.length;
     if (!m) return n; if (!n) return m;
@@ -2645,6 +2664,7 @@
       const raw = flattenText(ing && ing.item != null ? ing.item : ing);
       const norm = normalizeItemName(raw);
       if (!norm || isPantryStaple(norm)) return; // assumed on hand — skip both lists
+      if (/\bfresh\b/i.test(raw)) { need.push(displayGroceryName(raw)); return; } // fresh = never pantry
       const matched = stockKeys.some((k) => pantryNameMatch(norm, k));
       (matched ? have : need).push(displayGroceryName(raw));
     });
@@ -2657,6 +2677,9 @@
   // they're assumed-on-hand and already excluded from the list separately.
   function isInPantryStock(itemName) {
     if (!inventory.length) return false;
+    // Fresh produce/herbs are perishable — never pantry stock (rule: fresh = buy,
+    // dried/ground = pantry). Checked on the raw name before "fresh" is stripped.
+    if (/\bfresh\b/i.test(String(itemName))) return false;
     const norm = normalizeItemName(flattenText(itemName));
     if (!norm || isPantryStaple(norm)) return false;
     return inventory

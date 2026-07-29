@@ -91,13 +91,28 @@ async function krogerGet(path: string, token: string): Promise<any | null> {
 // returning no products. Progressive relaxation (searchProduct) handles the rest.
 function searchTerm(item: string): string {
   let s = String(item || "").toLowerCase().replace(/\([^)]*\)/g, " ");
-  // Drop over-constraining descriptors FIRST (so a descriptor comma like
-  // "boneless, skinless" doesn't get mistaken for an alternative separator).
-  s = s.replace(/\b(?:boneless|skinless|baby|fresh|freshly|organic)\b/g, " ");
+  // Strip noise that over-constrains a store search (canned-good boilerplate,
+  // percentages, packing liquid, and over-specific descriptors) FIRST — so a
+  // descriptor comma like "boneless, skinless" isn't mistaken for an alternative.
+  s = s
+    .replace(/\d+\s*%/g, " ")
+    .replace(/\bfat[-\s]?free\b/g, " ")
+    .replace(/\b(?:packed\s+)?in\s+(?:water|brine|oil|juice)\b/g, " ")
+    .replace(/\b(?:boneless|skinless|baby|fresh|freshly|organic|canned|can|condensed|chunk|sprig|cold|hot|very|large|extra)\b/g, " ");
   s = s.replace(/[^a-z0-9, ]/g, " ").replace(/\s+/g, " ").replace(/^[\s,]+/, "").trim();
   // Then take the first of an "A, B, or C" / "X or Y" alternative list.
   s = s.split(/\s*,\s*|\s+or\s+/)[0];
   return s.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// A guard against absurd matches: the picked product's description must share at
+// least one meaningful word (>=4 chars) with the search term. Kills "Grand
+// Marnier" -> "Garnier hair spray" (zero overlap) while passing normal matches.
+function relevantMatch(term: string, description: string): boolean {
+  const words = term.split(" ").filter((w) => w.length >= 4);
+  if (!words.length) return true; // nothing distinctive to check
+  const d = String(description || "").toLowerCase();
+  return words.some((w) => d.includes(w));
 }
 
 // Search products for a term, relaxing on a miss: if the full term returns
@@ -115,7 +130,7 @@ async function searchProduct(term: string, locationId: string, token: string, pr
     if (res?._unauth) return { product: null, unauth: true };
     if (res && Array.isArray(res.data) && res.data.length) {
       const product = pickDefault(res.data, pref);
-      if (product) return { product };
+      if (product && relevantMatch(q, product.description)) return { product };
     }
   }
   return { product: null };
@@ -341,30 +356,42 @@ Deno.serve(async (req) => {
       .from("kroger_matches").select("ingredient_key, product_id, upc, description, image_url");
     (cacheRows || []).forEach((r: any) => { cache[r.ingredient_key] = r; });
 
-    const results: any[] = [];
+    // Resolve each item in original order. Cache hits are instant; misses hit
+    // the Kroger API and are searched with bounded CONCURRENCY so a big list
+    // (a whole recipe book) finishes in seconds instead of timing out.
+    const results: any[] = new Array(items.length);
     const toCache: any[] = [];
-    for (const raw of items) {
+    const misses: { idx: number; key: string; item: string; term: string }[] = [];
+    items.forEach((raw: any, idx: number) => {
       const key = raw?.key ?? "";
-      const term = searchTerm(raw?.item ?? "");
-      if (!term) { results.push({ key, item: raw?.item ?? "", product: null }); continue; }
-
-      // Cache hit -> reuse the product the user landed on last time.
+      const item = raw?.item ?? "";
+      const term = searchTerm(item);
+      if (!term) { results[idx] = { key, item, product: null }; return; }
       if (cache[term]) {
         const c = cache[term];
-        results.push({ key, item: raw.item, term, cached: true,
-          product: { productId: c.product_id, upc: c.upc, description: c.description, imageUrl: c.image_url } });
-        continue;
+        results[idx] = { key, item, term, cached: true,
+          product: { productId: c.product_id, upc: c.upc, description: c.description, imageUrl: c.image_url } };
+        return;
       }
+      misses.push({ idx, key, item, term });
+    });
 
-      let sr = await searchProduct(term, locationId, token!, pref);
-      if (sr.unauth) { const t = await clientToken(); if (t) { token = t; sr = await searchProduct(term, locationId, token, pref); } }
-      const product = sr.product;
-      results.push({ key, item: raw.item, term, product });
-      if (product) {
-        toCache.push({ ingredient_key: term, product_id: product.productId, upc: product.upc,
-          description: product.description, image_url: product.imageUrl });
+    const CONCURRENCY = 8;
+    let cursor = 0;
+    async function worker() {
+      while (cursor < misses.length) {
+        const m = misses[cursor++];
+        let sr = await searchProduct(m.term, locationId, token!, pref);
+        if (sr.unauth) { const t = await clientToken(); if (t) { token = t; sr = await searchProduct(m.term, locationId, token, pref); } }
+        const product = sr.product;
+        results[m.idx] = { key: m.key, item: m.item, term: m.term, product };
+        if (product) {
+          toCache.push({ ingredient_key: m.term, product_id: product.productId, upc: product.upc,
+            description: product.description, image_url: product.imageUrl });
+        }
       }
     }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, misses.length) }, () => worker()));
 
     // Persist newly-resolved matches for next time (best-effort; never blocks).
     if (toCache.length) {
