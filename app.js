@@ -4869,8 +4869,13 @@
   const krogerSendCartBtn = $("#kroger-send-cart");
   const krogerOpenStore = $("#kroger-open-store");
   function krogerCartItems() {
+    // Dedupe by product: two grocery lines that resolve to the same store item
+    // (e.g. "onion" + "medium onion", or Pecorino measured in cups vs lb) are one
+    // product — add it once. First still-included row wins.
+    const seen = new Set();
     return krogerLastResults
       .filter((r) => r.product && r.product.upc && !krogerExcluded.has(r.key))
+      .filter((r) => { if (seen.has(r.product.upc)) return false; seen.add(r.product.upc); return true; })
       .map((r) => ({ upc: r.product.upc, quantity: 1 }));
   }
   function renderKrogerReview(results) {
@@ -4882,6 +4887,8 @@
     krogerReviewSummary.textContent = `Matched ${matched} of ${results.length}.` +
       (skipped ? ` Skipped ${skipped} you keep on hand.` : "") +
       (sendable ? ` Sending ${sendable} to your King Soopers cart — check out in the app.` : ` Nothing to send.`);
+    const shownUpc = new Set();   // fold matched rows that resolve to the same product
+    const shownSkip = new Set();  // fold identical staple/pantry rows
     krogerReviewList.innerHTML = results.map((r) => {
       const p = r.product;
       // Excluded (staple / already-stocked / removed) — show the reason and an
@@ -4889,6 +4896,13 @@
       if (krogerExcluded.has(r.key)) {
         const reason = r.skipReason === "staple" ? "staple — keep on hand"
           : r.skipReason === "pantry" ? "already in your pantry" : "removed";
+        // Collapse repeat staple/pantry lines for the same item (e.g. "salt"
+        // from three recipes) into one row — they're skipped either way.
+        if (r.skipReason) {
+          const sk = `${r.skipReason}|${normalizeItemName(r.item)}`;
+          if (shownSkip.has(sk)) return "";
+          shownSkip.add(sk);
+        }
         return `<div class="kroger-row is-excluded">
           <div class="kroger-row-main">
             <span class="kroger-row-item">${esc(r.item)}</span>
@@ -4897,6 +4911,17 @@
           <button type="button" class="ghost-btn small" data-kroger-restore="${esc(r.key)}">Add back</button>
         </div>`;
       }
+      // Same product already going in the cart from an earlier row — show it
+      // folded so the list matches what's actually added (cart dedupes by UPC).
+      if (p && p.upc && shownUpc.has(p.upc)) {
+        return `<div class="kroger-row is-excluded">
+          <div class="kroger-row-main">
+            <span class="kroger-row-item">${esc(r.item)}</span>
+            <span class="kroger-row-match">same product as above — added once</span>
+          </div>
+        </div>`;
+      }
+      if (p && p.upc) shownUpc.add(p.upc);
       if (!p) {
         return `<div class="kroger-row is-unmatched">
           <div class="kroger-row-main">

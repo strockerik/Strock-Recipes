@@ -90,7 +90,10 @@ async function krogerGet(path: string, token: string): Promise<any | null> {
 // "vermicelli, angel hair, or spaghetti pasta" or "yellow baby potatoes" were
 // returning no products. Progressive relaxation (searchProduct) handles the rest.
 function searchTerm(item: string): string {
-  let s = String(item || "").toLowerCase().replace(/\([^)]*\)/g, " ");
+  let s = String(item || "").toLowerCase()
+    // Fold accents so "tomato purée" searches "tomato puree", not "tomato pur e".
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .replace(/\([^)]*\)/g, " ");
   // Strip noise that over-constrains a store search (canned-good boilerplate,
   // percentages, packing liquid, and over-specific descriptors) FIRST — so a
   // descriptor comma like "boneless, skinless" isn't mistaken for an alternative.
@@ -98,21 +101,27 @@ function searchTerm(item: string): string {
     .replace(/\d+\s*%/g, " ")
     .replace(/\bfat[-\s]?free\b/g, " ")
     .replace(/\b(?:packed\s+)?in\s+(?:water|brine|oil|juice)\b/g, " ")
-    .replace(/\b(?:boneless|skinless|baby|fresh|freshly|organic|canned|can|condensed|chunk|sprig|cold|hot|very|large|extra)\b/g, " ");
+    // Temp words only when they qualify a liquid ("hot beef stock" -> "beef
+    // stock"); never a flavor — "hot sauce" must stay "hot sauce".
+    .replace(/\b(?:hot|cold|warm|lukewarm|chilled|iced)\s+(?=(?:beef|chicken|vegetable|veg|water|milk|stock|broth|cream)\b)/g, " ")
+    .replace(/\bchill?i(?:es)?\b/g, "chili") // British "chilli"/"chillies" -> chili
+    .replace(/\b(?:boneless|skinless|baby|fresh|freshly|organic|canned|can|condensed|chunk|sprig|large|extra)\b/g, " ");
   s = s.replace(/[^a-z0-9, ]/g, " ").replace(/\s+/g, " ").replace(/^[\s,]+/, "").trim();
   // Then take the first of an "A, B, or C" / "X or Y" alternative list.
   s = s.split(/\s*,\s*|\s+or\s+/)[0];
   return s.replace(/,/g, " ").replace(/\s+/g, " ").trim();
 }
 
-// A guard against absurd matches: the picked product's description must share at
-// least one meaningful word (>=4 chars) with the search term. Kills "Grand
-// Marnier" -> "Garnier hair spray" (zero overlap) while passing normal matches.
+// A guard against absurd matches: the picked product's description must share a
+// meaningful word (>=4 chars) with the search term. Matching is bidirectional
+// substring so store-spelling variants still pass — "cornstarch" <-> "Corn
+// Starch", "mayonnaise" <-> "Mayo" — while zero-overlap junk is killed ("Grand
+// Marnier" -> "Garnier hair spray").
 function relevantMatch(term: string, description: string): boolean {
-  const words = term.split(" ").filter((w) => w.length >= 4);
-  if (!words.length) return true; // nothing distinctive to check
-  const d = String(description || "").toLowerCase();
-  return words.some((w) => d.includes(w));
+  const t = term.split(" ").filter((w) => w.length >= 4);
+  if (!t.length) return true; // nothing distinctive to check
+  const d = String(description || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4);
+  return t.some((tw) => d.some((dw) => dw.includes(tw) || tw.includes(dw)));
 }
 
 // Search products for a term, relaxing on a miss: if the full term returns
