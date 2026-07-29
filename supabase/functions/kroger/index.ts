@@ -104,6 +104,11 @@ function searchTerm(item: string): string {
       && !/\b(?:cherry|grape|snacking|sun[-\s]?dried)\b/.test(rawLower)) {
     return "crushed tomatoes";
   }
+  //  - a bare "cheese" (no specific type named) defaults to shredded cheddar.
+  if (/\bcheese\b/.test(rawLower)
+      && !/\b(?:cream|cottage|feta|parmesan|parmigiano|pecorino|romano|cheddar|mozzarella|mozarella|swiss|gouda|brie|blue|goat|ricotta|provolone|american|monterey|colby|gruyere|string|nacho|queso|mascarpone|velveeta)\b/.test(rawLower)) {
+    return "shredded cheddar cheese";
+  }
   let s = rawLower
     // Fold accents so "tomato purée" searches "tomato puree", not "tomato pur e".
     .normalize("NFD").replace(/\p{Diacritic}/gu, "")
@@ -194,24 +199,38 @@ function shapeProduct(p: any): any | null {
   };
 }
 
-// When the search is for a raw cut of meat, sink obvious deli / lunchmeat /
-// jerky results so "chicken breast" picks the raw breast, not sliced lunchmeat.
-// Only kicks in for a raw-meat query that didn't itself ask for deli/lunch/etc.
+// Prefer the plainest product that matches the query: reorder candidates by a
+// "drift" penalty — how far a product strays from what the recipe asked for.
+// A word only penalizes when it's in the product but NOT in the query, so a
+// recipe that DID ask for it ("hot sauce", "shredded cheddar", "canned chicken")
+// is never penalized for it.
 const RAW_MEAT_RE = /\b(?:chicken|beef|pork|turkey|steak|sausage|ground)\b/;
-const DELI_ASKED_RE = /\b(?:deli|lunch|canned|jerky|smoked|cured|rotisserie)\b/;
-const DELI_PRODUCT_RE = /\b(?:lunch\s?meat|lunchmeat|deli|jerky|snack|rotisserie|thin\s?sliced)\b/i;
-function demoteDeli(shaped: any[], q: string): any[] {
-  if (!RAW_MEAT_RE.test(q) || DELI_ASKED_RE.test(q)) return shaped;
-  const ok = shaped.filter((p) => !DELI_PRODUCT_RE.test(p.description || ""));
-  const deli = shaped.filter((p) => DELI_PRODUCT_RE.test(p.description || ""));
-  return ok.length ? [...ok, ...deli] : shaped; // keep order otherwise
+const DELI_ASKED_RE = /\b(?:deli|lunch|jerky|smoked|cured|rotisserie)\b/;
+const DELI_WORDS = ["lunchmeat", "lunch meat", "deli", "jerky", "snack", "rotisserie", "thin sliced"];
+// Fresh produce/fruit — for these, a processed form is drift unless asked for.
+const PRODUCE_RE = /\b(?:carrot|potato|tomato|onion|lettuce|spinach|celery|pepper|cucumber|broccoli|cauliflower|zucchini|squash|mushroom|cabbage|kale|corn|apple|pear|banana|orange|lemon|lime|berry|berries|strawberr(?:y|ies)|blueberr(?:y|ies)|grape|peach|plum|mango|avocado|beet|radish|eggplant|asparagus|arugula|yam)(?:e?s)?\b/;
+const DRIFT_WORDS = ["sauce", "mix", "seasoning", "seasoned", "flavored", "blend"];
+const PRODUCE_PROC_WORDS = ["baby", "peeled", "cut", "sliced", "shredded", "snacking", "canned", "jarred", "frozen", "dried", "cheesy", "creamy", "gouda", "candied", "glazed", "marinated"];
+function driftPenalty(description: string, q: string): number {
+  const d = String(description || "").toLowerCase();
+  const hasWord = (s: string, w: string) => new RegExp(`\\b${w.replace(/ /g, "\\s+")}\\b`).test(s);
+  const words = [...DRIFT_WORDS];
+  if (PRODUCE_RE.test(q)) words.push(...PRODUCE_PROC_WORDS);
+  if (RAW_MEAT_RE.test(q) && !DELI_ASKED_RE.test(q)) words.push(...DELI_WORDS);
+  let pen = 0;
+  for (const w of words) if (hasWord(d, w) && !hasWord(q, w)) pen++;
+  return pen;
 }
 
 // Choose the default product per the user's preference. The review sheet lets
 // them change it; this is just the auto-pick for a quick ship. `q` is the term
-// searched, used only to demote category-mismatched results (raw meat vs deli).
+// searched, used to prefer the plainest matching product.
 function pickDefault(products: any[], pref: string, q = ""): any | null {
-  const shaped = demoteDeli(products.map(shapeProduct).filter(Boolean), q);
+  // Stable sort by drift penalty so the plainest match floats to the top.
+  const shaped = products.map(shapeProduct).filter(Boolean)
+    .map((p, i) => ({ p, i, pen: driftPenalty(p.description, q) }))
+    .sort((a, b) => a.pen - b.pen || a.i - b.i)
+    .map((x) => x.p);
   if (!shaped.length) return null;
   const withPrice = shaped.filter((p) => typeof p.price === "number");
   const cheapest = () => (withPrice.length ? withPrice.slice().sort((a, b) => a.price - b.price)[0] : shaped[0]);

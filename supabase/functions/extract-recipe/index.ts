@@ -784,10 +784,15 @@ const INGREDIENT_ALIASES: [RegExp, string][] = [
   [/\bgarlic\s+cloves?\b/gi, "garlic"],
   [/\bcloves?\s+of\s+garlic\b/gi, "garlic"],
   [/\b(?:low[-\s]?moisture\s+whole[-\s]?milk|whole[-\s]?milk\s+low[-\s]?moisture)\s+mozzarella\b/gi, "low-moisture whole-milk mozzarella"],
+  [/\bparmigiano(?:[-\s]?reggiano)?\b/gi, "parmesan"],
+  [/\bparmesan\s+cheese\b/gi, "parmesan"],
 ];
+const PASTA_SHAPE_RE = /\b(?:spaghetti|bucatini|vermicelli|angel\s*hair|linguine|fettuccine|tagliatelle|pappardelle|penne|rigatoni|macaroni|fusilli|rotini|orzo|ziti|farfalle|cavatappi|cellentani|lasagn[ae]|noodles?)\b/i;
 function canonicalizeItem(name: string): string {
   // Drop typographic double-quotes; slash between letters only (keep fractions).
   let s = String(name || "").replace(/["“”]/g, "").replace(/([a-z])\/([a-z])/gi, "$1 $2");
+  // A flexible pasta line ("bucatini (or any pasta)") folds to plain "pasta".
+  if (/\bor\b/i.test(s) && (/\bpasta\b/i.test(s) || PASTA_SHAPE_RE.test(s))) return "pasta";
   for (const [re, to] of INGREDIENT_ALIASES) s = s.replace(re, to);
   return s.replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ")
     .replace(/,\s*,/g, ",").replace(/(^[\s,]+)|([\s,]+$)/g, "").trim();

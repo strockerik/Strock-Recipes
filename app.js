@@ -540,12 +540,22 @@
     [/\bcloves?\s+of\s+garlic\b/gi, "garlic"],
     // Mozzarella descriptors in either order are the same product.
     [/\b(?:low[-\s]?moisture\s+whole[-\s]?milk|whole[-\s]?milk\s+low[-\s]?moisture)\s+mozzarella\b/gi, "low-moisture whole-milk mozzarella"],
+    // Parmesan and Parmigiano(-Reggiano) are the same cheese. (Pecorino stays.)
+    [/\bparmigiano(?:[-\s]?reggiano)?\b/gi, "parmesan"],
+    [/\bparmesan\s+cheese\b/gi, "parmesan"],
   ];
+  // Long/thin pasta shapes — used only to spot a "flexible pasta" line.
+  const PASTA_SHAPE_RE = /\b(?:spaghetti|bucatini|vermicelli|angel\s*hair|linguine|fettuccine|tagliatelle|pappardelle|penne|rigatoni|macaroni|fusilli|rotini|orzo|ziti|farfalle|cavatappi|cellentani|lasagn[ae]|noodles?)\b/i;
   function canonicalizeItem(name) {
     // Drop typographic double-quotes ("“00” flour" -> "00 flour"); keep
     // apostrophes. Slash only between letters ("boneless/skinless" -> spaces);
     // leave numeric fractions intact ("1/4 to 1/3 stick").
     let s = String(name || "").replace(/["“”]/g, "").replace(/([a-z])\/([a-z])/gi, "$1 $2");
+    // A flexible pasta line ("bucatini (or any pasta)", "pasta (spaghetti or
+    // bucatini)", "vermicelli, angel hair, or spaghetti") is interchangeable —
+    // fold to plain "pasta" so those lines combine. A standalone shape with no
+    // "or" ("spaghetti") is left as-is.
+    if (/\bor\b/i.test(s) && (/\bpasta\b/i.test(s) || PASTA_SHAPE_RE.test(s))) return "pasta";
     for (const [re, to] of INGREDIENT_ALIASES) s = s.replace(re, to);
     // Tidy leftovers from dropped descriptors: normalize comma spacing, collapse
     // doubled commas, and trim stray edge commas ("chicken breast, ,", ", onion").
@@ -2099,12 +2109,20 @@
     for (const [id, { servings }] of basket) {
       const it = byId[id];
       if (!it) continue;
+      // Ingredients the recipe MAKES itself carry a component `group` label and
+      // are then used under another group by that same name (e.g. a "Dry Pancake
+      // Mix" group feeds a "dry pancake mix" ingredient). Those aren't bought —
+      // the group's real inputs (flour, sugar…) already are. Skip any ingredient
+      // whose name matches one of the recipe's group labels.
+      const groupLabels = new Set((it.ingredients || [])
+        .map((i) => i.group && normalizeItemName(i.group)).filter(Boolean));
       scaledIngredients(it, servings).forEach((ing) => {
         if (!ing.item) return;
         // A fallback option ("fatty ground pork, alternative to pancetta") isn't a
         // separate thing to buy — the primary ingredient is already on the list.
         if (/\b(?:alternative to|substitute for|instead of|in place of|as a substitute)\b/i.test(ing.item)) return;
         const nameKey = normalizeItemName(ing.item);
+        if (groupLabels.has(nameKey)) return; // made by the recipe, not bought
         // Plain tap water and a bare "liquid" placeholder ("liquid (water, beer,
         // or milk)") are never shopped — drop them (a named water like
         // "distilled"/"coconut water" normalizes to that, not bare "water").
@@ -4969,24 +4987,28 @@
   function titleCase(s) {
     return String(s || "").replace(/\b[a-z]/g, (c) => c.toUpperCase());
   }
-  // Produce you buy as a whole unit even though recipes measure it in pieces —
-  // one garlic bulb has ~10 cloves. Shown as an approximate purchase count so
-  // "8 clove + 20" becomes "≈ 3 bulbs" (you can't buy exactly 28 cloves).
-  const BULK_PRODUCE = { garlic: { per: 10, unit: "bulb" } };
-  const COUNTISH_UNIT = /^(?:|clove|cloves|ct|count|head|heads|bulb|bulbs|piece|pieces|each)$/i;
-  function bulkProduceKey(name) {
+  // Produce you buy whole even though recipes measure it in pieces — a garlic
+  // bulb has ~10 cloves, a tomato ~8 slices. Loose pieces fold into an
+  // approximate purchase count ("8 clove + 20" -> "≈ 3 bulbs"; "8 slice ripe
+  // tomato" -> "≈ 1 tomato"). `loose` matches only the piece units to convert,
+  // so a real count/weight ("2 tomatoes", "1½ cup cherry tomatoes") is left alone.
+  const PRODUCE_PACK = {
+    garlic: { loose: /^(?:|clove|cloves|ct|count|head|heads|bulb|bulbs|piece|pieces|each)$/i, per: 10, unit: "bulb", units: "bulbs" },
+    tomato: { loose: /^(?:slice|slices)$/i, per: 8, unit: "tomato", units: "tomatoes" }
+  };
+  function producePackKey(name) {
     const n = String(name || "").toLowerCase();
-    return Object.keys(BULK_PRODUCE).find((k) => new RegExp(`\\b${k}\\b`).test(n)) || null;
+    return Object.keys(PRODUCE_PACK).find((k) => new RegExp(`\\b${k}\\b`).test(n)) || null;
   }
   // Sum the aggregated amounts for a folded product group into a shopper-facing
   // string. Bulk produce is converted to purchase units; otherwise amounts in the
   // same unit sum and different units join with " + " ("5 ct + 1 ½ cup"). Empty
   // when nothing has a quantity.
   function krogerQtyStr(rows, name) {
-    const bulk = BULK_PRODUCE[bulkProduceKey(name)];
-    if (bulk) {
-      const cloves = rows.reduce((s, r) => s + (r.amount != null && COUNTISH_UNIT.test(r.unit || "") ? r.amount : 0), 0);
-      if (cloves > 0) { const n = Math.ceil(cloves / bulk.per); return `≈ ${n} ${bulk.unit}${n === 1 ? "" : "s"}`; }
+    const pack = PRODUCE_PACK[producePackKey(name)];
+    if (pack) {
+      const pieces = rows.reduce((s, r) => s + (r.amount != null && pack.loose.test(r.unit || "") ? r.amount : 0), 0);
+      if (pieces > 0) { const n = Math.ceil(pieces / pack.per); return `≈ ${n} ${n === 1 ? pack.unit : pack.units}`; }
     }
     const byUnit = new Map();
     rows.forEach((r) => {
