@@ -421,6 +421,9 @@
     if (VOLUME_TO_ML[u] != null) {
       return { amount: amount == null ? null : amount * VOLUME_TO_ML[u], family: "volume", unit: null };
     }
+    // A garlic "clove" is a loose count — treat it as a bare count so "8 clove
+    // garlic" and "8 garlic cloves" land on the same line (you buy bulbs anyway).
+    if (u === "clove" || u === "cloves") return { amount, family: null, unit: null };
     return { amount, family: null, unit: UNIT_SYNONYMS[u] || u };
   }
 
@@ -531,11 +534,18 @@
     [/\bscallions?\b/gi, "green onion"],
     // Pasta wording: "spaghetti pasta" is just spaghetti.
     [/\bspaghetti\s+pasta\b/gi, "spaghetti"],
+    // Garlic is bought by the bulb — "garlic cloves" / "cloves of garlic" is just
+    // garlic (the clove *unit* is normalized to a count in canonicalQuantity).
+    [/\bgarlic\s+cloves?\b/gi, "garlic"],
+    [/\bcloves?\s+of\s+garlic\b/gi, "garlic"],
+    // Mozzarella descriptors in either order are the same product.
+    [/\b(?:low[-\s]?moisture\s+whole[-\s]?milk|whole[-\s]?milk\s+low[-\s]?moisture)\s+mozzarella\b/gi, "low-moisture whole-milk mozzarella"],
   ];
   function canonicalizeItem(name) {
-    // Slash only between letters ("boneless/skinless" -> spaces); leave numeric
-    // fractions intact ("1/4 to 1/3 stick").
-    let s = String(name || "").replace(/([a-z])\/([a-z])/gi, "$1 $2");
+    // Drop typographic double-quotes ("“00” flour" -> "00 flour"); keep
+    // apostrophes. Slash only between letters ("boneless/skinless" -> spaces);
+    // leave numeric fractions intact ("1/4 to 1/3 stick").
+    let s = String(name || "").replace(/["“”]/g, "").replace(/([a-z])\/([a-z])/gi, "$1 $2");
     for (const [re, to] of INGREDIENT_ALIASES) s = s.replace(re, to);
     // Tidy leftovers from dropped descriptors: normalize comma spacing, collapse
     // doubled commas, and trim stray edge commas ("chicken breast, ,", ", onion").

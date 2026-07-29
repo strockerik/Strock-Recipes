@@ -781,9 +781,13 @@ const INGREDIENT_ALIASES: [RegExp, string][] = [
   [/(?<!,\s)\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b/gi, "milk"],
   [/\bscallions?\b/gi, "green onion"],
   [/\bspaghetti\s+pasta\b/gi, "spaghetti"],
+  [/\bgarlic\s+cloves?\b/gi, "garlic"],
+  [/\bcloves?\s+of\s+garlic\b/gi, "garlic"],
+  [/\b(?:low[-\s]?moisture\s+whole[-\s]?milk|whole[-\s]?milk\s+low[-\s]?moisture)\s+mozzarella\b/gi, "low-moisture whole-milk mozzarella"],
 ];
 function canonicalizeItem(name: string): string {
-  let s = String(name || "").replace(/([a-z])\/([a-z])/gi, "$1 $2"); // slash between letters only
+  // Drop typographic double-quotes; slash between letters only (keep fractions).
+  let s = String(name || "").replace(/["“”]/g, "").replace(/([a-z])\/([a-z])/gi, "$1 $2");
   for (const [re, to] of INGREDIENT_ALIASES) s = s.replace(re, to);
   return s.replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ")
     .replace(/,\s*,/g, ",").replace(/(^[\s,]+)|([\s,]+$)/g, "").trim();
