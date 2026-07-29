@@ -760,7 +760,33 @@ async function runClaude(model: string, userContent: unknown, noRecipeMessage: s
   if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
     return { error: noRecipeMessage };
   }
+  // Save ingredient names in canonical, store-consistent form so grocery lists and
+  // King Soopers matching "just work" — same table as app.js's canonicalizeItem.
+  for (const ing of recipe.ingredients) {
+    if (ing && typeof ing.item === "string") ing.item = canonicalizeItem(ing.item);
+  }
   return { recipe };
+}
+
+// ---- Generalized ingredient synonym database --------------------------------
+// MIRROR of app.js INGREDIENT_ALIASES (that file is the source of truth). Keep the
+// two in sync: "worded differently, same store product" folds applied to an item
+// name so imports save canonical names.
+const INGREDIENT_ALIASES: [RegExp, string][] = [
+  [/\b(?:boneless|skinless)\b/gi, " "],
+  [/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/gi, "breast"],
+  [/\bchicken\s+breasts\b/gi, "chicken breast"],
+  [/\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b/gi, "instant yeast"],
+  [/\b(?:(?:yellow|red|white|sweet|spanish|vidalia|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
+  [/\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b/gi, "milk"],
+  [/\bscallions?\b/gi, "green onion"],
+  [/\bspaghetti\s+pasta\b/gi, "spaghetti"],
+];
+function canonicalizeItem(name: string): string {
+  let s = String(name || "").replace(/\//g, " ");
+  for (const [re, to] of INGREDIENT_ALIASES) s = s.replace(re, to);
+  return s.replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ")
+    .replace(/,\s*,/g, ",").replace(/(^[\s,]+)|([\s,]+$)/g, "").trim();
 }
 
 // Fire-and-forget observability: one row per operation via the log_ai_call RPC.

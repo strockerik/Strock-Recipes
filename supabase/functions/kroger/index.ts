@@ -90,7 +90,21 @@ async function krogerGet(path: string, token: string): Promise<any | null> {
 // "vermicelli, angel hair, or spaghetti pasta" or "yellow baby potatoes" were
 // returning no products. Progressive relaxation (searchProduct) handles the rest.
 function searchTerm(item: string): string {
-  let s = String(item || "").toLowerCase()
+  const rawLower = String(item || "").toLowerCase();
+  // Store-form hints, checked on the RAW line (before parentheticals/adjectives
+  // are stripped) so we can buy the form a recipe actually means:
+  //  - baking chocolate is chips, not a candy bar;
+  //  - bare "tomatoes for sauce/pizza" is canned crushed tomatoes, not fresh.
+  if (/\bchocolate\b/.test(rawLower) && !/\b(?:chips?|bar|bars|candy|cocoa|syrup|milk|hot)\b/.test(rawLower)) {
+    const kind = rawLower.match(/\b(dark|semi[-\s]?sweet|bittersweet|white)\b/);
+    return `${kind ? kind[1].replace(/[-\s]/g, "") + " " : ""}chocolate chips`.trim();
+  }
+  if (/\btomato(?:es)?\b/.test(rawLower) && /\bfor (?:the )?sauce\b|\bfor pizza\b/.test(rawLower)
+      && !/\btomato\s+(?:paste|puree|sauce)\b/.test(rawLower)
+      && !/\b(?:cherry|grape|snacking|sun[-\s]?dried)\b/.test(rawLower)) {
+    return "crushed tomatoes";
+  }
+  let s = rawLower
     // Fold accents so "tomato purée" searches "tomato puree", not "tomato pur e".
     .normalize("NFD").replace(/\p{Diacritic}/gu, "")
     .replace(/\([^)]*\)/g, " ");

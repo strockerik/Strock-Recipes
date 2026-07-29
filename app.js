@@ -504,16 +504,50 @@
     return PANTRY_STAPLE_RE.test(n);
   }
 
+  // ---- Generalized ingredient synonym database ----------------------------
+  // One shared table of "worded differently, same store product" so the grocery
+  // combine, the King Soopers search, and extract-recipe (on import) all land on
+  // the same canonical name. Ordered [pattern, replacement]; applied in sequence
+  // to a plain ingredient name, case-insensitively. SOURCE OF TRUTH — mirror any
+  // change into supabase/functions/extract-recipe/index.ts (INGREDIENT_ALIASES).
+  const INGREDIENT_ALIASES = [
+    // Chicken: the cut is the product. Drop butcher descriptors; fold a flexible
+    // "breast or thigh" to breast (the common default); singularize.
+    [/\b(?:boneless|skinless)\b/gi, " "],
+    [/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/gi, "breast"],
+    [/\bchicken\s+breasts\b/gi, "chicken breast"],
+    // Yeast: instant / rapid-rise / bread-machine are one product (active-dry and
+    // fresh yeast are genuinely different and are left alone).
+    [/\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b/gi, "instant yeast"],
+    // Onion: colour/size/prep adjectives are the same yellow onion (but leave
+    // "green onion" and "onion powder" — different products — untouched).
+    [/\b(?:(?:yellow|red|white|sweet|spanish|vidalia|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
+    // Milk: fat-content / temperature phrasings are one carton (nut milks keep
+    // their qualifier — "almond milk" stays distinct).
+    [/\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b/gi, "milk"],
+    // Scallion == green onion.
+    [/\bscallions?\b/gi, "green onion"],
+    // Pasta wording: "spaghetti pasta" is just spaghetti.
+    [/\bspaghetti\s+pasta\b/gi, "spaghetti"],
+  ];
+  function canonicalizeItem(name) {
+    let s = String(name || "").replace(/\//g, " "); // "boneless/skinless" -> spaces
+    for (const [re, to] of INGREDIENT_ALIASES) s = s.replace(re, to);
+    // Tidy leftovers from dropped descriptors: normalize comma spacing, collapse
+    // doubled commas, and trim stray edge commas ("chicken breast, ,", ", onion").
+    return s.replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ")
+      .replace(/,\s*,/g, ",").replace(/(^[\s,]+)|([\s,]+$)/g, "").trim();
+  }
+
   // Normalize an ingredient name for COMBINING and CATEGORIZING only — the name
   // shown in the list keeps its original wording. Strips prep notes and folds
   // common descriptor synonyms so e.g. "Salt and Black Pepper, to taste" and
   // "salt and pepper", or "guanciale, diced" and "guanciale", land on one line.
-  const PREP_WORDS = "to taste|diced|finely diced|roughly diced|chopped|finely chopped|roughly chopped|minced|finely minced|grated|finely grated|freshly grated|shredded|sliced|thinly sliced|finely sliced|cubed|crushed|melted|softened|room temperature|at room temperature|very cold|sifted|divided|drained|rinsed|optional|peeled|seeded|deseeded|halved|quartered|crumbled|beaten|packed|cooked|uncooked|toasted|warmed|chilled";
+  const PREP_WORDS ="to taste|diced|finely diced|roughly diced|chopped|finely chopped|roughly chopped|minced|finely minced|grated|finely grated|freshly grated|shredded|sliced|thinly sliced|finely sliced|cubed|crushed|melted|softened|room temperature|at room temperature|very cold|sifted|divided|drained|rinsed|optional|peeled|seeded|deseeded|halved|quartered|crumbled|beaten|packed|cooked|uncooked|toasted|warmed|chilled";
   const PREP_CLAUSE_RE = new RegExp(`,\\s*(?:${PREP_WORDS}|plus more\\b.*|for\\b.*|to top\\b.*|to serve\\b.*|to garnish\\b.*)[^,]*`, "gi");
   function normalizeItemName(name) {
-    let s = String(name).toLowerCase().trim();
+    let s = canonicalizeItem(String(name)).toLowerCase().trim(); // shared synonym folds first
     s = s.replace(/\([^)]*\)/g, " ");        // drop parentheticals "(sauce)", "(⅔ cup)"
-    s = s.replace(/\//g, " ");               // "boneless/skinless", "breast/thigh" -> spaces
     s = s.split(/\s[—–-]\s/)[0];             // drop a trailing dash note ("olive oil — a splash")
     s = s.replace(PREP_CLAUSE_RE, " ");      // drop known prep clauses (keeps "boneless, skinless …")
     // Fat/milk-content qualifiers describe the same shelf product — drop a
@@ -525,7 +559,6 @@
       .replace(/\b(?:kosher|sea|maldon|flaky|fine|table)\s+salt\b/g, "salt")
       .replace(/\bextra[-\s]?virgin\s+olive oil\b/g, "olive oil")
       .replace(/\bevoo\b/g, "olive oil")
-      .replace(/\bscallions?\b/g, "green onion")
       .replace(/\bconfectioners'?\s+sugar\b/g, "powdered sugar")
       .replace(/\bgarbanzos?\b/g, "chickpea")
       // "fresh" / "freshly squeezed" is a freshness note, not a product — drop it
@@ -539,21 +572,8 @@
       // Whipping-cream variants are one product (bare "cream" left separate).
       .replace(/\b(?:heavy\s+)?whipping cream\b/g, "heavy cream")
       // Singularize common produce plurals so "carrot" and "carrots" combine.
-      .replace(/\b(carrot|onion|shallot|pepper|mushroom|scallion)s\b/g, "$1")
-      .replace(/\b(potato|tomato)es\b/g, "$1")
-      // "boneless"/"skinless" are the same cut of meat, not a different product —
-      // drop them so "chicken breast, boneless/skinless" and "boneless, skinless
-      // chicken breast" combine onto one line.
-      .replace(/\b(?:boneless|skinless)\b/g, " ")
-      // A flexible cut like "breasts or thighs" combines with a breast-only line
-      // — treat it as breast (the more common default; a thigh-only line stays
-      // thighs). Then singularize "breasts" so phrasings collapse.
-      .replace(/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/g, "breast")
-      .replace(/\bbreasts\b/g, "breast")
-      // Instant / rapid-rise / bread-machine yeast are the same product; fold
-      // them to "instant yeast" (active-dry and fresh yeast stay separate — they
-      // really are different yeasts).
-      .replace(/\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b/g, "instant yeast");
+      .replace(/\b(carrot|onion|shallot|pepper|mushroom)s\b/g, "$1")
+      .replace(/\b(potato|tomato)es\b/g, "$1");
     // Commas only separated descriptors ("boneless, skinless") — drop them so a
     // comma alone can't split two otherwise-identical items onto two lines.
     return s.replace(/,/g, " ").replace(/\s+/g, " ").trim();
@@ -566,7 +586,7 @@
   // "olive oil"). Comma clauses that aren't prep ("boneless, skinless chicken")
   // are left intact.
   function displayGroceryName(item) {
-    let s = String(item).trim();
+    let s = canonicalizeItem(String(item)); // shared synonym folds (same as combine)
     s = s.split(/\s[—–-]\s/)[0];          // drop a trailing dash note
     s = s.replace(PREP_CLAUSE_RE, "");    // drop known prep clauses
     return s.replace(/\s+/g, " ").replace(/[\s,]+$/, "").trim();
@@ -1034,7 +1054,31 @@
     // here, so adding/editing/deleting a recipe doesn't wipe the user's grocery
     // list, filters, or expanded rows. We only prune references that went stale.
     pruneStaleState();
+    reconcileBatchServings();
     refreshViews();
+  }
+
+  // One-time heal for the serving-size fix: a batch/yield recipe (e.g. "1 tart")
+  // whose basket servings was auto-defaulted to the household count is really
+  // making N tarts. Reset those to the recipe's base so the list stops showing
+  // 4× quantities. Only touches entries that look auto-defaulted (servings ===
+  // household and ≠ base), never a count the user set on purpose.
+  function reconcileBatchServings() {
+    if (!householdServings) return;
+    const fixes = [];
+    basket.forEach((entry, id) => {
+      const it = byId[id];
+      if (!it || servesPeople(it.servingsLabel)) return;
+      if (entry.servings === householdServings && householdServings !== it.baseServings) {
+        entry.servings = it.baseServings;
+        fixes.push({ recipe_id: id, servings: it.baseServings });
+      }
+    });
+    if (fixes.length && session) {
+      supabaseClient.from("grocery_basket_items")
+        .upsert(fixes, { onConflict: "user_id,recipe_id" })
+        .then(({ error }) => { if (error) console.error("batch-servings reconcile failed:", error); });
+    }
   }
 
   function clearData() {
@@ -1616,6 +1660,16 @@
       ` <button class="ghost-btn small" id="clear-tags">Clear all</button>`;
   }
 
+  // Does a recipe's servings label count *people* (so it should scale to the
+  // household), or a *batch/yield* ("tart", "batch", "pizza", "loaf", "cookies")
+  // that already feeds the household regardless of size? A blank label is treated
+  // as people, matching how plain food recipes have always behaved.
+  const PEOPLE_SERVING_RE = /\b(?:serving|servings|portion|portions|serves|person|people|drink|drinks|glass|glasses|bowl|bowls|cocktail|cocktails)\b/i;
+  function servesPeople(label) {
+    const l = (label || "").trim();
+    return !l || PEOPLE_SERVING_RE.test(l);
+  }
+
   // The chosen serving count for a recipe: the basket value if it's in the
   // grocery list, else a detail-view override, else the recipe's base. One
   // source of truth shared by the list row, the detail stepper, and grocery.
@@ -1631,7 +1685,12 @@
   // placed, the stored value is just edited via setRecipeServings (a full
   // override) — this only shapes the initial number.
   function defaultAddServings(it) {
-    return servingsByRecipe.get(it.id) ?? householdServings ?? it.baseServings;
+    if (servingsByRecipe.has(it.id)) return servingsByRecipe.get(it.id);
+    // Household scaling only makes sense when base_servings counts *people*. A
+    // batch/yield recipe ("1 tart", "1 batch", "1 pizza pan") already feeds the
+    // household — multiplying it to the household size would make N tarts.
+    if (householdServings && servesPeople(it.servingsLabel)) return householdServings;
+    return it.baseServings;
   }
 
   // Set a recipe's servings from any +/- control, keeping the grocery basket in
@@ -2028,6 +2087,9 @@
       if (!it) continue;
       scaledIngredients(it, servings).forEach((ing) => {
         if (!ing.item) return;
+        // A fallback option ("fatty ground pork, alternative to pancetta") isn't a
+        // separate thing to buy — the primary ingredient is already on the list.
+        if (/\b(?:alternative to|substitute for|instead of|in place of|as a substitute)\b/i.test(ing.item)) return;
         const nameKey = normalizeItemName(ing.item);
         // Plain tap water and a bare "liquid" placeholder ("liquid (water, beer,
         // or milk)") are never shopped — drop them (a named water like
@@ -4893,10 +4955,25 @@
   function titleCase(s) {
     return String(s || "").replace(/\b[a-z]/g, (c) => c.toUpperCase());
   }
+  // Produce you buy as a whole unit even though recipes measure it in pieces —
+  // one garlic bulb has ~10 cloves. Shown as an approximate purchase count so
+  // "8 clove + 20" becomes "≈ 3 bulbs" (you can't buy exactly 28 cloves).
+  const BULK_PRODUCE = { garlic: { per: 10, unit: "bulb" } };
+  const COUNTISH_UNIT = /^(?:|clove|cloves|ct|count|head|heads|bulb|bulbs|piece|pieces|each)$/i;
+  function bulkProduceKey(name) {
+    const n = String(name || "").toLowerCase();
+    return Object.keys(BULK_PRODUCE).find((k) => new RegExp(`\\b${k}\\b`).test(n)) || null;
+  }
   // Sum the aggregated amounts for a folded product group into a shopper-facing
-  // string. Amounts in the same unit sum; different units join with " + " (e.g.
-  // an onion needed as "5 ct + 1 ½ cup"). Empty when nothing has a quantity.
-  function krogerQtyStr(rows) {
+  // string. Bulk produce is converted to purchase units; otherwise amounts in the
+  // same unit sum and different units join with " + " ("5 ct + 1 ½ cup"). Empty
+  // when nothing has a quantity.
+  function krogerQtyStr(rows, name) {
+    const bulk = BULK_PRODUCE[bulkProduceKey(name)];
+    if (bulk) {
+      const cloves = rows.reduce((s, r) => s + (r.amount != null && COUNTISH_UNIT.test(r.unit || "") ? r.amount : 0), 0);
+      if (cloves > 0) { const n = Math.ceil(cloves / bulk.per); return `≈ ${n} ${bulk.unit}${n === 1 ? "" : "s"}`; }
+    }
     const byUnit = new Map();
     rows.forEach((r) => {
       if (r.amount == null) return;
@@ -4962,8 +5039,8 @@
       const p = g.primary.product;
       const price = typeof p.price === "number" ? `$${p.price.toFixed(2)}` : "";
       const meta = [p.size, price, p.aisle ? `Aisle ${p.aisle}` : ""].filter(Boolean).join(" · ");
-      const qty = krogerQtyStr(g.rows);
-      const head = (qty ? qty + " " : "") + titleCase(g.primary.item);
+      const qty = krogerQtyStr(g.rows, g.primary.item);
+      const head = (qty ? `(${qty}) ` : "") + titleCase(g.primary.item);
       const n = g.recipes.size;
       const sub = n ? `for ${n} recipe${n === 1 ? "" : "s"}` : "";
       return `<div class="kroger-row">
