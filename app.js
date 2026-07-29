@@ -494,7 +494,7 @@
     const n = nameLower
       .replace(/\b(?:bell|red|green|chili|chilli|sweet|cayenne|lemon|jalape\w*)\s+pepper/g, " ")
       // Specialty flours are their own product, not the "flour" staple.
-      .replace(/\b(?:almond|coconut|oat|rice|chickpea|nut|cake|bread|pastry|potato|corn|semolina|tapioca|spelt|rye)\s+flour/g, " ")
+      .replace(/\b(?:almond|coconut|oat|rice|chickpea|nut|cake|bread|pastry|potato|corn|semolina|tapioca|spelt|rye|00|high[-\s]?gluten|pizza)\s+flour/g, " ")
       // "butter" as a modifier isn't the butter staple (puff pastry, nut butters).
       .replace(/\bpuff pastry\b/g, " ")
       .replace(/\ball[-\s]?butter\b/g, " ")
@@ -513,6 +513,7 @@
   function normalizeItemName(name) {
     let s = String(name).toLowerCase().trim();
     s = s.replace(/\([^)]*\)/g, " ");        // drop parentheticals "(sauce)", "(⅔ cup)"
+    s = s.replace(/\//g, " ");               // "boneless/skinless", "breast/thigh" -> spaces
     s = s.split(/\s[—–-]\s/)[0];             // drop a trailing dash note ("olive oil — a splash")
     s = s.replace(PREP_CLAUSE_RE, " ");      // drop known prep clauses (keeps "boneless, skinless …")
     // Fat/milk-content qualifiers describe the same shelf product — drop a
@@ -540,9 +541,19 @@
       // Singularize common produce plurals so "carrot" and "carrots" combine.
       .replace(/\b(carrot|onion|shallot|pepper|mushroom|scallion)s\b/g, "$1")
       .replace(/\b(potato|tomato)es\b/g, "$1")
-      // A flexible cut like "breasts or thighs" combines with a thighs-only line
-      // — treat it as thighs (the forgiving, commonly-preferred cut).
-      .replace(/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/g, "thighs");
+      // "boneless"/"skinless" are the same cut of meat, not a different product —
+      // drop them so "chicken breast, boneless/skinless" and "boneless, skinless
+      // chicken breast" combine onto one line.
+      .replace(/\b(?:boneless|skinless)\b/g, " ")
+      // A flexible cut like "breasts or thighs" combines with a breast-only line
+      // — treat it as breast (the more common default; a thigh-only line stays
+      // thighs). Then singularize "breasts" so phrasings collapse.
+      .replace(/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/g, "breast")
+      .replace(/\bbreasts\b/g, "breast")
+      // Instant / rapid-rise / bread-machine yeast are the same product; fold
+      // them to "instant yeast" (active-dry and fresh yeast stay separate — they
+      // really are different yeasts).
+      .replace(/\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b/g, "instant yeast");
     // Commas only separated descriptors ("boneless, skinless") — drop them so a
     // comma alone can't split two otherwise-identical items onto two lines.
     return s.replace(/,/g, " ").replace(/\s+/g, " ").trim();
@@ -2028,15 +2039,16 @@
         const existing = map.get(key);
         if (existing) {
           if (amount != null) existing.amount = (existing.amount || 0) + amount;
+          if (it.name) existing.recipes.add(it.name);
         } else {
-          map.set(key, { key, item: displayGroceryName(ing.item), family, unit, amount });
+          map.set(key, { key, item: displayGroceryName(ing.item), family, unit, amount, recipes: new Set(it.name ? [it.name] : []) });
         }
       });
     }
     return [...map.values()]
       .map((entry) => {
         const { amount, unit } = shoppableQuantity(entry.amount, entry.family, entry.unit);
-        return { key: entry.key, item: entry.item, amount, unit };
+        return { key: entry.key, item: entry.item, amount, unit, recipes: [...entry.recipes] };
       })
       .sort((a, b) => a.item.localeCompare(b.item));
   }
@@ -2044,7 +2056,7 @@
   // Manual (non-recipe) items, shaped to slot into the same category buckets
   // and checked-off tracking as recipe-derived items.
   function manualAsGroceryItems() {
-    return manualGroceryItems.map((m) => ({ key: m.key, item: m.name, amount: null, unit: null, manual: true }));
+    return manualGroceryItems.map((m) => ({ key: m.key, item: m.name, amount: null, unit: null, manual: true, recipes: [] }));
   }
   function allGroceryItems() {
     return [...combinedGroceryItems(), ...manualAsGroceryItems()];
@@ -2620,6 +2632,11 @@
   // pantry form (rule: fresh = buy, dried/ground = pantry), so it should match
   // the base spice ("dried oregano" ↔ "oregano").
   const PANTRY_FORM_RE = /\b(?:powder|flakes?|granulated|dehydrated|paste)\b/;
+  // Fresh produce is perishable — always buy it, even if a generic "garlic" or
+  // "potato" sits in the inventory. "garlic cloves"/"floury potatoes" -> cart,
+  // but a PANTRY_FORM word ("garlic powder") means the shelf-stable version, so
+  // that still counts as pantry.
+  const FRESH_PRODUCE_RE = /\b(?:garlic|potato|potatoes|onion|shallot|scallion|leek|ginger|celery|carrot)\b/;
   // Non-distinguishing descriptors — the base item with these is the same shelf
   // product, so strip them before comparing words. (fresh is handled earlier as
   // a hard "not pantry" signal, so it never reaches here.)
@@ -2665,6 +2682,7 @@
       const norm = normalizeItemName(raw);
       if (!norm || isPantryStaple(norm)) return; // assumed on hand — skip both lists
       if (/\bfresh\b/i.test(raw)) { need.push(displayGroceryName(raw)); return; } // fresh = never pantry
+      if (FRESH_PRODUCE_RE.test(norm) && !PANTRY_FORM_RE.test(norm)) { need.push(displayGroceryName(raw)); return; } // fresh produce = buy
       const matched = stockKeys.some((k) => pantryNameMatch(norm, k));
       (matched ? have : need).push(displayGroceryName(raw));
     });
@@ -2682,6 +2700,9 @@
     if (/\bfresh\b/i.test(String(itemName))) return false;
     const norm = normalizeItemName(flattenText(itemName));
     if (!norm || isPantryStaple(norm)) return false;
+    // Fresh produce is perishable — buy it even if a generic "garlic"/"potato" is
+    // stocked. A PANTRY_FORM word ("garlic powder") means the shelf-stable form.
+    if (FRESH_PRODUCE_RE.test(norm) && !PANTRY_FORM_RE.test(norm)) return false;
     return inventory
       .filter((i) => i.status === "in")
       .map((i) => normalizeItemName(i.section === "bar" ? i.category : (i.name || i.category)))
@@ -4865,7 +4886,27 @@
   // unmatched items keep a King Soopers search deep-link (no UPC to add).
   const krogerSearchLink = (item) => `https://www.kingsoopers.com/search?query=${encodeURIComponent(item)}`;
   let krogerLastResults = []; // last search results, source for the cart push
+  let krogerItemMeta = new Map(); // key -> { amount, unit, recipes } from the last search
   const krogerExcluded = new Set(); // result keys the user removed / already has in pantry
+  // Word-capitalize a grocery name for the review header ("ground beef" ->
+  // "Ground Beef"); the store's own product description is left untouched.
+  function titleCase(s) {
+    return String(s || "").replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  }
+  // Sum the aggregated amounts for a folded product group into a shopper-facing
+  // string. Amounts in the same unit sum; different units join with " + " (e.g.
+  // an onion needed as "5 ct + 1 ½ cup"). Empty when nothing has a quantity.
+  function krogerQtyStr(rows) {
+    const byUnit = new Map();
+    rows.forEach((r) => {
+      if (r.amount == null) return;
+      const u = r.unit || "";
+      byUnit.set(u, (byUnit.get(u) || 0) + r.amount);
+    });
+    return [...byUnit.entries()]
+      .map(([u, amt]) => fmtAmount(amt) + (u ? " " + displayUnit(u) : ""))
+      .join(" + ");
+  }
   const krogerSendCartBtn = $("#kroger-send-cart");
   const krogerOpenStore = $("#kroger-open-store");
   function krogerCartItems() {
@@ -4887,73 +4928,99 @@
     krogerReviewSummary.textContent = `Matched ${matched} of ${results.length}.` +
       (skipped ? ` Skipped ${skipped} you keep on hand.` : "") +
       (sendable ? ` Sending ${sendable} to your King Soopers cart — check out in the app.` : ` Nothing to send.`);
-    const shownUpc = new Set();   // fold matched rows that resolve to the same product
-    const shownSkip = new Set();  // fold identical staple/pantry rows
-    krogerReviewList.innerHTML = results.map((r) => {
-      const p = r.product;
-      // Excluded (staple / already-stocked / removed) — show the reason and an
-      // Add-back, regardless of whether it matched a product.
+
+    // Partition into three groups. Cart rows are folded by product (UPC): lines
+    // that resolve to the same store item become one row with the summed quantity
+    // and the union of the recipes they came from. Staple/pantry rows fold by
+    // name; user-removed rows join the skipped group. Every fold carries all its
+    // source keys so Remove / Add-back act on the whole group.
+    const cartGroups = new Map();    // upc -> { primary, keys, rows, recipes:Set }
+    const unmatched = [];            // matched? no. still-included.
+    const skippedGroups = new Map(); // "reason|name" -> { row, keys }
+    const removedEntries = [];       // user-removed rows
+    results.forEach((r) => {
       if (krogerExcluded.has(r.key)) {
-        const reason = r.skipReason === "staple" ? "staple — keep on hand"
-          : r.skipReason === "pantry" ? "already in your pantry" : "removed";
-        // Collapse repeat staple/pantry lines for the same item (e.g. "salt"
-        // from three recipes) into one row — they're skipped either way.
         if (r.skipReason) {
           const sk = `${r.skipReason}|${normalizeItemName(r.item)}`;
-          if (shownSkip.has(sk)) return "";
-          shownSkip.add(sk);
+          const g = skippedGroups.get(sk);
+          if (g) g.keys.push(r.key); else skippedGroups.set(sk, { row: r, keys: [r.key] });
+        } else {
+          removedEntries.push({ row: r, keys: [r.key] });
         }
-        return `<div class="kroger-row is-excluded">
-          <div class="kroger-row-main">
-            <span class="kroger-row-item">${esc(r.item)}</span>
-            <span class="kroger-row-match">${esc(reason)}</span>
-          </div>
-          <button type="button" class="ghost-btn small" data-kroger-restore="${esc(r.key)}">Add back</button>
-        </div>`;
+        return;
       }
-      // Same product already going in the cart from an earlier row — show it
-      // folded so the list matches what's actually added (cart dedupes by UPC).
-      if (p && p.upc && shownUpc.has(p.upc)) {
-        return `<div class="kroger-row is-excluded">
-          <div class="kroger-row-main">
-            <span class="kroger-row-item">${esc(r.item)}</span>
-            <span class="kroger-row-match">same product as above — added once</span>
-          </div>
-        </div>`;
-      }
-      if (p && p.upc) shownUpc.add(p.upc);
-      if (!p) {
-        return `<div class="kroger-row is-unmatched">
-          <div class="kroger-row-main">
-            <span class="kroger-row-item">${esc(r.item)}</span>
-            <span class="kroger-row-match">No match — search the store</span>
-          </div>
-          <a class="ghost-btn small" href="${esc(krogerSearchLink(r.item))}" target="_blank" rel="noopener noreferrer">Search</a>
-        </div>`;
-      }
+      if (!r.product) { unmatched.push(r); return; }
+      const upc = r.product.upc || r.key;
+      let g = cartGroups.get(upc);
+      if (!g) { g = { primary: r, keys: [], rows: [], recipes: new Set() }; cartGroups.set(upc, g); }
+      g.keys.push(r.key); g.rows.push(r);
+      (r.recipes || []).forEach((n) => g.recipes.add(n));
+    });
+
+    const sectionHead = (label) => `<div class="kroger-section">${esc(label)}</div>`;
+    const cartHtml = (g) => {
+      const p = g.primary.product;
       const price = typeof p.price === "number" ? `$${p.price.toFixed(2)}` : "";
       const meta = [p.size, price, p.aisle ? `Aisle ${p.aisle}` : ""].filter(Boolean).join(" · ");
+      const qty = krogerQtyStr(g.rows);
+      const head = (qty ? qty + " " : "") + titleCase(g.primary.item);
+      const n = g.recipes.size;
+      const sub = n ? `for ${n} recipe${n === 1 ? "" : "s"}` : "";
       return `<div class="kroger-row">
         <div class="kroger-row-main">
-          <span class="kroger-row-item">${esc(r.item)}</span>
+          <span class="kroger-row-item">${esc(head)}</span>
+          ${sub ? `<span class="kroger-row-recipes">${esc(sub)}</span>` : ""}
           <span class="kroger-row-match">${esc(p.description || "")}${meta ? ` — ${esc(meta)}` : ""}</span>
         </div>
         <span class="kroger-row-tag">✓ in cart</span>
-        <button type="button" class="kroger-row-x" data-kroger-remove="${esc(r.key)}" aria-label="Remove ${esc(r.item)}">✕</button>
+        <button type="button" class="kroger-row-x" data-kroger-remove="${esc(g.keys.join(" "))}" aria-label="Remove ${esc(g.primary.item)}">✕</button>
       </div>`;
-    }).join("");
+    };
+    const unmatchedHtml = (r) => `<div class="kroger-row is-unmatched">
+        <div class="kroger-row-main">
+          <span class="kroger-row-item">${esc(titleCase(r.item))}</span>
+          <span class="kroger-row-match">No match — search the store</span>
+        </div>
+        <a class="ghost-btn small" href="${esc(krogerSearchLink(r.item))}" target="_blank" rel="noopener noreferrer">Search</a>
+      </div>`;
+    const skippedHtml = (entry) => {
+      const r = entry.row;
+      const reason = r.skipReason === "staple" ? "staple — keep on hand"
+        : r.skipReason === "pantry" ? "already in your pantry" : "removed";
+      return `<div class="kroger-row is-excluded">
+        <div class="kroger-row-main">
+          <span class="kroger-row-item">${esc(r.item)}</span>
+          <span class="kroger-row-match">${esc(reason)}</span>
+        </div>
+        <button type="button" class="ghost-btn small" data-kroger-restore="${esc(entry.keys.join(" "))}">Add back</button>
+      </div>`;
+    };
+
+    const byItem = (a, b) => (a.primary ? a.primary.item : a.item || a.row.item)
+      .localeCompare(b.primary ? b.primary.item : b.item || b.row.item);
+    const parts = [];
+    const cartArr = [...cartGroups.values()].sort(byItem);
+    if (cartArr.length) { parts.push(sectionHead("Going to your cart")); cartArr.forEach((g) => parts.push(cartHtml(g))); }
+    const unArr = unmatched.slice().sort((a, b) => a.item.localeCompare(b.item));
+    if (unArr.length) { parts.push(sectionHead("Couldn’t match — search the store")); unArr.forEach((r) => parts.push(unmatchedHtml(r))); }
+    const skipArr = [...skippedGroups.values(), ...removedEntries].sort((a, b) => a.row.item.localeCompare(b.row.item));
+    if (skipArr.length) { parts.push(sectionHead("Already stocked / skipped")); skipArr.forEach((e) => parts.push(skippedHtml(e))); }
+    krogerReviewList.innerHTML = parts.join("");
+
     krogerSendCartBtn.hidden = sendable === 0;
     krogerSendCartBtn.textContent = `🛒 Send ${sendable} item${sendable === 1 ? "" : "s"} to cart`;
     krogerSendCartBtn.disabled = false;
     krogerOpenStore.hidden = true;
     krogerDownloadBtn.hidden = results.length === 0;
   }
-  // Remove an item before sending (or add a removed/pantry item back).
+  // Remove an item before sending (or add a removed/pantry item back). Buttons
+  // carry every source key in a folded group (space-separated) so one click acts
+  // on the whole merged product.
   krogerReviewList.addEventListener("click", (e) => {
     const rm = e.target.closest("[data-kroger-remove]");
     const rs = e.target.closest("[data-kroger-restore]");
-    if (rm) { krogerExcluded.add(rm.dataset.krogerRemove); renderKrogerReview(krogerLastResults); }
-    else if (rs) { krogerExcluded.delete(rs.dataset.krogerRestore); renderKrogerReview(krogerLastResults); }
+    if (rm) { rm.dataset.krogerRemove.split(" ").forEach((k) => krogerExcluded.add(k)); renderKrogerReview(krogerLastResults); }
+    else if (rs) { rs.dataset.krogerRestore.split(" ").forEach((k) => krogerExcluded.delete(k)); renderKrogerReview(krogerLastResults); }
   });
 
   // A plain-text match report — the grocery line, the term actually searched,
@@ -5076,8 +5143,11 @@
   krogerSendCartBtn.addEventListener("click", () => sendKrogerCart(krogerCartItems()));
   $("#send-to-kingsoopers").addEventListener("click", async () => {
     if (!session) { toast("Sign in to send your list."); return; }
-    const items = allGroceryItems().filter((it) => !checkedGroceryItems.has(it.key))
-      .map((it) => ({ key: it.key, item: it.item, amount: it.amount, unit: it.unit }));
+    const stillNeeded = allGroceryItems().filter((it) => !checkedGroceryItems.has(it.key));
+    // Keep amount/unit/recipes client-side (keyed by item key) to show quantity +
+    // "for N recipes" in the review; the function only needs key + item to search.
+    krogerItemMeta = new Map(stillNeeded.map((it) => [it.key, { amount: it.amount, unit: it.unit, recipes: it.recipes || [] }]));
+    const items = stillNeeded.map((it) => ({ key: it.key, item: it.item, amount: it.amount, unit: it.unit }));
     if (!items.length) { toast("Your grocery list is empty."); return; }
     if (!krogerPrefs.locationId) {
       toast("Pick your King Soopers store in Account first.");
@@ -5112,6 +5182,8 @@
     const searchResults = Array.isArray(data.results) ? data.results : [];
     krogerExcluded.clear();
     searchResults.forEach((r) => {
+      const meta = krogerItemMeta.get(r.key) || {};
+      r.amount = meta.amount; r.unit = meta.unit; r.recipes = meta.recipes || [];
       r.skipReason = krogerSkipReason(r.item); // "staple" | "pantry" | null
       if (r.skipReason) krogerExcluded.add(r.key);
     });

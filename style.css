@@ -1949,7 +1949,11 @@ button:focus-visible, input:focus-visible {
 .kroger-row.is-unmatched { border-style: dashed; }
 .kroger-row-main { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
 .kroger-row-item { font-weight: 600; font-size: 0.9rem; }
+.kroger-row-recipes { font-size: 0.75rem; color: var(--faint); font-style: italic; }
 .kroger-row-match { font-size: 0.8rem; color: var(--faint); }
+.kroger-section { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--faint); margin: 12px 2px 2px; }
+.kroger-section:first-child { margin-top: 2px; }
 .kroger-row .ghost-btn { flex: 0 0 auto; }
 .kroger-row-tag { flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.7rem;
   color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 3px 9px; white-space: nowrap; }

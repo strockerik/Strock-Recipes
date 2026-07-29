@@ -105,7 +105,13 @@ function searchTerm(item: string): string {
     // stock"); never a flavor — "hot sauce" must stay "hot sauce".
     .replace(/\b(?:hot|cold|warm|lukewarm|chilled|iced)\s+(?=(?:beef|chicken|vegetable|veg|water|milk|stock|broth|cream)\b)/g, " ")
     .replace(/\bchill?i(?:es)?\b/g, "chili") // British "chilli"/"chillies" -> chili
+    .replace(/\bfloury\b/g, " ")             // "floury potatoes" -> potatoes
     .replace(/\b(?:boneless|skinless|baby|fresh|freshly|organic|canned|can|condensed|chunk|sprig|large|extra)\b/g, " ");
+  // "zest" means you buy the whole fruit (one lemon gives juice AND zest), not a
+  // bottled juice — reduce "lemon juice and zest" to the fruit so it matches a
+  // real lemon in produce, not Key West lime juice.
+  const zest = s.match(/\b(lemon|lime|orange|grapefruit)\b(?=[\s\S]*\bzest\b)/);
+  if (zest) return zest[1];
   s = s.replace(/[^a-z0-9, ]/g, " ").replace(/\s+/g, " ").replace(/^[\s,]+/, "").trim();
   // Then take the first of an "A, B, or C" / "X or Y" alternative list.
   s = s.split(/\s*,\s*|\s+or\s+/)[0];
@@ -138,7 +144,7 @@ async function searchProduct(term: string, locationId: string, token: string, pr
     const res = await krogerGet(`/products?filter.term=${encodeURIComponent(q)}&filter.locationId=${encodeURIComponent(locationId)}&filter.limit=10`, token);
     if (res?._unauth) return { product: null, unauth: true };
     if (res && Array.isArray(res.data) && res.data.length) {
-      const product = pickDefault(res.data, pref);
+      const product = pickDefault(res.data, pref, q);
       if (product && relevantMatch(q, product.description)) return { product };
     }
   }
@@ -174,10 +180,24 @@ function shapeProduct(p: any): any | null {
   };
 }
 
+// When the search is for a raw cut of meat, sink obvious deli / lunchmeat /
+// jerky results so "chicken breast" picks the raw breast, not sliced lunchmeat.
+// Only kicks in for a raw-meat query that didn't itself ask for deli/lunch/etc.
+const RAW_MEAT_RE = /\b(?:chicken|beef|pork|turkey|steak|sausage|ground)\b/;
+const DELI_ASKED_RE = /\b(?:deli|lunch|canned|jerky|smoked|cured|rotisserie)\b/;
+const DELI_PRODUCT_RE = /\b(?:lunch\s?meat|lunchmeat|deli|jerky|snack|rotisserie|thin\s?sliced)\b/i;
+function demoteDeli(shaped: any[], q: string): any[] {
+  if (!RAW_MEAT_RE.test(q) || DELI_ASKED_RE.test(q)) return shaped;
+  const ok = shaped.filter((p) => !DELI_PRODUCT_RE.test(p.description || ""));
+  const deli = shaped.filter((p) => DELI_PRODUCT_RE.test(p.description || ""));
+  return ok.length ? [...ok, ...deli] : shaped; // keep order otherwise
+}
+
 // Choose the default product per the user's preference. The review sheet lets
-// them change it; this is just the auto-pick for a quick ship.
-function pickDefault(products: any[], pref: string): any | null {
-  const shaped = products.map(shapeProduct).filter(Boolean);
+// them change it; this is just the auto-pick for a quick ship. `q` is the term
+// searched, used only to demote category-mismatched results (raw meat vs deli).
+function pickDefault(products: any[], pref: string, q = ""): any | null {
+  const shaped = demoteDeli(products.map(shapeProduct).filter(Boolean), q);
   if (!shaped.length) return null;
   const withPrice = shaped.filter((p) => typeof p.price === "number");
   const cheapest = () => (withPrice.length ? withPrice.slice().sort((a, b) => a.price - b.price)[0] : shaped[0]);
