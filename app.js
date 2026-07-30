@@ -593,6 +593,9 @@
       .replace(/\bcloves\b/g, "clove")
       // You buy eggs for yolks/whites — so they combine with an "eggs" line.
       .replace(/\begg\s+(?:yolks?|whites?)\b/g, "eggs")
+      // Singularize "eggs" so "1 egg" and "12 eggs" land on one line (leaves
+      // "eggplant"/"egg noodles" alone — those have no standalone "eggs").
+      .replace(/\beggs\b/g, "egg")
       // Whipping-cream variants are one product (bare "cream" left separate).
       .replace(/\b(?:heavy\s+)?whipping cream\b/g, "heavy cream")
       // Singularize common produce plurals so "carrot" and "carrots" combine.

@@ -69,6 +69,7 @@ def normalizeItemName(name):
     s = re.sub(r"\bfresh\b", " ", s)
     s = re.sub(r"\bcloves\b", "clove", s)
     s = re.sub(r"\begg\s+(?:yolks?|whites?)\b", "eggs", s)
+    s = re.sub(r"\beggs\b", "egg", s)
     s = re.sub(r"\b(?:heavy\s+)?whipping cream\b", "heavy cream", s)
     s = re.sub(r"\b(carrot|onion|shallot|pepper|mushroom)s\b", r"\1", s)
     s = re.sub(r"\b(potato|tomato)es\b", r"\1", s)
@@ -185,6 +186,12 @@ def main():
     chk("garlic combine key match",
         normalizeItemName("garlic") == normalizeItemName("garlic cloves") == "garlic")
     chk("clove unit -> bare count", clove_to_count("clove") is None and clove_to_count("cup") == "cup")
+
+    # 4b. Egg singular/plural combine; egg noodles/eggplant untouched.
+    chk("egg == eggs combine key", normalizeItemName("egg") == normalizeItemName("eggs") == "egg")
+    chk("egg yolks -> egg", normalizeItemName("egg yolks") == "egg")
+    chk("egg noodles untouched", normalizeItemName("egg noodles") == "egg noodles")
+    chk("eggplant untouched", "egg" in normalizeItemName("eggplant") and normalizeItemName("eggplant") == "eggplant")
 
     # 5. Pantry staples.
     for item, staple in [("“00” flour", False), ("high-gluten flour", False), ("cake flour", False),
