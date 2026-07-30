@@ -543,6 +543,15 @@
     // Parmesan and Parmigiano(-Reggiano) are the same cheese. (Pecorino stays.)
     [/\bparmigiano(?:[-\s]?reggiano)?\b/gi, "parmesan"],
     [/\bparmesan\s+cheese\b/gi, "parmesan"],
+    // A recipe that zests, peels, or hand-squeezes a citrus buys the whole fruit
+    // — "lime peel", "fresh-squeezed lime juice", "lemon juice and zest" all mean
+    // the fruit itself. (Plain "lemon juice" stays bottled — see normalizeItemName.)
+    [/\bfresh(?:ly)?[-\s]squeezed\s+(lemon|lime|orange|grapefruit)\s+juice\b/gi, "$1"],
+    [/\b(lemon|lime|orange|grapefruit)\s+(?:juice\s+and\s+)?zest\b/gi, "$1"],
+    [/\b(lemon|lime|orange|grapefruit)\s+peel\b/gi, "$1"],
+    // Culinary acids are sold as a powder, so "citric acid powder" is just citric
+    // acid (lets it match a pantry "citric acid"); malic stays distinct from citric.
+    [/\b(citric|malic|ascorbic|lactic|tartaric)\s+acid\s+powder\b/gi, "$1 acid"],
   ];
   // Long/thin pasta shapes — used only to spot a "flexible pasta" line.
   const PASTA_SHAPE_RE = /\b(?:spaghetti|bucatini|vermicelli|angel\s*hair|linguine|fettuccine|tagliatelle|pappardelle|penne|rigatoni|macaroni|fusilli|rotini|orzo|ziti|farfalle|cavatappi|cellentani|lasagn[ae]|noodles?)\b/i;

@@ -31,6 +31,10 @@ INGREDIENT_ALIASES = [
     (re.compile(r"\b(?:low[-\s]?moisture\s+whole[-\s]?milk|whole[-\s]?milk\s+low[-\s]?moisture)\s+mozzarella\b", re.I), "low-moisture whole-milk mozzarella"),
     (re.compile(r"\bparmigiano(?:[-\s]?reggiano)?\b", re.I), "parmesan"),
     (re.compile(r"\bparmesan\s+cheese\b", re.I), "parmesan"),
+    (re.compile(r"\bfresh(?:ly)?[-\s]squeezed\s+(lemon|lime|orange|grapefruit)\s+juice\b", re.I), r"\1"),
+    (re.compile(r"\b(lemon|lime|orange|grapefruit)\s+(?:juice\s+and\s+)?zest\b", re.I), r"\1"),
+    (re.compile(r"\b(lemon|lime|orange|grapefruit)\s+peel\b", re.I), r"\1"),
+    (re.compile(r"\b(citric|malic|ascorbic|lactic|tartaric)\s+acid\s+powder\b", re.I), r"\1 acid"),
 ]
 PASTA_SHAPE_RE = re.compile(r"\b(?:spaghetti|bucatini|vermicelli|angel\s*hair|linguine|fettuccine|tagliatelle|pappardelle|penne|rigatoni|macaroni|fusilli|rotini|orzo|ziti|farfalle|cavatappi|cellentani|lasagn[ae]|noodles?)\b", re.I)
 
@@ -214,6 +218,20 @@ def main():
         best_pick(["Cheesy Bliss Gouda Potatoes", "Kroger Russet Potatoes"], "potatoes") == 1)
     chk("canned chicken NOT penalized when recipe wants canned",
         best_pick(["Swanson Canned White Chicken Breast In Water", "Fresh Chicken Breast"], "white chicken breast") == 0)
+
+    # 7b. Citrus peel/zest/fresh-squeezed juice -> the whole fruit (buy limes,
+    #     not bottled juice / lime peel / peeled eggs). Plain juice stays bottled.
+    chk("lime peel -> lime", canonicalizeItem("lime peel") == "lime")
+    chk("fresh-squeezed lime juice -> lime", canonicalizeItem("fresh-squeezed lime juice") == "lime")
+    chk("lemon juice and zest -> lemon", canonicalizeItem("lemon juice and zest") == "lemon")
+    chk("lime zest -> lime", canonicalizeItem("lime zest") == "lime")
+    chk("plain lemon juice stays bottled", canonicalizeItem("lemon juice") == "lemon juice")
+    chk("lime peel & fresh-squeezed lime juice share a key",
+        normalizeItemName("lime peel") == normalizeItemName("fresh-squeezed lime juice") == "lime")
+    # 7c. Culinary acids: powder dropped (pantry match), citric != malic.
+    chk("citric acid powder -> citric acid", canonicalizeItem("citric acid powder") == "citric acid")
+    chk("malic acid powder -> malic acid", canonicalizeItem("malic acid powder") == "malic acid")
+    chk("citric acid != malic acid", normalizeItemName("citric acid powder") != normalizeItemName("malic acid powder"))
 
     # 8. Alternatives dropped from the list.
     bb = shopping_keys(recs["Beef Bourguignon"])

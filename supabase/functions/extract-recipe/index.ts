@@ -786,6 +786,10 @@ const INGREDIENT_ALIASES: [RegExp, string][] = [
   [/\b(?:low[-\s]?moisture\s+whole[-\s]?milk|whole[-\s]?milk\s+low[-\s]?moisture)\s+mozzarella\b/gi, "low-moisture whole-milk mozzarella"],
   [/\bparmigiano(?:[-\s]?reggiano)?\b/gi, "parmesan"],
   [/\bparmesan\s+cheese\b/gi, "parmesan"],
+  [/\bfresh(?:ly)?[-\s]squeezed\s+(lemon|lime|orange|grapefruit)\s+juice\b/gi, "$1"],
+  [/\b(lemon|lime|orange|grapefruit)\s+(?:juice\s+and\s+)?zest\b/gi, "$1"],
+  [/\b(lemon|lime|orange|grapefruit)\s+peel\b/gi, "$1"],
+  [/\b(citric|malic|ascorbic|lactic|tartaric)\s+acid\s+powder\b/gi, "$1 acid"],
 ];
 const PASTA_SHAPE_RE = /\b(?:spaghetti|bucatini|vermicelli|angel\s*hair|linguine|fettuccine|tagliatelle|pappardelle|penne|rigatoni|macaroni|fusilli|rotini|orzo|ziti|farfalle|cavatappi|cellentani|lasagn[ae]|noodles?)\b/i;
 function canonicalizeItem(name: string): string {
