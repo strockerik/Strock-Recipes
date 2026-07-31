@@ -905,7 +905,9 @@ pantry; the fresh form ("garlic cloves") is bought.
 **Quantities.** Each cart line shows the amount in parentheses and how many recipes
 it's for — "(5 lb) Ground Beef · for 3 recipes". Produce you buy whole is shown in
 purchase units: garlic cloves → "≈ N bulbs", tomato slices → "≈ N tomatoes".
-Lines that resolve to the same product are added once.
+**Citrus** is counted in whole fruit from its peel + juice — one lime covers both its
+juice and its peel in a recipe (so they don't double up), and it's summed across
+recipes: "(17) limes". Lines that resolve to the same product are added once.
 
 **Store matching — the plainest form of what you asked for.** Unless the recipe is
 specific, the app prefers the basic product: raw produce over processed ("carrots",

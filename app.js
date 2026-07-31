@@ -2113,14 +2113,28 @@
       });
   }
 
+  // Rule-of-thumb yield per whole citrus fruit — juice in ml, peel/zest in g.
+  // Deliberately generous (a fruit gives a bit less than this) so a peel-heavy
+  // recipe never leaves you short. Used to turn peel + juice into "(N) limes".
+  const CITRUS_YIELD = {
+    lime: { juice: 24, peel: 6 }, lemon: { juice: 36, peel: 10 },
+    orange: { juice: 90, peel: 20 }, grapefruit: { juice: 150, peel: 32 }
+  };
+
   // Merge ingredients across every recipe in the basket into one shopping
   // list: matching item + unit gets summed, units are converted to what a US
   // grocery store sells, and pantry staples can be hidden.
   function combinedGroceryItems() {
     const map = new Map();
+    // Citrus is counted in whole fruit, not summed by weight/volume: one lime
+    // gives both its juice AND its peel, so within a recipe we take the max of
+    // the juice-need and peel-need (plus any whole/garnish fruit) and sum that
+    // across recipes. fruit -> { count, recipes:Set }.
+    const citrus = new Map();
     for (const [id, { servings }] of basket) {
       const it = byId[id];
       if (!it) continue;
+      const recipeCitrus = new Map(); // fruit -> { juiceMl, peelG, whole }
       // Ingredients the recipe MAKES itself carry a component `group` label and
       // are then used under another group by that same name (e.g. a "Dry Pancake
       // Mix" group feeds a "dry pancake mix" ingredient). Those aren't bought —
@@ -2141,6 +2155,18 @@
         if (nameKey === "water" || nameKey === "liquid") return;
         if (skipPantryStaples && isPantryStaple(nameKey)) return;
         const { amount, family, unit } = canonicalQuantity(ing.scaled, ing.unit);
+        // Citrus that folded to a bare fruit (peel / zest / fresh-squeezed juice /
+        // whole) is counted in fruit, not summed by weight/volume. Plain bottled
+        // "lime juice" keeps its name (nameKey stays "lime juice") and is untouched.
+        if (CITRUS_YIELD[nameKey]) {
+          const raw = String(ing.item).toLowerCase();
+          const rc = recipeCitrus.get(nameKey) || { juiceMl: 0, peelG: 0, whole: 0 };
+          if (/\bjuice\b/.test(raw) && family === "volume" && amount != null) rc.juiceMl += amount;
+          else if (/\b(?:peel|zest|rind)\b/.test(raw) && family === "weight" && amount != null) rc.peelG += amount;
+          else rc.whole += (family == null && amount != null ? amount : 1);
+          recipeCitrus.set(nameKey, rc);
+          return;
+        }
         const key = `${nameKey}__${family || unit || ""}`;
         const existing = map.get(key);
         if (existing) {
@@ -2150,12 +2176,27 @@
           map.set(key, { key, item: displayGroceryName(ing.item), family, unit, amount, recipes: new Set(it.name ? [it.name] : []) });
         }
       });
+      // One fruit covers this recipe's juice AND peel, so take the max of the two
+      // needs (plus whole/garnish fruit); sum that into the basket-wide tally.
+      recipeCitrus.forEach((rc, fruit) => {
+        const Y = CITRUS_YIELD[fruit];
+        const n = rc.whole + Math.max(Math.ceil(rc.juiceMl / Y.juice), Math.ceil(rc.peelG / Y.peel));
+        if (n <= 0) return;
+        const c = citrus.get(fruit) || { count: 0, recipes: new Set() };
+        c.count += n;
+        if (it.name) c.recipes.add(it.name);
+        citrus.set(fruit, c);
+      });
     }
-    return [...map.values()]
+    const citrusItems = [...citrus.entries()].map(([fruit, c]) => ({
+      key: `citrus__${fruit}`, item: c.count === 1 ? fruit : fruit + "s",
+      amount: c.count, unit: null, recipes: [...c.recipes]
+    }));
+    return [...[...map.values()]
       .map((entry) => {
         const { amount, unit } = shoppableQuantity(entry.amount, entry.family, entry.unit);
         return { key: entry.key, item: entry.item, amount, unit, recipes: [...entry.recipes] };
-      })
+      }), ...citrusItems]
       .sort((a, b) => a.item.localeCompare(b.item));
   }
 

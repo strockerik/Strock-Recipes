@@ -99,6 +99,39 @@ ALT_RE = re.compile(r"\b(?:alternative to|substitute for|instead of|in place of|
 def clove_to_count(unit):  # canonicalQuantity: clove -> bare count
     return None if (unit or "").lower() in ("clove", "cloves") else (unit or None)
 
+# Citrus: peel + juice -> whole-fruit count (max juice/peel per recipe, sum across).
+CITRUS_YIELD = {"lime": (24, 6), "lemon": (36, 10), "orange": (90, 20), "grapefruit": (150, 32)}
+WEIGHT_TO_G = {"g": 1, "gram": 1, "grams": 1, "kg": 1000, "oz": 28.3495, "ounce": 28.3495, "lb": 453.592, "pound": 453.592}
+VOLUME_TO_ML = {"ml": 1, "l": 1000, "liter": 1000, "cup": 236.588, "tbsp": 14.787, "tsp": 4.929, "fl oz": 29.5735}
+def _canon_qty(amount, unit):
+    u = (unit or "").lower()
+    if u in WEIGHT_TO_G: return (amount * WEIGHT_TO_G[u] if amount is not None else None, "weight")
+    if u in VOLUME_TO_ML: return (amount * VOLUME_TO_ML[u] if amount is not None else None, "volume")
+    return (amount, None)
+def combine_citrus(recipes_list):
+    """Return {fruit: count} summed across the given recipes."""
+    total = {}
+    for rec in recipes_list:
+        rc = {}
+        for ing in rec:
+            raw = str(ing.get("item", "")).lower()
+            nk = normalizeItemName(ing["item"])
+            if nk not in CITRUS_YIELD:
+                continue
+            amt, fam = _canon_qty(ing.get("amount"), ing.get("unit"))
+            d = rc.setdefault(nk, {"juiceMl": 0, "peelG": 0, "whole": 0})
+            if re.search(r"\bjuice\b", raw) and fam == "volume" and amt is not None:
+                d["juiceMl"] += amt
+            elif re.search(r"\b(?:peel|zest|rind)\b", raw) and fam == "weight" and amt is not None:
+                d["peelG"] += amt
+            else:
+                d["whole"] += amt if (fam is None and amt is not None) else 1
+        for f, d in rc.items():
+            juice_ml, peel_g = CITRUS_YIELD[f]
+            n = d["whole"] + max(-(-d["juiceMl"] // juice_ml), -(-d["peelG"] // peel_g))
+            total[f] = total.get(f, 0) + int(n)
+    return total
+
 # ---------------------------------------------------------------- kroger ports
 def searchTerm_hint(item):
     r = str(item or "").lower()
@@ -232,6 +265,19 @@ def main():
     chk("citric acid powder -> citric acid", canonicalizeItem("citric acid powder") == "citric acid")
     chk("malic acid powder -> malic acid", canonicalizeItem("malic acid powder") == "malic acid")
     chk("citric acid != malic acid", normalizeItemName("citric acid powder") != normalizeItemName("malic acid powder"))
+
+    # 7d. Citrus -> whole-fruit count (max juice/peel per recipe, sum across; plain
+    #     bottled juice not counted).
+    super_juice = [{"amount": 200, "unit": "ml", "item": "fresh-squeezed lime juice"},
+                   {"amount": 100, "unit": "g", "item": "lime peel"}]
+    chk("Lime Super Juice -> 17 limes (max 9/17, not 26)", combine_citrus([super_juice]).get("lime") == 17)
+    chk("peel-only counts (100 g -> 17 limes)", combine_citrus([[{"amount": 100, "unit": "g", "item": "lime peel"}]]).get("lime") == 17)
+    chk("juice-only counts (200 ml -> 9 limes)", combine_citrus([[{"amount": 200, "unit": "ml", "item": "fresh-squeezed lime juice"}]]).get("lime") == 9)
+    chk("count 'lemon juice and zest' -> 1 lemon", combine_citrus([[{"amount": 1, "unit": None, "item": "lemon juice and zest"}]]).get("lemon") == 1)
+    chk("cross-recipe sum (1 lemon + 1 lemon = 2)",
+        combine_citrus([[{"amount": 1, "unit": None, "item": "lemon"}], [{"amount": 1, "unit": None, "item": "lemon juice and zest"}]]).get("lemon") == 2)
+    chk("plain bottled 'lime juice' NOT counted as fruit",
+        combine_citrus([[{"amount": 200, "unit": "ml", "item": "lime juice"}]]).get("lime") is None)
 
     # 8. Alternatives dropped from the list.
     bb = shopping_keys(recs["Beef Bourguignon"])
