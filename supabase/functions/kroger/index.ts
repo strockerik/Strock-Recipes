@@ -404,9 +404,9 @@ Deno.serve(async (req) => {
     }
 
     // ---- mode "search": grocery items -> matched products (cache-first) ----
-    // TEMP: raised 60 -> 150 for a full-blast ~25-recipe test. LOWER BACK TO 60
-    // when done (a normal single/few-recipe list never approaches 60).
-    const items = Array.isArray(body.items) ? body.items.slice(0, 150) : [];
+    // Safety bound on one call; a normal single/few-recipe list is well under it.
+    // (A whole-recipe-book benchmark can exceed 60 — raise temporarily if needed.)
+    const items = Array.isArray(body.items) ? body.items.slice(0, 60) : [];
     const locationId = String(body.locationId || "").trim();
     const pref = ["organic", "cheapest", "best"].includes(body.productPref) ? body.productPref : "best";
     if (!items.length) return json({ error: "Your grocery list is empty." });
