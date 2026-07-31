@@ -125,7 +125,10 @@ function searchTerm(item: string): string {
     .replace(/\b(?:hot|cold|warm|lukewarm|chilled|iced)\s+(?=(?:beef|chicken|vegetable|veg|water|milk|stock|broth|cream)\b)/g, " ")
     .replace(/\bchill?i(?:es)?\b/g, "chili") // British "chilli"/"chillies" -> chili
     .replace(/\bfloury\b/g, " ")             // "floury potatoes" -> potatoes
-    .replace(/\b(?:boneless|skinless|baby|fresh|freshly|organic|canned|can|condensed|chunk|sprigs?|large|extra)\b/g, " ");
+    // "condensed" only as canned-soup boilerplate ("cream of celery condensed soup"
+    // -> "cream of celery soup"); NEVER blanket — "condensed milk" is its own product.
+    .replace(/\bcondensed\s+soup\b/g, "soup")
+    .replace(/\b(?:boneless|skinless|baby|fresh|freshly|organic|canned|can|chunk|sprigs?|large|extra)\b/g, " ");
   // "zest" means you buy the whole fruit (one lemon gives juice AND zest), not a
   // bottled juice — reduce "lemon juice and zest" to the fruit so it matches a
   // real lemon in produce, not Key West lime juice.

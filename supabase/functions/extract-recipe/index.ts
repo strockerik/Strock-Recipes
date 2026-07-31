@@ -777,7 +777,7 @@ const INGREDIENT_ALIASES: [RegExp, string][] = [
   [/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/gi, "breast"],
   [/\bchicken\s+breasts\b/gi, "chicken breast"],
   [/\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b/gi, "instant yeast"],
-  [/\b(?:(?:yellow|red|white|sweet|spanish|vidalia|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
+  [/\b(?:(?:yellow|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
   [/(?<!,\s)\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b/gi, "milk"],
   [/\bscallions?\b/gi, "green onion"],
   [/\bspaghetti\s+pasta\b/gi, "spaghetti"],

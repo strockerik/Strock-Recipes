@@ -522,9 +522,10 @@
     // Yeast: instant / rapid-rise / bread-machine are one product (active-dry and
     // fresh yeast are genuinely different and are left alone).
     [/\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b/gi, "instant yeast"],
-    // Onion: colour/size/prep adjectives are the same yellow onion (but leave
-    // "green onion" and "onion powder" — different products — untouched).
-    [/\b(?:(?:yellow|red|white|sweet|spanish|vidalia|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
+    // Onion: size/prep adjectives (and the default "yellow") are the same onion,
+    // but true VARIETIES (red/white/sweet/spanish/vidalia) are different products
+    // and stay distinct — as do "green onion" and "onion powder".
+    [/\b(?:(?:yellow|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
     // Milk: fat-content / temperature phrasings are one carton (nut milks keep
     // their qualifier — "almond milk" stays distinct). The negative lookbehind
     // leaves a trailing fat qualifier alone ("Greek yogurt, whole milk" is not a

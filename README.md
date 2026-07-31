@@ -915,7 +915,9 @@ not "cut & peeled baby carrots"); real spirits over sauces ("vodka", not "vodka
 sauce"); baking chocolate as chips; a bare "cheese" as shredded cheddar; a "zest"
 ingredient as the whole fruit; "tomatoes for sauce" as canned crushed; raw meat over
 deli/lunchmeat. If the recipe *does* say canned, shredded, sliced, etc., that form is
-matched.
+matched. A couple of these are sensible **defaults** for genuinely ambiguous items, not
+fixed facts — a bare "cheese" → shredded cheddar, and baking "chocolate" → chips; if you
+meant mozzarella or a chocolate bar, just change that line in the review sheet.
 
 **Left off the list.** Things the recipe makes itself (a component it builds from
 other listed ingredients — e.g. a "Dry Mix" or "Pie Crust" the recipe assembles),

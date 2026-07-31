@@ -22,7 +22,7 @@ INGREDIENT_ALIASES = [
     (re.compile(r"\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b", re.I), "breast"),
     (re.compile(r"\bchicken\s+breasts\b", re.I), "chicken breast"),
     (re.compile(r"\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b", re.I), "instant yeast"),
-    (re.compile(r"\b(?:(?:yellow|red|white|sweet|spanish|vidalia|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b", re.I), "onion"),
+    (re.compile(r"\b(?:(?:yellow|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b", re.I), "onion"),
     (re.compile(r"(?<!,\s)\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b", re.I), "milk"),
     (re.compile(r"\bscallions?\b", re.I), "green onion"),
     (re.compile(r"\bspaghetti\s+pasta\b", re.I), "spaghetti"),
@@ -144,6 +144,14 @@ def searchTerm_hint(item):
     if re.search(r"\bcheese\b", r) and not re.search(r"\b(?:cream|cottage|feta|parmesan|parmigiano|pecorino|romano|cheddar|mozzarella|swiss|gouda|brie|blue|goat|ricotta|provolone|american|monterey|colby|gruyere|string|nacho|queso|mascarpone|velveeta)\b", r):
         return "shredded cheddar cheese"
     return None  # (falls through to the generic term builder in the real fn)
+
+# Minimal mirror of the kroger searchTerm noise-strip (only what the condensed
+# adversarial checks need): condensed is soup-only, never blanket.
+def kroger_strip(item):
+    s = str(item or "").lower()
+    s = re.sub(r"\bcondensed\s+soup\b", "soup", s)
+    s = re.sub(r"\b(?:boneless|skinless|baby|fresh|freshly|organic|canned|can|chunk|sprigs?|large|extra)\b", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 RAW_MEAT_RE = re.compile(r"\b(?:chicken|beef|pork|turkey|steak|sausage|ground)\b")
 DELI_ASKED_RE = re.compile(r"\b(?:deli|lunch|jerky|smoked|cured|rotisserie)\b")
@@ -282,6 +290,22 @@ def main():
     # 8. Alternatives dropped from the list.
     bb = shopping_keys(recs["Beef Bourguignon"])
     chk("'pancetta, alternative to bacon' dropped", not any("alternative" in k for k in bb) and "pancetta" not in bb, ",".join(bb))
+
+    # 9. ADVERSARIAL — rules must NOT over-fire (anti-overfitting guards). Each
+    #    input looks like it might trigger a rule but shouldn't.
+    chk("condensed milk NOT stripped to plain milk", "condensed milk" in kroger_strip("sweetened condensed milk"))
+    chk("evaporated milk untouched", "evaporated milk" in kroger_strip("evaporated milk"))
+    chk("condensed SOUP still simplified", kroger_strip("cream of celery condensed soup") == "cream of celery soup")
+    chk("red onion stays a variety (not folded)", canonicalizeItem("red onion") == "red onion")
+    chk("white/sweet onion varieties stay", canonicalizeItem("sweet onion") == "sweet onion" and canonicalizeItem("white onion") == "white onion")
+    chk("yellow/size onion still folds", canonicalizeItem("grated yellow onion") == "onion" and canonicalizeItem("medium onion") == "onion")
+    chk("onion powder untouched", canonicalizeItem("onion powder") == "onion powder")
+    chk("almond milk untouched", canonicalizeItem("almond milk") == "almond milk")
+    chk("chocolate BAR not sent to chips", searchTerm_hint("dark chocolate bar") is None)
+    chk("named cheese (mozzarella) not sent to cheddar", searchTerm_hint("mozzarella cheese") is None)
+    chk("standalone chicken thighs not folded to breast", canonicalizeItem("chicken thighs") == "chicken thighs")
+    chk("standalone spaghetti not folded to pasta", canonicalizeItem("spaghetti") == "spaghetti")
+    chk("plain 'lime juice' not treated as whole fruit", combine_citrus([[{"amount": 100, "unit": "ml", "item": "lime juice"}]]).get("lime") is None)
 
     # ---- report ----
     for name, ok, detail in checks:
