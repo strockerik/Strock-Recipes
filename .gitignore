@@ -21,3 +21,13 @@ The House Index — Features Guide.pdf
 
 # Live AI test result archives (recipes only, no secrets) — kept for run-to-run comparison
 ai_test_runs/
+data/King Soopers Match/28 Recipes - grocery-list.txt
+data/King Soopers Match/28 Recipes - king-soopers-match-report.txt
+data/King Soopers Match/28 Recipes REV 4 - grocery-list.txt
+data/King Soopers Match/28 Recipes REV 4 - king-soopers-match-report.txt
+data/King Soopers Match/house-index-backup-2026-07-28.json
+data/King Soopers Match/Lime Juice - grocery-list.txt
+data/King Soopers Match/Lime Juice - king-soopers-match-report.txt
+data/King Soopers Match/test 30 recipes REV1 - grocery-list.txt
+data/King Soopers Match/test 30 recipes REV1 - king-soopers-match-report.txt
+data/King Soopers Match/Test account - house-index-backup-2026-07-29.json
