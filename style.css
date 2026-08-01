@@ -382,6 +382,10 @@ button:focus-visible, input:focus-visible {
    card. Top-align the row's controls and reserve a min-height so the corner
    stepper always has room below them. */
 .item.has-serv .item-row { align-items: flex-start; min-height: 84px; }
+/* ...but the grocery checkbox keeps its vertical centering, so ticking a recipe
+   doesn't yank it up to the corner — only the right-edge controls (calendar,
+   star, chevron) ride up to clear the corner stepper. */
+.item.has-serv .pick-wrap { align-self: center; }
 .item.has-serv .serv-control {
   position: absolute;
   right: 16px;
