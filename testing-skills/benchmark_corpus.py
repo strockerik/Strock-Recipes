@@ -215,6 +215,21 @@ def main():
         chk(f"servesPeople({recs[rname]['servings_label']!r}) == {expect_people} ({rname})",
             servesPeople(recs[rname]["servings_label"]) == expect_people)
 
+    # 2b. Bar cocktails default to their own base (1 drink), never the FOOD
+    #     household count — even though a "drink" is a people-serving.
+    def scales_to_household(rec, household=4):
+        return bool(household) and rec["section"] != "bar" and servesPeople(rec["servings_label"])
+    def default_add(rec, household=4):
+        return household if scales_to_household(rec, household) else rec["base_servings"]
+    for rname in ["Boulevardier", "Espresso Martini"]:
+        r = recs[rname]
+        chk(f"bar cocktail defaults to base {r['base_servings']}, not household ({rname})",
+            default_add(r, 4) == r["base_servings"] == 1)
+    chk("food 'servings' recipe still scales to household",
+        default_add(recs["Chili con Carne"], 4) == 4)
+    chk("batch food recipe stays at base (not household)",
+        default_add(recs["Chocolate Chip Cookies"], 4) == recs["Chocolate Chip Cookies"]["base_servings"])
+
     # 3. Canonical folds.
     chk("Parmigiano-Reggiano -> parmesan", canonicalizeItem("Parmigiano-Reggiano") == "parmesan")
     chk("parmesan cheese -> parmesan", canonicalizeItem("parmesan cheese") == "parmesan")

@@ -1095,17 +1095,17 @@
     refreshViews();
   }
 
-  // One-time heal for the serving-size fix: a batch/yield recipe (e.g. "1 tart")
-  // whose basket servings was auto-defaulted to the household count is really
-  // making N tarts. Reset those to the recipe's base so the list stops showing
-  // 4× quantities. Only touches entries that look auto-defaulted (servings ===
-  // household and ≠ base), never a count the user set on purpose.
+  // One-time heal for the serving-size fixes: a recipe that shouldn't scale to the
+  // household (a batch/yield food like "1 tart", or a bar cocktail) but whose basket
+  // servings was auto-defaulted to the household count is really making N of them.
+  // Reset those to the recipe's base. Only touches entries that look auto-defaulted
+  // (servings === household and ≠ base), never a count the user set on purpose.
   function reconcileBatchServings() {
     if (!householdServings) return;
     const fixes = [];
     basket.forEach((entry, id) => {
       const it = byId[id];
-      if (!it || servesPeople(it.servingsLabel)) return;
+      if (!it || scalesToHousehold(it)) return;
       if (entry.servings === householdServings && householdServings !== it.baseServings) {
         entry.servings = it.baseServings;
         fixes.push({ recipe_id: id, servings: it.baseServings });
@@ -1723,11 +1723,17 @@
   // override) — this only shapes the initial number.
   function defaultAddServings(it) {
     if (servingsByRecipe.has(it.id)) return servingsByRecipe.get(it.id);
-    // Household scaling only makes sense when base_servings counts *people*. A
-    // batch/yield recipe ("1 tart", "1 batch", "1 pizza pan") already feeds the
-    // household — multiplying it to the household size would make N tarts.
-    if (householdServings && servesPeople(it.servingsLabel)) return householdServings;
+    // Household scaling only makes sense when base_servings counts *food* people.
+    // Cocktails / bar recipes default to their own base (1 drink) — the household
+    // number is a food setting — and a batch/yield food recipe ("1 tart", "1
+    // pizza pan") already feeds the household, so those keep their base too.
+    if (scalesToHousehold(it)) return householdServings;
     return it.baseServings;
+  }
+  // A recipe scales to the household default only if it's food AND measured in
+  // people-servings (not a bar cocktail, not a batch/yield yield unit).
+  function scalesToHousehold(it) {
+    return !!householdServings && it.section !== "bar" && servesPeople(it.servingsLabel);
   }
 
   // Set a recipe's servings from any +/- control, keeping the grocery basket in
