@@ -874,7 +874,13 @@
        repopulated per recipe each time a row's More button is clicked. -->
   <div id="detail-more-menu" class="add-menu" role="menu" hidden></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <!-- supabase-js is vendored (same-origin) rather than pulled from a CDN: one
+       fewer third-party DNS+TLS round trip on a cold phone load, and it caches
+       alongside the rest of the app. Pinned copy — to update, re-download the
+       version you want and bump the filename here:
+       curl -sL https://cdn.jsdelivr.net/npm/@supabase/supabase-js@<ver>/dist/umd/supabase.min.js \
+         -o vendor/supabase-<ver>.min.js -->
+  <script src="vendor/supabase-2.111.0.min.js"></script>
   <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
