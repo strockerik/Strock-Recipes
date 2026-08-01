@@ -156,11 +156,19 @@
       </div>
       <p id="grocery-progress" class="g-progress" hidden></p>
       <div id="grocery-content" class="grocery-content"></div>
-      <div class="grocery-actions">
+      <div class="grocery-actions grocery-actions-primary">
         <button id="share-grocery" class="solid-btn">Send to phone / Keep</button>
-        <button id="copy-grocery" class="ghost-btn">Copy list</button>
-        <button id="download-grocery" class="ghost-btn">Download .txt</button>
-        <button id="send-to-kingsoopers" class="ghost-btn">🛒 Send to King Soopers</button>
+        <button id="send-to-kingsoopers" class="solid-btn">🛒 Add to King Soopers cart</button>
+      </div>
+      <div class="export-more">
+        <button type="button" id="export-more-toggle" class="export-more-btn"
+                aria-expanded="false" aria-controls="export-more-panel">
+          Other ways to export <span class="export-more-caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="export-more-panel" class="export-more-panel" hidden>
+          <button id="copy-grocery" class="ghost-btn small">Copy list</button>
+          <button id="download-grocery" class="ghost-btn small">Download .txt</button>
+        </div>
       </div>
       <p class="keep-hint">On your phone, <strong>Send to phone / Keep</strong> opens the share sheet — pick
         Google Keep to drop the list straight into a note. In Keep, tap <strong>⋮ → Convert to checklist</strong>
@@ -223,7 +231,7 @@
 
         <div class="kroger-prefs">
           <p class="diet-prefs-h">🛒 King Soopers ordering</p>
-          <p class="diet-prefs-sub">Set your store and how to pick products, then use <strong>Send to King Soopers</strong> on the grocery list.</p>
+          <p class="diet-prefs-sub">Set your store and how to pick products. You can also set your store the first time you tap <strong>Add to King Soopers cart</strong> on the grocery list.</p>
           <label class="diet-field" for="kroger-zip">
             <span>Your store</span>
             <div class="kroger-store-row">
@@ -275,8 +283,18 @@
   <div id="kroger-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Send to King Soopers" hidden>
     <div class="grocery-panel-inner wrap">
       <div class="grocery-panel-head">
-        <h2 class="panel-title">🛒 Send to King Soopers</h2>
+        <h2 class="panel-title" id="kroger-panel-title">🛒 Send to King Soopers</h2>
         <button id="close-kroger" class="ghost-btn small" aria-label="Close">Close</button>
+      </div>
+      <p id="kroger-intro" class="kroger-intro">We'll fill your King Soopers cart — you'll review and check out in the Kroger app.</p>
+      <div id="kroger-store-step" class="kroger-store-step" hidden>
+        <p class="diet-prefs-h">Where do you shop?</p>
+        <div class="kroger-store-row">
+          <input id="kroger-inline-zip" class="search" type="text" inputmode="numeric" maxlength="5" placeholder="ZIP code (e.g. 80202)" aria-label="ZIP code">
+          <button type="button" id="kroger-inline-find" class="solid-btn small">Find store</button>
+        </div>
+        <div id="kroger-inline-results" class="kroger-store-results"></div>
+        <p id="kroger-inline-status" class="auth-status" aria-live="polite"></p>
       </div>
       <div id="kroger-loading" class="ai-import-loading" hidden>
         <div class="spinner" aria-hidden="true"></div>
@@ -285,7 +303,7 @@
       <p id="kroger-review-summary" class="g-progress" hidden></p>
       <div id="kroger-review-list" class="kroger-review-list"></div>
       <div class="grocery-actions kroger-review-actions">
-        <button id="kroger-send-cart" class="solid-btn" hidden>🛒 Send to cart</button>
+        <button id="kroger-send-cart" class="solid-btn" hidden>🛒 Add to cart</button>
         <a id="kroger-open-store" class="ghost-btn" href="https://www.kingsoopers.com/cart" target="_blank" rel="noopener noreferrer" hidden>Open King Soopers ↗</a>
         <button id="kroger-download-matches" class="ghost-btn" hidden>⬇ Download match report</button>
       </div>

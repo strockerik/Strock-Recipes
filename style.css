@@ -882,6 +882,16 @@ button:focus-visible, input:focus-visible {
 }
 .keep-hint { font-size: 0.8rem; color: var(--faint); margin-top: 12px; }
 
+/* Two primary destinations + a quiet "other ways to export" disclosure. */
+.grocery-actions-primary { display: flex; flex-wrap: wrap; gap: 10px; }
+.grocery-actions-primary .solid-btn { flex: 1 1 200px; }
+.export-more { margin-top: 10px; }
+.export-more-btn { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--faint); font-size: 0.88rem; font-weight: 500; padding: 6px 2px; cursor: pointer; }
+.export-more-btn:hover { color: var(--ink); }
+.export-more-caret { font-size: 0.7rem; transition: transform 0.15s ease; }
+.export-more-btn[aria-expanded="true"] .export-more-caret { transform: rotate(180deg); }
+.export-more-panel { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 8px; }
+
 .g-progress {
   font-family: var(--font-mono);
   font-size: 0.85rem;
@@ -1934,7 +1944,12 @@ button:focus-visible, input:focus-visible {
 .kroger-prefs { border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
 .kroger-store-row { display: flex; gap: 8px; align-items: center; }
 .kroger-store-row .search { flex: 1 1 auto; min-width: 0; }
-.kroger-store-row .ghost-btn { flex: 0 0 auto; }
+.kroger-store-row .ghost-btn,
+.kroger-store-row .solid-btn { flex: 0 0 auto; }
+/* Review-sheet hand-off line + first-run inline store step. */
+.kroger-intro { font-size: 0.85rem; line-height: 1.45; color: var(--faint); margin: 4px 0 14px; }
+.kroger-store-step { display: flex; flex-direction: column; gap: 10px; margin-bottom: 6px; }
+.kroger-store-step .diet-prefs-h { margin: 0; }
 .kroger-store-current { margin: 4px 0 0; font-size: 0.85rem; color: var(--faint); }
 .kroger-store-results { display: flex; flex-direction: column; gap: 6px; }
 .kroger-store-results:empty { display: none; }
