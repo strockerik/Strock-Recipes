@@ -34,6 +34,7 @@
   let aisleOrder = null; // user-customized store-walk order for grocery categories; set in loadUserLocalState
   let seenPickHint = false; // dismissed the "check recipes to build a grocery list" hint
   let seenIntro = false; // dismissed the first-run Cook/Plan/Shop pointer card
+  let seenHomeTip = false; // dismissed the "add to your home screen" tip (iOS Safari only)
   let planView = "dinners"; // meal-plan grid density: "dinners" | "all"
   // King Soopers (Kroger) ordering prefs, profile-backed (cross-device).
   let krogerPrefs = { locationId: null, storeName: "", zip: "", productPref: "best", modality: "PICKUP" };
@@ -64,6 +65,7 @@
     householdServings = loadLocal("household", null);
     seenPickHint = loadLocal("seenPickHint", false);
     seenIntro = loadLocal("seenIntro", false);
+    seenHomeTip = loadLocal("seenHomeTip", false);
     planView = loadLocal("planView", "dinners");
     loadLocal("pantryKeep", []).forEach((k) => pantryKeep.add(k));
     showRecipeCounts = loadLocal("showRecipeCounts", false);
@@ -72,6 +74,24 @@
   }
   function maybeShowIntro() {
     introCardEl.hidden = seenIntro;
+    maybeShowHomeTip();
+  }
+  // "Add to Home Screen" is a Safari-only flow, so only offer it there — and not
+  // when the app is already running from the home screen (nothing to install).
+  // iPadOS reports itself as "MacIntel", hence the touch-points check.
+  function canInstallToHomeScreen() {
+    const ua = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+    const standalone = window.navigator.standalone === true ||
+      (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+    return isIOS && isSafari && !standalone;
+  }
+  // Shown after the intro card is dismissed so the first screen isn't two stacked
+  // cards; own flag, so it still appears for someone who dismissed intro earlier.
+  function maybeShowHomeTip() {
+    homeTipEl.hidden = seenHomeTip || !seenIntro || !canInstallToHomeScreen();
   }
 
   const DATA = { recipes: [], cocktails: [], sharedRecipes: [], sharedCocktails: [] };
@@ -169,6 +189,7 @@
   const pickHintEl = $("#pick-hint");
   const pickHintDismissBtn = $("#pick-hint-dismiss");
   const introCardEl = $("#intro-card");
+  const homeTipEl = $("#home-tip");
   const introDismissBtn = $("#intro-dismiss");
 
   const addRecipeAiBtn = $("#add-recipe-ai");
@@ -1181,6 +1202,8 @@
     seenPickHint = false;
     seenIntro = false;
     introCardEl.hidden = true;
+    seenHomeTip = false;
+    homeTipEl.hidden = true;
     planView = "dinners";
     inventory = [];
     collapsedInvCats = new Set();
@@ -1451,6 +1474,12 @@
     seenIntro = true;
     saveLocal("seenIntro", true);
     introCardEl.hidden = true;
+    maybeShowHomeTip(); // the install tip follows the intro rather than stacking with it
+  });
+  $("#home-tip-dismiss").addEventListener("click", () => {
+    seenHomeTip = true;
+    saveLocal("seenHomeTip", true);
+    homeTipEl.hidden = true;
   });
   accountPanel.addEventListener("click", (e) => {
     if (e.target === accountPanel) accountPanel.hidden = true;

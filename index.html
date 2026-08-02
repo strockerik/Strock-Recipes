@@ -78,6 +78,17 @@
       <button type="button" id="intro-dismiss" class="ghost-btn small">Got it</button>
     </div>
 
+    <!-- Shown once, on iPhone/iPad Safari only, after the intro card is dismissed
+         (nothing to install on desktop, or if already launched from the home
+         screen). Wired in app.js via canInstallToHomeScreen(). -->
+    <div id="home-tip" class="intro-card" hidden>
+      <p class="intro-text">
+        📲 <b>Add this to your home screen</b> — tap <b>Share</b>, then
+        <b>Add to Home Screen</b>. It opens full-screen and works just like an app.
+      </p>
+      <button type="button" id="home-tip-dismiss" class="ghost-btn small">Got it</button>
+    </div>
+
     <nav class="mode-tabs" role="tablist" aria-label="View">
       <button id="mode-recipes" class="mode-tab is-active" role="tab" aria-selected="true">Recipes</button>
       <button id="mode-mealplan" class="mode-tab" role="tab" aria-selected="false">
