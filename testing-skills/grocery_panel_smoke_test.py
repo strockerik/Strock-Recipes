@@ -119,19 +119,30 @@ async function runTests() {
     assert("added-back item leaves the pantry section", !/oregano/i.test(pantryText()), pantryText());
     assert("added-back item appears in the list", /oregano/i.test(listText()), listText());
 
-    // --- recipe counts toggle ---
-    var tgl = document.querySelector("#recipe-counts-toggle");
-    assert("counts toggle present, off by default", !!tgl && tgl.getAttribute("aria-pressed") === "false", tgl ? tgl.getAttribute("aria-pressed") : "missing");
-    assert("no recipe counts while off", !/recipes/i.test(listText()), listText());
-    click(tgl); await delay(120);
-    assert("counts toggle flips aria-pressed", document.querySelector("#recipe-counts-toggle").getAttribute("aria-pressed") === "true", "");
+    // --- recipe counts are always shown inline (no toggle button) ---
+    assert("no recipe-counts button in the header", !document.querySelector("#recipe-counts-toggle"), "");
     var LC = listText();
     assert("garlic annotated '· 2 recipes' (used in both)", /·\s*2 recipes/.test(LC), LC);
     assert("single-recipe item annotated '· 1 recipe'", /·\s*1 recipe\b/.test(LC), LC);
 
-    // --- shopping mode hides the pantry group ---
-    click(document.querySelector("#shopping-mode-toggle")); await delay(120);
+    // --- by-aisle / by-recipe view switch ---
+    var aisleBtn = document.querySelector('[data-g-view="aisle"]'), recipeBtn = document.querySelector('[data-g-view="recipe"]');
+    assert("view switch renders both options", !!aisleBtn && !!recipeBtn, "");
+    assert("aisle is the default view", aisleBtn.getAttribute("aria-pressed") === "true" && !!document.querySelector(".g-combined"), "");
+    click(recipeBtn); await delay(140);
+    assert("by-recipe view replaces the aisle list", !!document.querySelector(".g-by-recipe-view") && !document.querySelector(".g-combined"), "");
+    var RV = document.querySelector(".g-by-recipe-view").textContent.replace(/\s+/g, " ");
+    assert("by-recipe groups under each recipe name", /Garlic Pasta/.test(RV) && /Garlic Soup/.test(RV), RV.slice(0, 120));
+    assert("by-recipe hides the aisle-reorder control", !document.querySelector(".g-reorder"), "");
+    click(document.querySelector('[data-g-view="aisle"]')); await delay(140);
+    assert("switching back restores the aisle list", !!document.querySelector(".g-combined") && !document.querySelector(".g-by-recipe-view"), "");
+
+    // --- shopping mode hides the pantry group, and snaps out of by-recipe ---
+    click(document.querySelector('[data-g-view="recipe"]')); await delay(140);
+    click(document.querySelector("#shopping-mode-toggle")); await delay(160);
     assert("shopping mode adds .shopping", document.querySelector("#grocery-panel").classList.contains("shopping"), "");
+    assert("shopping mode snaps back to the tickable aisle list",
+           !!document.querySelector(".g-combined") && !document.querySelector(".g-by-recipe-view"), "");
   } catch (e) { assert("no exception", false, String(e && e.stack || e)); }
   finish();
 }

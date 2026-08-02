@@ -25,7 +25,7 @@
   let placeSheetState = null;  // place-sheet dialog: {mode:"slot",recipeId} | {mode:"recipe",date,slot} | null
   let skipPantryStaples = false;
   const pantryKeep = new Set(); // grocery keys the user added back despite having them in the pantry
-  let showRecipeCounts = false; // grocery: annotate each line with "· N recipes"
+  let groceryView = "aisle"; // grocery list grouping: "aisle" (shop it) | "recipe" (what's it for)
   const checkedGroceryItems = new Set(); // grocery: combined-item keys checked off
   let shoppingModeOn = false; // big-tap, screen-awake grocery view
   let manualGroceryItems = []; // user-typed items not tied to a recipe: {key,name}; checked state lives in checkedGroceryItems
@@ -68,7 +68,7 @@
     seenHomeTip = loadLocal("seenHomeTip", false);
     planView = loadLocal("planView", "dinners");
     loadLocal("pantryKeep", []).forEach((k) => pantryKeep.add(k));
-    showRecipeCounts = loadLocal("showRecipeCounts", false);
+    groceryView = loadLocal("groceryView", "aisle") === "recipe" ? "recipe" : "aisle";
     collapsedInvCats = new Set(loadLocal("invCollapsed", []));
     pruneCoachStore(); // one global sweep of expired coach:v1:* threads
   }
@@ -125,7 +125,6 @@
   const groceryContent = $("#grocery-content");
   const groceryProgressEl = $("#grocery-progress");
   const shoppingModeToggle = $("#shopping-mode-toggle");
-  const recipeCountsToggle = $("#recipe-counts-toggle");
   const backupPanel = $("#backup-panel");
   const guidePanel = $("#guide-panel");
   const placeSheet = $("#place-sheet");
@@ -1194,7 +1193,7 @@
     checkedGroceryItems.clear();
     skipPantryStaples = false;
     pantryKeep.clear();          // in-memory only — localStorage survives for the next sign-in
-    showRecipeCounts = false;
+    groceryView = "aisle";
     shoppingModeOn = false;
     manualGroceryItems = [];
     householdServings = null;
@@ -2323,10 +2322,11 @@
   function groceryQtyStr(it) {
     return it.amount == null ? "" : purchaseQtyStr([{ amount: it.amount, unit: it.unit }], it.item);
   }
-  // "\u00b7 3 recipes" \u2014 only when the header toggle is on, and never for manual items.
+  // "\u00b7 3 recipes" \u2014 a quiet note of how many recipes a line covers. Manual items
+  // (typed, not from a recipe) have none, so they show nothing.
   function recipeCountLabel(it) {
     const n = (it.recipes || []).length;
-    return showRecipeCounts && n ? ` \u00b7 ${n} recipe${n === 1 ? "" : "s"}` : "";
+    return n ? ` \u00b7 ${n} recipe${n === 1 ? "" : "s"}` : "";
   }
 
   function renderGroceryPanel() {
@@ -2353,6 +2353,19 @@
             ? "Nothing to buy \u2014 your pantry already covers this list."
             : "Nothing to buy \u2014 try turning off \u201cSkip pantry staples\u201d."}</p>`;
 
+    // "By recipe" is a reference view \u2014 the same shopping list regrouped under the
+    // recipe each line came from, so you can see what an ingredient is *for*.
+    // Display-only (no check-off): one ingredient can serve several recipes, so
+    // there's no single row to tick. Shopping mode always uses the aisle view.
+    const byRecipeHtml = groceryGroups().map((g) => `
+      <div class="g-recipe">
+        <p class="g-recipe-name">${esc(g.name)}</p>
+        <p class="g-recipe-serv">${g.servings} ${esc(g.label)}</p>
+        <ul class="g-items">
+          ${g.lines.map((l) => `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(displayGroceryName(l.item))}</span></li>`).join("")}
+        </ul>
+      </div>`).join("") || `<p class="g-empty">Add a recipe to your list to see it broken out here.</p>`;
+
     groceryContent.innerHTML = `
       <form id="grocery-add-manual" class="g-add-manual">
         <input type="text" id="grocery-manual-input" placeholder="Add an item\u2026" autocomplete="off">
@@ -2362,8 +2375,14 @@
         <input type="checkbox" id="grocery-skip-staples" ${skipPantryStaples ? "checked" : ""}>
         Skip pantry staples (salt, pepper, oil, water, sugar, butter, flour)
       </label>
-      <ul class="g-combined">${itemsHtml}</ul>
-      ${heldInPantry.length ? `
+      <nav class="scope g-view" role="group" aria-label="Group the list by">
+        <button type="button" class="scope-btn${groceryView === "aisle" ? " is-on" : ""}" data-g-view="aisle" aria-pressed="${groceryView === "aisle"}">\ud83d\uded2 By aisle</button>
+        <button type="button" class="scope-btn${groceryView === "recipe" ? " is-on" : ""}" data-g-view="recipe" aria-pressed="${groceryView === "recipe"}">\ud83c\udf7d By recipe</button>
+      </nav>
+      ${groceryView === "recipe"
+        ? `<div class="g-by-recipe-view">${byRecipeHtml}</div>`
+        : `<ul class="g-combined">${itemsHtml}</ul>`}
+      ${groceryView === "aisle" && heldInPantry.length ? `
       <details class="g-pantry">
         <summary>Already in your pantry (${heldInPantry.length})</summary>
         <ul class="g-items">
@@ -2374,18 +2393,7 @@
             </li>`).join("")}
         </ul>
       </details>` : ""}
-      ${renderAisleReorder()}
-      <details class="g-by-recipe">
-        <summary>By recipe</summary>
-        ${groceryGroups().map((g) => `
-          <div class="g-recipe">
-            <p class="g-recipe-name">${esc(g.name)}</p>
-            <p class="g-recipe-serv">${g.servings} ${esc(g.label)}</p>
-            <ul class="g-items">
-              ${g.lines.map((l) => `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(displayGroceryName(l.item))}</span></li>`).join("")}
-            </ul>
-          </div>`).join("")}
-      </details>`;
+      ${groceryView === "aisle" ? renderAisleReorder() : ""}`;
     renderGroceryProgress(toBuy);
   }
 
@@ -2400,18 +2408,17 @@
     groceryProgressEl.textContent = `✓ ${done} of ${total}`;
   }
 
-  // Reflect the persisted recipe-counts preference on its header button.
-  // (.ghost-btn[aria-pressed="true"] already carries the accent styling.)
-  function renderRecipeCountsToggle() {
-    recipeCountsToggle.setAttribute("aria-pressed", String(showRecipeCounts));
-  }
-
   function setShoppingMode(on) {
     shoppingModeOn = on;
+    // Shopping mode is for ticking items off, which the reference "by recipe"
+    // view can't do — snap back to the aisle list on the way in.
+    const snapped = on && groceryView !== "aisle";
+    if (snapped) { groceryView = "aisle"; saveLocal("groceryView", groceryView); }
     groceryPanel.classList.toggle("shopping", on);
     shoppingModeToggle.setAttribute("aria-pressed", String(on));
     shoppingModeToggle.textContent = on ? "✓ Shopping mode" : "🛒 Shopping mode";
-    renderGroceryProgress();
+    // renderGroceryPanel re-runs the progress counter itself.
+    if (snapped && !groceryPanel.hidden) renderGroceryPanel(); else renderGroceryProgress();
     if (on) requestWakeLock(); else releaseWakeLock();
   }
   function closeGroceryPanel() {
@@ -4942,7 +4949,6 @@
 
   // Grocery bar / panel
   function openGroceryPanel() {
-    renderRecipeCountsToggle(); // reflect the restored per-user preference
     renderGroceryPanel(); // whatever's already in memory — no blank flash
     groceryPanel.hidden = false;
     // Refetch on open so a change made on another device shows up here.
@@ -4957,12 +4963,6 @@
     if (e.target === groceryPanel) closeGroceryPanel();
   });
   shoppingModeToggle.addEventListener("click", () => setShoppingMode(!shoppingModeOn));
-  recipeCountsToggle.addEventListener("click", () => {
-    showRecipeCounts = !showRecipeCounts;
-    saveLocal("showRecipeCounts", showRecipeCounts);
-    renderRecipeCountsToggle();
-    if (!groceryPanel.hidden) renderGroceryPanel();
-  });
 
   // Mode tabs: Recipes ↔ Meal plan
   modeRecipesBtn.addEventListener("click", () => setViewMode("recipes"));
@@ -5026,6 +5026,14 @@
   groceryContent.addEventListener("click", (e) => {
     const removeBtn = e.target.closest(".g-manual-remove");
     if (removeBtn) { removeManualGroceryItem(removeBtn.dataset.key); return; }
+    // Group the list by aisle (to shop) or by recipe (to see what it's for).
+    const viewBtn = e.target.closest("[data-g-view]");
+    if (viewBtn) {
+      groceryView = viewBtn.dataset.gView === "recipe" ? "recipe" : "aisle";
+      saveLocal("groceryView", groceryView);
+      renderGroceryPanel();
+      return;
+    }
     // "Add back" on a pantry-held item — you have it, but want it anyway.
     const keepBtn = e.target.closest("[data-pantry-keep]");
     if (keepBtn) {

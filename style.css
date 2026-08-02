@@ -776,9 +776,13 @@ button:focus-visible, input:focus-visible {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* On a 320px phone the title + its buttons don't fit on one line — wrap them
+     onto a second row rather than pushing the panel wider. */
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 10px;
 }
-.panel-title { font-family: var(--font-display); font-size: 1.3rem; margin: 0; }
+.panel-title { font-family: var(--font-display); font-size: 1.3rem; margin: 0; min-width: 0; }
 
 .grocery-content { font-size: 0.93rem; }
 .g-recipe { margin-bottom: 18px; }
@@ -869,6 +873,14 @@ button:focus-visible, input:focus-visible {
 }
 .g-empty { color: var(--faint); font-size: 0.9rem; margin: 0 0 18px; }
 
+/* Aisle / By-recipe switch. Lives in the content (not the panel header, which
+   only fits the title + two buttons on a phone) and shrinks to fit rather than
+   forcing the panel wider. */
+.g-view { display: flex; width: 100%; max-width: 100%; margin: 4px 0 14px; }
+.g-view .scope-btn { flex: 1 1 0; min-width: 0; justify-content: center; padding: 9px 10px;
+  font-size: 0.84rem; overflow: hidden; text-overflow: ellipsis; }
+.g-by-recipe-view { margin-bottom: 18px; }
+
 .g-by-recipe summary,
 .g-pantry summary {
   font-family: var(--font-mono);
@@ -922,7 +934,7 @@ button:focus-visible, input:focus-visible {
 }
 .grocery-panel.shopping .g-by-recipe,
 .grocery-panel.shopping .g-pantry,
-.grocery-panel.shopping #recipe-counts-toggle,
+.grocery-panel.shopping .g-view,
 .grocery-panel.shopping .g-reorder,
 .grocery-panel.shopping .grocery-actions {
   display: none;
