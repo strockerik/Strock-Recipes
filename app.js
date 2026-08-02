@@ -3627,6 +3627,14 @@
   function renderGenOptions() {
     const bar = genIsBar();
     genCuisineLabel.textContent = bar ? "Style" : "Cuisine";
+    // A cocktail is one drink you build in a minute, so the recipe-shaped
+    // questions don't apply — hide Time and Servings for the bar. Style,
+    // Equipment (shaken/stirred/built) and the grocery-run lever still do.
+    // Null the values too, so a pick made on the kitchen side can't leak into
+    // the payload (both are omitted entirely when unset).
+    generatePanel.querySelector("#gen-opt-time").hidden = bar;
+    generatePanel.querySelector("#gen-opt-servings").hidden = bar;
+    if (bar) { genState.time = null; genState.servings = null; }
     const single = (key, opts, valueOf, labelOf) => {
       const row = generatePanel.querySelector(`[data-gen-single="${key}"]`);
       row.innerHTML = opts.map((o) => {
