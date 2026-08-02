@@ -869,14 +869,24 @@ button:focus-visible, input:focus-visible {
 }
 .g-empty { color: var(--faint); font-size: 0.9rem; margin: 0 0 18px; }
 
-.g-by-recipe summary {
+.g-by-recipe summary,
+.g-pantry summary {
   font-family: var(--font-mono);
   font-size: 0.78rem;
   color: var(--faint);
   cursor: pointer;
   margin-bottom: 10px;
 }
-.g-by-recipe[open] summary { margin-bottom: 12px; }
+.g-by-recipe[open] summary,
+.g-pantry[open] summary { margin-bottom: 12px; }
+
+/* Items your pantry already covers — listed after the aisles, each one tap from
+   going back on the list. */
+.g-pantry { margin-bottom: 18px; }
+.g-pantry-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; }
+.g-pantry-row > span { color: var(--faint); min-width: 0; }
+/* Quiet "· 3 recipes" provenance, shown only when the header toggle is on. */
+.g-item-recipes { color: var(--faint); font-size: 0.8rem; }
 
 .grocery-actions {
   display: flex;
@@ -911,6 +921,8 @@ button:focus-visible, input:focus-visible {
   height: 28px;
 }
 .grocery-panel.shopping .g-by-recipe,
+.grocery-panel.shopping .g-pantry,
+.grocery-panel.shopping #recipe-counts-toggle,
 .grocery-panel.shopping .g-reorder,
 .grocery-panel.shopping .grocery-actions {
   display: none;

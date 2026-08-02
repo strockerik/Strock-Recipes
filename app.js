@@ -24,6 +24,8 @@
   let mealPlan = [];           // entries in the rolling window: {id,recipeId,date,slot,servings,purchasedAt}
   let placeSheetState = null;  // place-sheet dialog: {mode:"slot",recipeId} | {mode:"recipe",date,slot} | null
   let skipPantryStaples = false;
+  const pantryKeep = new Set(); // grocery keys the user added back despite having them in the pantry
+  let showRecipeCounts = false; // grocery: annotate each line with "· N recipes"
   const checkedGroceryItems = new Set(); // grocery: combined-item keys checked off
   let shoppingModeOn = false; // big-tap, screen-awake grocery view
   let manualGroceryItems = []; // user-typed items not tied to a recipe: {key,name}; checked state lives in checkedGroceryItems
@@ -63,6 +65,8 @@
     seenPickHint = loadLocal("seenPickHint", false);
     seenIntro = loadLocal("seenIntro", false);
     planView = loadLocal("planView", "dinners");
+    loadLocal("pantryKeep", []).forEach((k) => pantryKeep.add(k));
+    showRecipeCounts = loadLocal("showRecipeCounts", false);
     collapsedInvCats = new Set(loadLocal("invCollapsed", []));
     pruneCoachStore(); // one global sweep of expired coach:v1:* threads
   }
@@ -101,6 +105,7 @@
   const groceryContent = $("#grocery-content");
   const groceryProgressEl = $("#grocery-progress");
   const shoppingModeToggle = $("#shopping-mode-toggle");
+  const recipeCountsToggle = $("#recipe-counts-toggle");
   const backupPanel = $("#backup-panel");
   const guidePanel = $("#guide-panel");
   const placeSheet = $("#place-sheet");
@@ -454,6 +459,41 @@
         : { amount: ceilToQuarter(amount / ML_PER_TSP), unit: "tsp" };
     }
     return { amount: Math.ceil(amount), unit };
+  }
+
+  // Produce you buy whole even though recipes measure it in pieces — a garlic
+  // bulb has ~10 cloves, a tomato ~8 slices. Loose pieces fold into an
+  // approximate purchase count ("8 clove + 20" -> "≈ 3 bulbs"; "8 slice ripe
+  // tomato" -> "≈ 1 tomato"). `loose` matches only the piece units to convert,
+  // so a real count/weight ("2 tomatoes", "1½ cup cherry tomatoes") is left alone.
+  const PRODUCE_PACK = {
+    garlic: { loose: /^(?:|clove|cloves|ct|count|head|heads|bulb|bulbs|piece|pieces|each)$/i, per: 10, unit: "bulb", units: "bulbs" },
+    tomato: { loose: /^(?:slice|slices)$/i, per: 8, unit: "tomato", units: "tomatoes" }
+  };
+  function producePackKey(name) {
+    const n = String(name || "").toLowerCase();
+    return Object.keys(PRODUCE_PACK).find((k) => new RegExp(`\\b${k}\\b`).test(n)) || null;
+  }
+  // Turn one or more {amount, unit} rows into a shopper-facing quantity string.
+  // Bulk produce converts to purchase units; otherwise amounts in the same unit
+  // sum and different units join with " + " ("5 ct + 1 ½ cup"). Empty when
+  // nothing has a quantity. Shared: the grocery list passes a single row, the
+  // King Soopers sheet passes every row folded onto one store product.
+  function purchaseQtyStr(rows, name) {
+    const pack = PRODUCE_PACK[producePackKey(name)];
+    if (pack) {
+      const pieces = rows.reduce((s, r) => s + (r.amount != null && pack.loose.test(r.unit || "") ? r.amount : 0), 0);
+      if (pieces > 0) { const n = Math.ceil(pieces / pack.per); return `≈ ${n} ${n === 1 ? pack.unit : pack.units}`; }
+    }
+    const byUnit = new Map();
+    rows.forEach((r) => {
+      if (r.amount == null) return;
+      const u = r.unit || "";
+      byUnit.set(u, (byUnit.get(u) || 0) + r.amount);
+    });
+    return [...byUnit.entries()]
+      .map(([u, amt]) => fmtAmount(amt) + (u ? " " + displayUnit(u) : ""))
+      .join(" + ");
   }
 
   // Convert an ingredient amount into a target unit system for the per-recipe
@@ -1132,6 +1172,8 @@
     basket.clear();
     checkedGroceryItems.clear();
     skipPantryStaples = false;
+    pantryKeep.clear();          // in-memory only — localStorage survives for the next sign-in
+    showRecipeCounts = false;
     shoppingModeOn = false;
     manualGroceryItems = [];
     householdServings = null;
@@ -2234,26 +2276,53 @@
     </details>`;
   }
 
+  // Split the combined list into what you still need to buy vs. what your pantry
+  // inventory already covers. Manual (typed) items are never auto-held \u2014 you added
+  // them deliberately \u2014 and anything you tapped "Add back" on stays on the list.
+  // Staples are a separate concern, handled by the skip-staples toggle inside
+  // combinedGroceryItems. Same isInPantryStock check the King Soopers sheet uses.
+  function partitionPantry(items) {
+    const toBuy = [], heldInPantry = [];
+    items.forEach((it) => {
+      const held = !it.manual && !pantryKeep.has(it.key) && isInPantryStock(it.item);
+      (held ? heldInPantry : toBuy).push(it);
+    });
+    return { toBuy, heldInPantry };
+  }
+  // One grocery line's shopper-facing quantity \u2014 the same purchase-unit conversion
+  // the King Soopers sheet uses (garlic -> bulbs, tomato slices -> whole fruit).
+  function groceryQtyStr(it) {
+    return it.amount == null ? "" : purchaseQtyStr([{ amount: it.amount, unit: it.unit }], it.item);
+  }
+  // "\u00b7 3 recipes" \u2014 only when the header toggle is on, and never for manual items.
+  function recipeCountLabel(it) {
+    const n = (it.recipes || []).length;
+    return showRecipeCounts && n ? ` \u00b7 ${n} recipe${n === 1 ? "" : "s"}` : "";
+  }
+
   function renderGroceryPanel() {
-    // Compute the combined list once; both the section render and the progress
-    // counter reuse it (each recompute re-scales every basket recipe).
+    // Compute the combined list once; the sections, the pantry group and the
+    // progress counter reuse it (each recompute re-scales every basket recipe).
     const combined = allGroceryItems();
-    const sections = groceryByCategory(combined);
+    const { toBuy, heldInPantry } = partitionPantry(combined);
+    const sections = groceryByCategory(toBuy);
     const itemsHtml = sections.length
       ? sections.map((sec) => `
           <li class="g-category">${esc(sec.category)}</li>
           ${sec.items.map((it) => {
             const checked = checkedGroceryItems.has(it.key);
-            const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + displayUnit(it.unit) : "");
+            const amtStr = groceryQtyStr(it);
             return `<li class="${checked ? "is-checked" : ""}">
               <label class="g-item">
                 <input type="checkbox" class="g-item-check" data-key="${esc(it.key)}" ${checked ? "checked" : ""}>
-                <span class="ing-amt">${esc(amtStr)}</span><span>${esc(it.item)}</span>
+                <span class="ing-amt">${esc(amtStr)}</span><span>${esc(it.item)}<span class="g-item-recipes">${esc(recipeCountLabel(it))}</span></span>
               </label>
               ${it.manual ? `<button type="button" class="g-manual-remove" data-key="${esc(it.key)}" aria-label="Remove ${esc(it.item)}">\u00d7</button>` : ""}
             </li>`;
           }).join("")}`).join("")
-      : `<p class="g-empty">Nothing to buy \u2014 try turning off "Skip pantry staples".</p>`;
+      : `<p class="g-empty">${heldInPantry.length
+            ? "Nothing to buy \u2014 your pantry already covers this list."
+            : "Nothing to buy \u2014 try turning off \u201cSkip pantry staples\u201d."}</p>`;
 
     groceryContent.innerHTML = `
       <form id="grocery-add-manual" class="g-add-manual">
@@ -2265,6 +2334,17 @@
         Skip pantry staples (salt, pepper, oil, water, sugar, butter, flour)
       </label>
       <ul class="g-combined">${itemsHtml}</ul>
+      ${heldInPantry.length ? `
+      <details class="g-pantry">
+        <summary>Already in your pantry (${heldInPantry.length})</summary>
+        <ul class="g-items">
+          ${heldInPantry.map((it) => `
+            <li class="g-pantry-row">
+              <span>${esc(it.item)}</span>
+              <button type="button" class="ghost-btn small" data-pantry-keep="${esc(it.key)}">Add back</button>
+            </li>`).join("")}
+        </ul>
+      </details>` : ""}
       ${renderAisleReorder()}
       <details class="g-by-recipe">
         <summary>By recipe</summary>
@@ -2277,17 +2357,24 @@
             </ul>
           </div>`).join("")}
       </details>`;
-    renderGroceryProgress(combined);
+    renderGroceryProgress(toBuy);
   }
 
-  // `items` is optional — renderGroceryPanel passes its already-computed list
-  // so the combine work isn't repeated; standalone callers (check-off) omit it.
+  // `items` is optional — renderGroceryPanel passes its already-partitioned
+  // to-buy list so the work isn't repeated; standalone callers (check-off) omit
+  // it. Pantry-held items never count toward shopping progress.
   function renderGroceryProgress(items) {
-    if (!items) items = allGroceryItems();
+    if (!items) items = partitionPantry(allGroceryItems()).toBuy;
     const total = items.length;
     const done = items.filter((it) => checkedGroceryItems.has(it.key)).length;
     groceryProgressEl.hidden = !shoppingModeOn || !total;
     groceryProgressEl.textContent = `✓ ${done} of ${total}`;
+  }
+
+  // Reflect the persisted recipe-counts preference on its header button.
+  // (.ghost-btn[aria-pressed="true"] already carries the accent styling.)
+  function renderRecipeCountsToggle() {
+    recipeCountsToggle.setAttribute("aria-pressed", String(showRecipeCounts));
   }
 
   function setShoppingMode(on) {
@@ -2314,12 +2401,15 @@
   function groceryText() {
     const date = new Date().toLocaleDateString();
     let out = `Grocery list \u2014 ${date}\n\n`;
-    const remaining = allGroceryItems().filter((it) => !checkedGroceryItems.has(it.key));
+    // Mirrors the panel: pantry-held items are left out (you're not buying them)
+    // and quantities use the same purchase units shown on screen.
+    const remaining = partitionPantry(allGroceryItems())
+      .toBuy.filter((it) => !checkedGroceryItems.has(it.key));
     groceryByCategory(remaining).forEach((sec) => {
       out += `\u2014 ${sec.category.toUpperCase()} \u2014\n`;
       sec.items.forEach((it) => {
-        const amtStr = it.amount == null ? "" : fmtAmount(it.amount) + (it.unit ? " " + displayUnit(it.unit) : "") + " ";
-        out += `- ${amtStr}${it.item}\n`;
+        const qty = groceryQtyStr(it);
+        out += `- ${qty ? qty + " " : ""}${it.item}${recipeCountLabel(it)}\n`;
       });
       out += `\n`;
     });
@@ -4815,6 +4905,7 @@
 
   // Grocery bar / panel
   function openGroceryPanel() {
+    renderRecipeCountsToggle(); // reflect the restored per-user preference
     renderGroceryPanel(); // whatever's already in memory — no blank flash
     groceryPanel.hidden = false;
     // Refetch on open so a change made on another device shows up here.
@@ -4829,6 +4920,12 @@
     if (e.target === groceryPanel) closeGroceryPanel();
   });
   shoppingModeToggle.addEventListener("click", () => setShoppingMode(!shoppingModeOn));
+  recipeCountsToggle.addEventListener("click", () => {
+    showRecipeCounts = !showRecipeCounts;
+    saveLocal("showRecipeCounts", showRecipeCounts);
+    renderRecipeCountsToggle();
+    if (!groceryPanel.hidden) renderGroceryPanel();
+  });
 
   // Mode tabs: Recipes ↔ Meal plan
   modeRecipesBtn.addEventListener("click", () => setViewMode("recipes"));
@@ -4892,6 +4989,14 @@
   groceryContent.addEventListener("click", (e) => {
     const removeBtn = e.target.closest(".g-manual-remove");
     if (removeBtn) { removeManualGroceryItem(removeBtn.dataset.key); return; }
+    // "Add back" on a pantry-held item — you have it, but want it anyway.
+    const keepBtn = e.target.closest("[data-pantry-keep]");
+    if (keepBtn) {
+      pantryKeep.add(keepBtn.dataset.pantryKeep);
+      saveLocal("pantryKeep", [...pantryKeep]);
+      renderGroceryPanel();
+      return;
+    }
     const upBtn = e.target.closest(".g-reorder-up");
     const downBtn = e.target.closest(".g-reorder-down");
     if (upBtn || downBtn) {
@@ -5089,39 +5194,6 @@
   function titleCase(s) {
     return String(s || "").replace(/\b[a-z]/g, (c) => c.toUpperCase());
   }
-  // Produce you buy whole even though recipes measure it in pieces — a garlic
-  // bulb has ~10 cloves, a tomato ~8 slices. Loose pieces fold into an
-  // approximate purchase count ("8 clove + 20" -> "≈ 3 bulbs"; "8 slice ripe
-  // tomato" -> "≈ 1 tomato"). `loose` matches only the piece units to convert,
-  // so a real count/weight ("2 tomatoes", "1½ cup cherry tomatoes") is left alone.
-  const PRODUCE_PACK = {
-    garlic: { loose: /^(?:|clove|cloves|ct|count|head|heads|bulb|bulbs|piece|pieces|each)$/i, per: 10, unit: "bulb", units: "bulbs" },
-    tomato: { loose: /^(?:slice|slices)$/i, per: 8, unit: "tomato", units: "tomatoes" }
-  };
-  function producePackKey(name) {
-    const n = String(name || "").toLowerCase();
-    return Object.keys(PRODUCE_PACK).find((k) => new RegExp(`\\b${k}\\b`).test(n)) || null;
-  }
-  // Sum the aggregated amounts for a folded product group into a shopper-facing
-  // string. Bulk produce is converted to purchase units; otherwise amounts in the
-  // same unit sum and different units join with " + " ("5 ct + 1 ½ cup"). Empty
-  // when nothing has a quantity.
-  function krogerQtyStr(rows, name) {
-    const pack = PRODUCE_PACK[producePackKey(name)];
-    if (pack) {
-      const pieces = rows.reduce((s, r) => s + (r.amount != null && pack.loose.test(r.unit || "") ? r.amount : 0), 0);
-      if (pieces > 0) { const n = Math.ceil(pieces / pack.per); return `≈ ${n} ${n === 1 ? pack.unit : pack.units}`; }
-    }
-    const byUnit = new Map();
-    rows.forEach((r) => {
-      if (r.amount == null) return;
-      const u = r.unit || "";
-      byUnit.set(u, (byUnit.get(u) || 0) + r.amount);
-    });
-    return [...byUnit.entries()]
-      .map(([u, amt]) => fmtAmount(amt) + (u ? " " + displayUnit(u) : ""))
-      .join(" + ");
-  }
   const krogerSendCartBtn = $("#kroger-send-cart");
   const krogerOpenStore = $("#kroger-open-store");
   function krogerCartItems() {
@@ -5177,7 +5249,7 @@
       const p = g.primary.product;
       const price = typeof p.price === "number" ? `$${p.price.toFixed(2)}` : "";
       const meta = [p.size, price, p.aisle ? `Aisle ${p.aisle}` : ""].filter(Boolean).join(" · ");
-      const qty = krogerQtyStr(g.rows, g.primary.item);
+      const qty = purchaseQtyStr(g.rows, g.primary.item);
       const head = (qty ? `(${qty}) ` : "") + titleCase(g.primary.item);
       const n = g.recipes.size;
       const sub = n ? `for ${n} recipe${n === 1 ? "" : "s"}` : "";
