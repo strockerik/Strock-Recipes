@@ -2021,6 +2021,12 @@ button:focus-visible, input:focus-visible {
 #inventory-panel .scope-btn.is-on { background: var(--accent); color: #fff; box-shadow: none; }
 .inv-hint { margin: 12px 0; font-size: 0.85rem; color: var(--faint); }
 /* Wrap so the Add button never spills off a narrow phone screen. */
+/* Restock filter — sits directly above the list it narrows. The margin lives on
+   the button so the row collapses to nothing when it's hidden (empty inventory). */
+.inv-filter { display: flex; justify-content: flex-end; }
+.inv-filter .ghost-btn { margin-bottom: 10px; }
+.inv-filter .ghost-btn:disabled { opacity: 0.45; cursor: default; }
+
 .inv-add { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .inv-add .inv-category { flex: 1 1 38%; min-width: 0; }
 .inv-add .inv-name { flex: 1 1 45%; min-width: 0; }

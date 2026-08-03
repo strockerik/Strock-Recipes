@@ -42,6 +42,7 @@
   let inventory = [];
   let invSection = "bar"; // which sub-tab the inventory panel is showing: "bar" | "pantry"
   let collapsedInvCats = new Set(); // "<section>:<category>" keys the user has collapsed; persisted
+  let invOutOnly = false; // inventory filter: show only out-of-stock items (resets each open)
   // Dietary preferences, stored on the profile row (cross-device); honored silently by the generator.
   let dietPrefs = { diets: [], allergies: [], avoid: [] };
 
@@ -231,6 +232,7 @@
   const invNameInput = $("#inv-name");
   const inventoryContent = $("#inventory-content");
   const invGenerateBtn = $("#inv-generate");
+  const invOutFilterBtn = $("#inv-out-filter");
 
   // AI recipe generator panel
   const addRecipeGenerateBtn = $("#add-recipe-generate");
@@ -1619,12 +1621,24 @@
     const avail = items.filter((i) => i.status !== "out");
     invGenerateBtn.hidden = invSection !== "bar" || avail.length === 0;
     invGenerateBtn.textContent = "🪄 Generate a cocktail from your bar";
+    // "Only what's out" — a restock view, so you can see everything to buy
+    // without scrolling past what you already have.
+    const outCount = items.filter((i) => i.status === "out").length;
+    invOutFilterBtn.hidden = !items.length;
+    invOutFilterBtn.disabled = outCount === 0 && !invOutOnly;
+    invOutFilterBtn.textContent = `🛒 Only what's out${outCount ? ` · ${outCount}` : ""}`;
+    invOutFilterBtn.setAttribute("aria-pressed", String(invOutOnly));
     if (!items.length) {
       inventoryContent.innerHTML = `<p class="inv-empty">Nothing here yet — add what you have on hand above.</p>`;
       return;
     }
+    const shown = invOutOnly ? items.filter((i) => i.status === "out") : items;
+    if (!shown.length) {
+      inventoryContent.innerHTML = `<p class="inv-empty">Nothing's out — you're fully stocked.</p>`;
+      return;
+    }
     const groups = {};
-    items.forEach((i) => { (groups[i.category || "other"] || (groups[i.category || "other"] = [])).push(i); });
+    shown.forEach((i) => { (groups[i.category || "other"] || (groups[i.category || "other"] = [])).push(i); });
     // Alphabetical throughout: categories by their displayed heading, items
     // within a category by name (brand, or the staple name for pantry).
     const cats = Object.keys(groups).sort((a, b) =>
@@ -1649,7 +1663,9 @@
         </li>`;
       }).join("");
       const heading = esc(invSection === "bar" ? invCap(cat) : cat);
-      const collapsed = collapsedInvCats.has(invSection + ":" + cat);
+      // While filtering, always expand — a collapsed category would hide the very
+      // out-of-stock rows the filter exists to surface.
+      const collapsed = !invOutOnly && collapsedInvCats.has(invSection + ":" + cat);
       return `<div class="inv-group${collapsed ? " is-collapsed" : ""}">
         <button type="button" class="inv-cat" data-inv-cat="${esc(cat)}" aria-expanded="${!collapsed}">
           <span class="inv-cat-caret" aria-hidden="true">▸</span>
@@ -1663,6 +1679,7 @@
   function setInvSection(sec) { invSection = sec; renderInventoryPanel(); }
   function openInventoryPanel() {
     invSection = section === "cocktails" ? "bar" : "pantry";
+    invOutOnly = false; // always open on the full list — a sticky filter reads as "my inventory vanished"
     renderInventoryPanel();
     inventoryPanel.hidden = false;
   }
@@ -1686,6 +1703,10 @@
   inventoryPanel.addEventListener("click", (e) => { if (e.target === inventoryPanel) inventoryPanel.hidden = true; });
   invTabBar.addEventListener("click", () => setInvSection("bar"));
   invTabPantry.addEventListener("click", () => setInvSection("pantry"));
+  invOutFilterBtn.addEventListener("click", () => {
+    invOutOnly = !invOutOnly;
+    renderInventoryPanel();
+  });
   invAddForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const category = invCategorySelect.value;
