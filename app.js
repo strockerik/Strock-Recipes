@@ -9,6 +9,7 @@
   let activeTags = new Set();
   let favoritesOnly = false;
   let sharedOnly = false;     // mirrors favoritesOnly — alternate "view mode"
+  let sortMode = "name";      // list order: "name" (A–Z) | "newest" | "oldest"; persisted
   let profileNames = {};      // user_id -> display_name, for attribution
   const openItems = new Set(); // ids of expanded items
   const openShareIds = new Set(); // ids of items with their share panel expanded
@@ -68,6 +69,7 @@
     seenIntro = loadLocal("seenIntro", false);
     seenHomeTip = loadLocal("seenHomeTip", false);
     planView = loadLocal("planView", "dinners");
+    sortMode = ["name", "newest", "oldest"].includes(loadLocal("sortMode", "name")) ? loadLocal("sortMode", "name") : "name";
     loadLocal("pantryKeep", []).forEach((k) => pantryKeep.add(k));
     groceryView = loadLocal("groceryView", "aisle") === "recipe" ? "recipe" : "aisle";
     collapsedInvCats = new Set(loadLocal("invCollapsed", []));
@@ -115,6 +117,7 @@
   const searchEl = $("#search");
   const tagFiltersEl = $("#tag-filters");
   const toggleFiltersBtn = $("#toggle-filters");
+  const sortSelect = $("#sort-by");
   const toggleFavoritesBtn = $("#toggle-favorites");
   const toggleSharedBtn = $("#toggle-shared");
   const activeFiltersEl = $("#active-filters");
@@ -772,6 +775,7 @@
       tags,
       baseServings: row.base_servings,
       servingsLabel: row.servings_label,
+      createdAt: row.created_at || null, // drives the newest/oldest sort
       ingredients,
       // Steps used to be plain strings; they're now {text, group} objects so a
       // step can belong to a sub-recipe section. Normalize legacy strings here
@@ -1071,6 +1075,7 @@
 
   // Re-render every view that depends on data / filters / basket state.
   function refreshViews() {
+    if (sortSelect.value !== sortMode) sortSelect.value = sortMode; // restore the saved order
     renderTagFilters();
     renderActiveFilters();
     renderList();
@@ -1756,11 +1761,25 @@
   function currentItems() {
     const items = activePool();
     const q = searchTerm.trim().toLowerCase();
-    return items.filter((it) => {
+    const matched = items.filter((it) => {
       if (!sharedOnly && favoritesOnly && !it.isFavorite) return false;
       if (activeTags.size && ![...activeTags].every((t) => it.tags.includes(t))) return false;
       if (!q) return true;
       return (it.searchHay || "").includes(q);
+    });
+    // The pool already arrives A–Z from the query, so "name" needs no work.
+    // For date sorts, anything missing a created_at (very old rows) sorts last
+    // rather than jumping to the top as an epoch-0 date.
+    if (sortMode === "name") return matched;
+    const dir = sortMode === "newest" ? -1 : 1;
+    return matched.slice().sort((a, b) => {
+      const ta = a.createdAt ? Date.parse(a.createdAt) : NaN;
+      const tb = b.createdAt ? Date.parse(b.createdAt) : NaN;
+      const aBad = Number.isNaN(ta), bBad = Number.isNaN(tb);
+      if (aBad && bBad) return a.name.localeCompare(b.name);
+      if (aBad) return 1;
+      if (bBad) return -1;
+      return ta === tb ? a.name.localeCompare(b.name) : (ta - tb) * dir;
     });
   }
 
@@ -4467,6 +4486,11 @@
     const open = tagFiltersEl.hidden;
     tagFiltersEl.hidden = !open;
     toggleFiltersBtn.setAttribute("aria-expanded", open);
+  });
+  sortSelect.addEventListener("change", () => {
+    sortMode = sortSelect.value;
+    saveLocal("sortMode", sortMode);
+    renderList();
   });
 
   // Favorites-only toggle

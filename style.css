@@ -1875,6 +1875,22 @@ button:focus-visible, input:focus-visible {
 
 /* Search field with inline icons */
 .search-wrap { position: relative; display: flex; align-items: center; width: 100%; }
+/* Search + sort share one line: the search flexes, the sort keeps its natural
+   width. min-width:0 lets the search shrink instead of pushing sort onto a
+   second row (or off the edge) on a phone. */
+.search-row .search-wrap { flex: 1 1 180px; width: auto; min-width: 0; }
+.sort-select {
+  flex: 0 0 auto; width: auto; padding: 0 30px 0 12px; height: 42px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
+  font-family: var(--font-body); font-size: 0.86rem; color: var(--faint); cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--faint) 50%),
+                    linear-gradient(135deg, var(--faint) 50%, transparent 50%);
+  background-position: right 14px center, right 9px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.sort-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .search-wrap .search { flex: 1; padding-left: 38px; padding-right: 46px; }
 .search-ico {
   position: absolute; left: 13px; font-size: .95rem; color: var(--faint); pointer-events: none;
