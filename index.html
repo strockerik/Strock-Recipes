@@ -114,11 +114,6 @@
           <button id="toggle-filters" class="search-filter-btn" aria-expanded="false"
                   title="Filter by tag" aria-label="Filter by tag">🏷</button>
         </div>
-        <select id="sort-by" class="sort-select" title="Sort" aria-label="Sort recipes">
-          <option value="name">A–Z</option>
-          <option value="newest">Newest</option>
-          <option value="oldest">Oldest</option>
-        </select>
       </div>
 
       <div id="tag-filters" class="tag-filters" hidden></div>
@@ -127,6 +122,14 @@
 
     <div class="result-row">
       <p id="result-count" class="result-count" aria-live="polite"></p>
+      <!-- Sort lives with the result count, not the search field: it describes the
+           list you're looking at, it's the rarest of these controls, and this row
+           has room to spare — so search keeps the full width of its own row. -->
+      <select id="sort-by" class="sort-select" title="Sort" aria-label="Sort recipes">
+        <option value="name">A–Z</option>
+        <option value="newest">Newest</option>
+        <option value="oldest">Oldest</option>
+      </select>
       <div class="result-row-actions">
         <div class="add-wrap">
           <button id="add-toggle" class="solid-btn small" aria-haspopup="menu" aria-expanded="false">
