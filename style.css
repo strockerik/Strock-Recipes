@@ -2026,6 +2026,34 @@ button:focus-visible, input:focus-visible {
 .kroger-row-x { flex: 0 0 auto; border: 0; background: transparent; color: var(--faint);
   font-size: 1rem; line-height: 1; cursor: pointer; padding: 6px; border-radius: 6px; }
 .kroger-row-x:hover { color: var(--campari); background: var(--campari-soft); }
+.kroger-row-x:active { color: var(--campari); background: var(--campari-soft); }
+/* Finger-sized hit areas for the small icon buttons.
+   These glyphs are deliberately light visual marks (~26x21px), which is well under
+   the 44px iOS minimum — taps land beside them and appear to do nothing. An
+   invisible centred overlay grows the TOUCH area to 44px while the glyph, the row
+   height, and the layout all stay exactly as designed. Only used on row-level
+   buttons with clear space around them, never on chips where it could overlap a
+   neighbouring control. `touch-action: manipulation` also drops the 300ms
+   double-tap delay, so a hit registers immediately. */
+.kroger-row-x,
+.inv-remove,
+.inv-restock,
+.g-manual-remove {
+  position: relative;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.kroger-row-x::after,
+.inv-remove::after,
+.inv-restock::after,
+.g-manual-remove::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 44px; height: 44px;
+  transform: translate(-50%, -50%);
+}
+
 .kroger-review-actions { margin-top: 14px; }
 .diet-tag {
   display: inline-flex; align-items: center; gap: 4px;
