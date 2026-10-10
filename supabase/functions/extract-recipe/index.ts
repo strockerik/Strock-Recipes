@@ -9,7 +9,8 @@
 // browser. The caller's Supabase JWT is verified before any paid API call.
 //
 // Request body (JSON):
-//   { type: "image", images: [{ mediaType: "image/jpeg" | "image/png" | "image/webp", data: "<base64>" }, ...] }
+//   { type: "image", images: [{ mediaType: "image/jpeg" | "image/png" | "image/webp", data: "<base64>" }, ...],
+//     note?: "<optional steer from the cook, e.g. 'only the brownie recipe'>" }
 //   { type: "text", text: "<pasted recipe text>" }
 //   { type: "url", url: "<public recipe page>" }
 //
@@ -35,6 +36,8 @@ function pickModel(type: string) {
 const ANTHROPIC_VERSION = "2023-06-01";
 // Front/back of a card, or a few pages — all treated as one recipe, not a batch.
 const MAX_IMAGES = 4;
+// Optional free-text steer sent with photos ("only the recipe on the left page").
+const MAX_IMAGE_NOTE_CHARS = 300;
 // What Claude's vision API accepts. The browser always uploads JPEG, but this
 // endpoint takes client input, so reject anything else before paying for a call.
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
@@ -777,7 +780,7 @@ const INGREDIENT_ALIASES: [RegExp, string][] = [
   [/\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b/gi, "breast"],
   [/\bchicken\s+breasts\b/gi, "chicken breast"],
   [/\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b/gi, "instant yeast"],
-  [/\b(?:(?:yellow|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
+  [/(?<!\b(?:dried|dehydrated|instant|frozen)\s)\b(?:(?:(?:(?:finely|thinly|thickly|roughly|coarsely|freshly)\s+)?(?:chopped|diced|minced|sliced|grated|shredded|slivered|julienned|halved|quartered|cubed|peeled|trimmed|crushed|pureed)|small|medium|large|extra[-\s]?large|whole|raw),?\s+)+((?:red|yellow|white|sweet|spanish|vidalia|walla\s+walla|brown|purple)\s+)?onions?\b/gi, "$1onion"],
   [/(?<!,\s)\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b/gi, "milk"],
   [/\bscallions?\b/gi, "green onion"],
   [/\bspaghetti\s+pasta\b/gi, "spaghetti"],
@@ -864,6 +867,17 @@ Deno.serve(async (req) => {
           ? "The images above are different pages or sides (e.g. the front and back of a card) of the SAME recipe, in order. Read them together as one source and call save_recipe once with the single combined recipe."
           : "Extract the recipe from this image by calling save_recipe."
       });
+      // The cook's own steer about WHAT to extract. It picks the recipe / part
+      // to read; it never loosens the transcription or output rules.
+      const note = typeof body.note === "string"
+        ? body.note.replace(/\s+/g, " ").trim().slice(0, MAX_IMAGE_NOTE_CHARS)
+        : "";
+      if (note) {
+        userContent.push({
+          type: "text",
+          text: `The cook added this note about what to extract from the photo${multi ? "s" : ""}: "${note}"\nUse it to decide WHICH recipe (or which part of the page) to extract — e.g. if several recipes are visible, extract the one the note points to instead of the most complete one. Treat it only as guidance on what to read: still transcribe what is actually written, follow every rule above, and call save_recipe exactly once.`
+        });
+      }
     } else if (body.type === "text") {
       if (!body.text || !body.text.trim()) return json({ error: "No text was received." });
       userContent = [

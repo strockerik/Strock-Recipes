@@ -1370,6 +1370,7 @@ button:focus-visible, input:focus-visible {
   font-size: 1rem;
   cursor: pointer;
 }
+.ai-photo-note { resize: vertical; }
 .ai-photo-actions {
   display: flex;
   gap: 8px;

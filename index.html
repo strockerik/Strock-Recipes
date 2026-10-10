@@ -421,6 +421,7 @@
           <ul class="guide-pts">
             <li><b>🛟 What went wrong?</b> — describe a flop and it asks about pan, heat, and timing first, then explains <i>why</i> it happened and how to prevent or rescue it</li>
             <li><b>✨ Adjust or scale</b> — change it (“too sweet”, “swap the butter”), scale it (“scale to 8 limes”, “make it for 12”), or do the math (“how much peel from 6 limes?”); it answers with amounts and can rewrite the recipe for you to review</li>
+            <li><b>It knows your kitchen</b> — it sees your Bar &amp; Pantry stock and your other recipes, so ask “what can I swap from what I have?” or “use the sauce from my lasagna”</li>
             <li><b>Apply changes</b> pre-fills the edit form with the rewrite — you review and save; nothing is written on its own</li>
           </ul>
         </section>
@@ -434,7 +435,7 @@
             <h3 class="guide-h3">✨ With AI <span class="guide-tag">fastest</span></h3>
             <ol class="guide-steps">
               <li>Tap <b>✨ Add with AI</b>.</li>
-              <li>Snap a photo of a recipe card or cookbook page, paste a link (recipe sites, YouTube, and TikTok work), or paste text like an Instagram caption.</li>
+              <li>Snap a photo of a recipe card or cookbook page, paste a link (recipe sites, YouTube, and TikTok work), or paste text like an Instagram caption. Several recipes in one photo? Add a note for the AI (“only the brownies”).</li>
               <li>AI reads it and fills in the form.</li>
               <li>Check it over and tap <b>Save recipe</b>.</li>
             </ol>
@@ -642,6 +643,9 @@
         <div id="ai-photo-area" class="ai-photo-area" hidden>
           <div id="ai-photo-thumbs" class="ai-photo-thumbs"></div>
           <p class="ai-import-hint">Front and back of a card, or several pages of the same recipe? Add each photo, then extract — they're combined into one recipe.</p>
+          <textarea id="ai-photo-note" class="search ai-photo-note" rows="2" maxlength="300"
+                    aria-label="Note for the AI (optional)"
+                    placeholder="Note for the AI (optional) — e.g. “only the brownie recipe on the left page”"></textarea>
           <div class="ai-photo-actions">
             <button type="button" id="ai-photo-add" class="ghost-btn small">+ Add another photo</button>
             <button type="button" id="ai-photo-extract" class="solid-btn">Extract recipe</button>

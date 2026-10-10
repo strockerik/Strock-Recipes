@@ -22,7 +22,7 @@ INGREDIENT_ALIASES = [
     (re.compile(r"\b(?:breasts?|thighs?)\s+or\s+(?:breasts?|thighs?)\b", re.I), "breast"),
     (re.compile(r"\bchicken\s+breasts\b", re.I), "chicken breast"),
     (re.compile(r"\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b", re.I), "instant yeast"),
-    (re.compile(r"\b(?:(?:yellow|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b", re.I), "onion"),
+    (re.compile(r"(?<!\bdried\s)(?<!\bdehydrated\s)(?<!\binstant\s)(?<!\bfrozen\s)\b(?:(?:(?:(?:finely|thinly|thickly|roughly|coarsely|freshly)\s+)?(?:chopped|diced|minced|sliced|grated|shredded|slivered|julienned|halved|quartered|cubed|peeled|trimmed|crushed|pureed)|small|medium|large|extra[-\s]?large|whole|raw),?\s+)+((?:red|yellow|white|sweet|spanish|vidalia|walla\s+walla|brown|purple)\s+)?onions?\b", re.I), r"\1onion"),
     (re.compile(r"(?<!,\s)\b(?:(?:whole|warm|hot|cold|lukewarm|2\s*%|1\s*%|skim|nonfat|reduced[-\s]?fat)\s+)+milk\b", re.I), "milk"),
     (re.compile(r"\bscallions?\b", re.I), "green onion"),
     (re.compile(r"\bspaghetti\s+pasta\b", re.I), "spaghetti"),
@@ -54,7 +54,8 @@ def canonicalizeItem(name):
 PREP_WORDS = ("to taste|diced|finely diced|roughly diced|chopped|finely chopped|roughly chopped|minced|finely minced|"
     "grated|finely grated|freshly grated|shredded|sliced|thinly sliced|finely sliced|cubed|crushed|melted|softened|"
     "room temperature|at room temperature|very cold|sifted|divided|drained|rinsed|optional|peeled|seeded|deseeded|"
-    "halved|quartered|crumbled|beaten|packed|cooked|uncooked|toasted|warmed|chilled")
+    "halved|quartered|crumbled|beaten|packed|cooked|uncooked|toasted|warmed|chilled|"
+    "slivered|julienned|thickly sliced|coarsely chopped|coarsely grated|trimmed|cut into")
 PREP_CLAUSE_RE = re.compile(r",\s*(?:" + PREP_WORDS + r"|plus more\b.*|for\b.*|to top\b.*|to serve\b.*|to garnish\b.*)[^,]*", re.I)
 
 def normalizeItemName(name):
@@ -313,7 +314,10 @@ def main():
     chk("condensed SOUP still simplified", kroger_strip("cream of celery condensed soup") == "cream of celery soup")
     chk("red onion stays a variety (not folded)", canonicalizeItem("red onion") == "red onion")
     chk("white/sweet onion varieties stay", canonicalizeItem("sweet onion") == "sweet onion" and canonicalizeItem("white onion") == "white onion")
-    chk("yellow/size onion still folds", canonicalizeItem("grated yellow onion") == "onion" and canonicalizeItem("medium onion") == "onion")
+    chk("size/prep onion folds", canonicalizeItem("grated onion") == "onion" and canonicalizeItem("medium onion") == "onion" and canonicalizeItem("thinly sliced onions") == "onion")
+    chk("onion variety survives prep words", canonicalizeItem("finely diced red onion") == "red onion" and canonicalizeItem("grated yellow onion") == "yellow onion" and canonicalizeItem("large, chopped sweet onions") == "sweet onion")
+    chk("yellow onion stays a variety", canonicalizeItem("yellow onion") == "yellow onion")
+    chk("non-raw onion products untouched", canonicalizeItem("dried minced onion") == "dried minced onion" and canonicalizeItem("sliced green onions") == "sliced green onions" and canonicalizeItem("small pearl onions") == "small pearl onions")
     chk("onion powder untouched", canonicalizeItem("onion powder") == "onion powder")
     chk("almond milk untouched", canonicalizeItem("almond milk") == "almond milk")
     chk("chocolate BAR not sent to chips", searchTerm_hint("dark chocolate bar") is None)

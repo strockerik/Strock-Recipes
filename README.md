@@ -145,6 +145,9 @@ Use the app — no editing JS files:
   Each account is capped at **20 AI extractions/day** (resets at midnight
   UTC) to keep API costs predictable — structured-data parses don't consume
   it.
+  - **Note for the AI:** once a photo is staged, an optional note box lets you
+    steer the extraction — e.g. "only the brownie recipe on the left page" when
+    a page shows several recipes.
   - **Multiple photos, one recipe:** if a recipe spans the front and back of a
     card, or several pages, tap "Take / choose photo" for each one (up to 4) —
     a thumbnail strip with an **+ Add another photo** button appears, and
@@ -175,6 +178,13 @@ Use the app — no editing JS files:
     yourself; nothing is written automatically (and Apply only appears on your own
     recipes). The change it made is noted in the recipe's Notes as an
     "AI tweaked:" line.
+
+  **It knows your kitchen.** Each message also carries what's in stock in your
+  Bar & Pantry (and what's marked out) plus the names of your other recipes, so
+  it can suggest swaps from what you have ("you have sherry vinegar — use
+  that"). When a question needs another recipe's details ("use the sauce from my
+  lasagna"), it reads that recipe itself (up to two look-ups per message, still
+  one counted request).
 
   It's a real back-and-forth (type a reply, press Enter to send; Shift+Enter for a
   newline). Each recipe's conversation is **kept for 24 hours** (per mode, in the
@@ -880,8 +890,10 @@ product and merged:
 - Chicken cuts: "boneless/skinless" dropped; "breast or thighs" → breast.
 - Yeast: instant / rapid-rise / bread-machine yeast → "instant yeast". *(Active-dry
   and fresh yeast stay separate — they really are different.)*
-- Onion: colour/size/prep words ("yellow", "grated", "medium"…) → "onion". "Green
-  onion" and "onion powder" stay their own thing.
+- Onion: size and raw-prep words ("medium", "thinly sliced", "diced", "grated"…) are
+  dropped, but a named variety is kept — "finely diced red onion" → "red onion",
+  "chopped yellow onion" → "yellow onion", "chopped onion" → "onion". "Green onion",
+  "pearl onion", "onion powder" and dried/frozen onion stay their own thing.
 - Milk: "whole/warm/2% milk" → "milk" (nut milks like "almond milk" stay distinct;
   a trailing "…, whole milk" fat note on another item, e.g. yogurt, is left alone).
 - Scallion → green onion. Parmesan ≡ Parmigiano-Reggiano. Mozzarella descriptors in

@@ -16,7 +16,14 @@
 //   { mode: "troubleshoot" | "tweak",
 //     recipe: { name, subtitle, section, tags, base_servings, servings_label,
 //               ingredients, method, notes },
-//     messages: [{ role: "user" | "assistant", content: "<text>" }, ...] }
+//     messages: [{ role: "user" | "assistant", content: "<text>" }, ...],
+//     context?: { pantry: string[], bar: string[], out: string[],   // inventory names
+//                 recipes: [{ name, section }] } }                  // the cook's other recipes
+//
+// With `context`, the coach knows what's in stock and which other recipes the
+// cook has. The index is names only; when a question needs another recipe's
+// details the model calls the server-side `get_recipe` tool, which reads that
+// row with the caller's JWT (so row-level security decides what it can see).
 //
 // Response: always HTTP 200 with either { result: {...} } or { error: "..." }.
 
@@ -35,6 +42,12 @@ const ANTHROPIC_VERSION = "2023-06-01";
 // Defensive caps on conversational input so a runaway client can't send a novel.
 const MAX_MESSAGES = 24;
 const MAX_MESSAGE_CHARS = 6000;
+// Caps on the kitchen context (inventory names + recipe index) and on lookups.
+const MAX_STOCK_ITEMS = 200;
+const MAX_RECIPE_INDEX = 300;
+const MAX_NAME_CHARS = 80;
+const MAX_RECIPE_LOOKUPS = 2;      // get_recipe calls per cook message
+const MAX_LOOKUP_CHARS = 8000;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -138,8 +151,103 @@ You are in a back-and-forth conversation.
 - When you return a changed recipe, set \`revised_recipe\` to a COMPLETE recipe (every field), carrying over everything you did NOT change unchanged, and append one line to \`notes\` starting "AI adjusted: " naming what changed (e.g. "AI adjusted: scaled to 8 limes (~0.5x)"). Otherwise \`revised_recipe\` null. Set \`needs_more_info\` false whenever you give a real answer.
 - Keep replies warm and concise.`;
 
-function buildSystemPrompt(mode: string, recipe: unknown) {
-  const base = mode === "tweak" ? TWEAK_PROMPT : TROUBLESHOOT_PROMPT;
+// Appended to either mode prompt when the client sent kitchen context.
+const KITCHEN_PROMPT = `
+
+THE COOK'S KITCHEN: below the recipe you are given what the cook has in their pantry and bar, and a list of their other saved recipes.
+- When you suggest a substitution, addition, or adjustment, prefer things they have IN STOCK, and say so ("you have sherry vinegar — use that"). Everyday staples (salt, pepper, oil, water, sugar, flour, butter) can be assumed even if unlisted. The list is not exhaustive, so don't refuse a sensible suggestion just because an item isn't listed — but if it needs something marked OUT, point that out.
+- The recipe list is names only. If the cook refers to another of their recipes, or borrowing from one would genuinely help (its sauce, its dough, its ratios), call \`get_recipe\` with the exact name from the list to read it, then answer. Don't look recipes up when the question doesn't need them.
+- Don't recite the inventory or recipe list back; use them quietly.`;
+
+type KitchenContext = { pantry: string[]; bar: string[]; out: string[]; recipes: { name: string; section: string }[] };
+
+function cleanNames(raw: unknown, max: number): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const x of raw) {
+    if (typeof x !== "string") continue;
+    const s = x.replace(/\s+/g, " ").trim().slice(0, MAX_NAME_CHARS);
+    if (s) out.push(s);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+// Sanitize the client's kitchen context; null when nothing usable was sent.
+function sanitizeContext(raw: unknown): KitchenContext | null {
+  if (!raw || typeof raw !== "object") return null;
+  const c = raw as Record<string, unknown>;
+  const recipes: KitchenContext["recipes"] = [];
+  if (Array.isArray(c.recipes)) {
+    for (const r of c.recipes) {
+      const name = typeof r?.name === "string" ? r.name.replace(/\s+/g, " ").trim().slice(0, MAX_NAME_CHARS) : "";
+      if (name) recipes.push({ name, section: r?.section === "bar" ? "bar" : "kitchen" });
+      if (recipes.length >= MAX_RECIPE_INDEX) break;
+    }
+  }
+  const ctx = {
+    pantry: cleanNames(c.pantry, MAX_STOCK_ITEMS),
+    bar: cleanNames(c.bar, MAX_STOCK_ITEMS),
+    out: cleanNames(c.out, MAX_STOCK_ITEMS),
+    recipes
+  };
+  return ctx.pantry.length || ctx.bar.length || ctx.out.length || ctx.recipes.length ? ctx : null;
+}
+
+function buildKitchenBlock(ctx: KitchenContext) {
+  const list = (xs: string[]) => (xs.length ? xs.join(", ") : "(nothing recorded)");
+  const kitchen = ctx.recipes.filter((r) => r.section !== "bar").map((r) => r.name);
+  const bar = ctx.recipes.filter((r) => r.section === "bar").map((r) => r.name);
+  return [
+    "THE COOK'S KITCHEN (live from their app):",
+    `Pantry, in stock: ${list(ctx.pantry)}`,
+    `Bar, in stock: ${list(ctx.bar)}`,
+    `Marked OUT: ${list(ctx.out)}`,
+    "",
+    "Their other saved recipes (names only — use get_recipe to read one):",
+    `Kitchen: ${kitchen.length ? kitchen.join("; ") : "(none)"}`,
+    `Bar: ${bar.length ? bar.join("; ") : "(none)"}`
+  ].join("\n");
+}
+
+const GET_RECIPE_TOOL = {
+  name: "get_recipe",
+  description: "Read one of the cook's other saved recipes (full ingredients, method, notes) by name. Use only when the answer needs that recipe's details.",
+  input_schema: {
+    type: "object",
+    properties: { name: { type: "string", description: "The recipe's name, exactly as it appears in the list of the cook's saved recipes." } },
+    required: ["name"]
+  }
+};
+
+// Fetch a recipe by name with the caller's own client, so RLS limits it to
+// recipes this user can see. Exact (case-insensitive) match first, then a
+// contains match. Returns the text handed back to the model.
+// deno-lint-ignore no-explicit-any
+async function lookupRecipe(client: any, rawName: unknown): Promise<string> {
+  const name = typeof rawName === "string" ? rawName.trim().slice(0, MAX_NAME_CHARS) : "";
+  if (!name) return "No recipe name was given.";
+  const pattern = name.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+  try {
+    let { data } = await client.from("recipes").select("*").ilike("name", pattern).limit(1);
+    if (!data?.length) {
+      ({ data } = await client.from("recipes").select("*").ilike("name", `%${pattern}%`).limit(1));
+    }
+    const r = data?.[0];
+    if (!r) return `No saved recipe named "${name}" was found.`;
+    return JSON.stringify({
+      name: r.name, subtitle: r.subtitle, section: r.section, tags: r.tags,
+      base_servings: r.base_servings, servings_label: r.servings_label,
+      ingredients: r.ingredients, method: r.method, notes: r.notes
+    }).slice(0, MAX_LOOKUP_CHARS);
+  } catch (err) {
+    console.error("recipe-coach: get_recipe failed:", err);
+    return "That recipe couldn't be read right now.";
+  }
+}
+
+function buildSystemPrompt(mode: string, recipe: unknown, hasKitchen: boolean) {
+  const base = (mode === "tweak" ? TWEAK_PROMPT : TROUBLESHOOT_PROMPT) + (hasKitchen ? KITCHEN_PROMPT : "");
   let recipeJson = "";
   try {
     recipeJson = JSON.stringify(recipe, null, 2).slice(0, 12_000);
@@ -191,6 +299,8 @@ Deno.serve(async (req) => {
     if (!body.recipe || typeof body.recipe !== "object") return json({ error: "No recipe was provided." });
     const messages = sanitizeMessages(body.messages);
     if (!messages) return json({ error: "No question was received." });
+    const kitchen = sanitizeContext(body.context);
+    const canLookup = !!kitchen?.recipes.length;
 
     // Enforce the coach's own per-user daily cap right before the paid call.
     // Fails open (logs and proceeds) if the SQL migration hasn't been run yet.
@@ -201,48 +311,73 @@ Deno.serve(async (req) => {
     }
     if (usageError) console.error("coach_usage check failed:", usageError);
 
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": ANTHROPIC_VERSION
-      },
-      body: JSON.stringify({
-        model: MODEL_COACH,
-        max_tokens: 4096,
-        // Cache the system block (mode prompt + the recipe JSON, which is
-        // constant across a session's turns) together with the tool schema
-        // that renders ahead of it. A troubleshoot/tweak session is several
-        // turns within minutes, so turns 2+ read this prefix at ~10% instead
-        // of re-billing the ~3k-token recipe JSON every turn. The growing
-        // `messages` history sits after this breakpoint, so it never
-        // invalidates the cache. Sonnet 4.6's min cacheable prefix is 2048
-        // tokens, which the tool schema + a real recipe clears.
-        system: [{ type: "text", text: buildSystemPrompt(mode, body.recipe), cache_control: { type: "ephemeral" } }],
-        tools: [{ name: "respond", description: "Reply to the cook with a clarifying question or your advice.", input_schema: COACH_SCHEMA }],
-        tool_choice: { type: "tool", name: "respond" },
-        messages
-      })
-    });
+    // Cache the system prefix (mode prompt + the recipe JSON + the kitchen
+    // context, all constant across a session's turns) together with the tool
+    // schemas that render ahead of it. A troubleshoot/tweak session is several
+    // turns within minutes, so turns 2+ read this prefix at ~10% instead of
+    // re-billing it every turn. The growing `messages` history sits after this
+    // breakpoint, so it never invalidates the cache. Sonnet 4.6's min cacheable
+    // prefix is 2048 tokens, which the tool schema + a real recipe clears.
+    const system: Record<string, unknown>[] = [{ type: "text", text: buildSystemPrompt(mode, body.recipe, !!kitchen) }];
+    if (kitchen) system.push({ type: "text", text: buildKitchenBlock(kitchen) });
+    system[system.length - 1].cache_control = { type: "ephemeral" };
 
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      console.error("Anthropic API error:", anthropicRes.status, errText);
-      const friendly = anthropicRes.status === 429
-        ? "Rate limit or usage limit reached — try again later."
-        : "The AI coach failed. Please try again.";
-      return json({ error: friendly });
+    const respondTool = { name: "respond", description: "Reply to the cook with a clarifying question or your advice.", input_schema: COACH_SCHEMA };
+    const tools = canLookup ? [respondTool, GET_RECIPE_TOOL] : [respondTool];
+
+    // One cook message = one counted request, however many lookups it takes.
+    // Each round the model either reads another recipe (get_recipe) or answers
+    // (respond); once the lookup budget is spent it is forced to answer.
+    // deno-lint-ignore no-explicit-any
+    const convo: any[] = [...messages];
+    // deno-lint-ignore no-explicit-any
+    let result: any = null;
+    for (let lookups = 0; ; lookups++) {
+      const mayLookup = canLookup && lookups < MAX_RECIPE_LOOKUPS;
+      const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": ANTHROPIC_API_KEY,
+          "anthropic-version": ANTHROPIC_VERSION
+        },
+        body: JSON.stringify({
+          model: MODEL_COACH,
+          max_tokens: 4096,
+          system,
+          tools,
+          tool_choice: mayLookup
+            ? { type: "any", disable_parallel_tool_use: true }
+            : { type: "tool", name: "respond" },
+          messages: convo
+        })
+      });
+
+      if (!anthropicRes.ok) {
+        const errText = await anthropicRes.text();
+        console.error("Anthropic API error:", anthropicRes.status, errText);
+        const friendly = anthropicRes.status === 429
+          ? "Rate limit or usage limit reached — try again later."
+          : "The AI coach failed. Please try again.";
+        return json({ error: friendly });
+      }
+
+      const anthropicData = await anthropicRes.json();
+      if (anthropicData.stop_reason === "max_tokens") {
+        console.error("recipe-coach: response truncated at max_tokens");
+        return json({ error: "That answer got too long — try narrowing the question." });
+      }
+      const toolBlock = anthropicData.content?.find((c: { type: string }) => c.type === "tool_use");
+      if (mayLookup && toolBlock?.name === "get_recipe") {
+        const found = await lookupRecipe(supabaseClient, toolBlock.input?.name);
+        convo.push({ role: "assistant", content: anthropicData.content });
+        convo.push({ role: "user", content: [{ type: "tool_result", tool_use_id: toolBlock.id, content: found }] });
+        continue;
+      }
+      result = toolBlock?.name === "respond" ? toolBlock.input : null;
+      break;
     }
 
-    const anthropicData = await anthropicRes.json();
-    const toolBlock = anthropicData.content?.find((c: { type: string }) => c.type === "tool_use");
-    const result = toolBlock?.input;
-
-    if (anthropicData.stop_reason === "max_tokens") {
-      console.error("recipe-coach: response truncated at max_tokens");
-      return json({ error: "That answer got too long — try narrowing the question." });
-    }
     if (!result || typeof result.reply !== "string" || !result.reply.trim()) {
       return json({ error: "The AI coach couldn’t form a reply. Please try again." });
     }

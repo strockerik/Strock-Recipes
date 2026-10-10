@@ -208,6 +208,7 @@
   const aiPhotoThumbs = $("#ai-photo-thumbs");
   const aiPhotoAddBtn = $("#ai-photo-add");
   const aiPhotoExtractBtn = $("#ai-photo-extract");
+  const aiPhotoNote = $("#ai-photo-note");
   const aiPasteTextBtn = $("#ai-paste-text-btn");
   const aiTextArea = $("#ai-text-area");
   const aiTextInput = $("#ai-text-input");
@@ -587,10 +588,11 @@
     // Yeast: instant / rapid-rise / bread-machine are one product (active-dry and
     // fresh yeast are genuinely different and are left alone).
     [/\b(?:instant\s+dry|rapid[-\s]?rise|quick[-\s]?rise|bread\s+machine)\s+yeast\b/gi, "instant yeast"],
-    // Onion: size/prep adjectives (and the default "yellow") are the same onion,
-    // but true VARIETIES (red/white/sweet/spanish/vidalia) are different products
-    // and stay distinct — as do "green onion" and "onion powder".
-    [/\b(?:(?:yellow|medium|large|small|grated|minced|diced|chopped)\s+)+onions?\b/gi, "onion"],
+    // Onion: size and raw-prep adjectives ("thinly sliced", "diced", "medium") are
+    // the same onion, but a named VARIETY (red/yellow/white/sweet/…) is kept as
+    // written — "finely diced red onion" -> "red onion". "Green onion", "pearl
+    // onion", "onion powder" and dried/frozen onion products are left alone.
+    [/(?<!\b(?:dried|dehydrated|instant|frozen)\s)\b(?:(?:(?:(?:finely|thinly|thickly|roughly|coarsely|freshly)\s+)?(?:chopped|diced|minced|sliced|grated|shredded|slivered|julienned|halved|quartered|cubed|peeled|trimmed|crushed|pureed)|small|medium|large|extra[-\s]?large|whole|raw),?\s+)+((?:red|yellow|white|sweet|spanish|vidalia|walla\s+walla|brown|purple)\s+)?onions?\b/gi, "$1onion"],
     // Milk: fat-content / temperature phrasings are one carton (nut milks keep
     // their qualifier — "almond milk" stays distinct). The negative lookbehind
     // leaves a trailing fat qualifier alone ("Greek yogurt, whole milk" is not a
@@ -642,7 +644,7 @@
   // shown in the list keeps its original wording. Strips prep notes and folds
   // common descriptor synonyms so e.g. "Salt and Black Pepper, to taste" and
   // "salt and pepper", or "guanciale, diced" and "guanciale", land on one line.
-  const PREP_WORDS ="to taste|diced|finely diced|roughly diced|chopped|finely chopped|roughly chopped|minced|finely minced|grated|finely grated|freshly grated|shredded|sliced|thinly sliced|finely sliced|cubed|crushed|melted|softened|room temperature|at room temperature|very cold|sifted|divided|drained|rinsed|optional|peeled|seeded|deseeded|halved|quartered|crumbled|beaten|packed|cooked|uncooked|toasted|warmed|chilled";
+  const PREP_WORDS ="to taste|diced|finely diced|roughly diced|chopped|finely chopped|roughly chopped|minced|finely minced|grated|finely grated|freshly grated|shredded|sliced|thinly sliced|finely sliced|cubed|crushed|melted|softened|room temperature|at room temperature|very cold|sifted|divided|drained|rinsed|optional|peeled|seeded|deseeded|halved|quartered|crumbled|beaten|packed|cooked|uncooked|toasted|warmed|chilled|slivered|julienned|thickly sliced|coarsely chopped|coarsely grated|trimmed|cut into";
   const PREP_CLAUSE_RE = new RegExp(`,\\s*(?:${PREP_WORDS}|plus more\\b.*|for\\b.*|to top\\b.*|to serve\\b.*|to garnish\\b.*)[^,]*`, "gi");
   function normalizeItemName(name) {
     let s = canonicalizeItem(String(name)).toLowerCase().trim(); // shared synonym folds first
@@ -2809,15 +2811,20 @@
   }
 
   // ---------- Recipe form (add / edit / delete) ----------
+  // The edit field shows at most 3 decimals (2/3 is stored as 0.666…, which is
+  // noise in a form); the exact value rides along in data-exact so an untouched
+  // row saves back unchanged.
+  const roundFormAmount = (n) => Math.round(n * 1000) / 1000;
   function ingredientRow(ing) {
-    const amount = ing && ing.amount != null ? ing.amount : "";
+    const exact = ing && typeof ing.amount === "number" && isFinite(ing.amount) ? ing.amount : null;
+    const amount = exact != null ? roundFormAmount(exact) : (ing && ing.amount != null ? ing.amount : "");
     const unit = ing && ing.unit != null ? ing.unit : "";
     const item = ing ? ing.item : "";
     // The ▲▼ control only shows in reorder mode (CSS-gated, like the step rows);
     // the save read-back ignores everything but the three inputs, so it's inert.
     return `
       <div class="rf-ing-row">
-        <input type="number" step="any" class="rf-ing-amount" placeholder="amt" value="${esc(amount)}">
+        <input type="number" step="any" class="rf-ing-amount" placeholder="amt" value="${esc(amount)}"${exact != null ? ` data-exact="${exact}"` : ""}>
         <input type="text" class="rf-ing-unit" placeholder="unit" value="${esc(unit)}">
         <input type="text" class="rf-ing-item" placeholder="ingredient" value="${esc(item)}" required>
         <div class="rf-ing-move">
@@ -3206,7 +3213,11 @@
       if (row.classList.contains("rf-section-row")) {
         ingGroup = row.querySelector(".rf-section-input").value.trim() || null;
       } else if (row.classList.contains("rf-ing-row")) {
-        const amount = row.querySelector(".rf-ing-amount").value;
+        const amountInput = row.querySelector(".rf-ing-amount");
+        let amount = amountInput.value;
+        // Untouched rounded display -> save the exact amount it stands for.
+        const exact = amountInput.dataset.exact;
+        if (amount !== "" && exact != null && Number(amount) === roundFormAmount(Number(exact))) amount = exact;
         const unit = row.querySelector(".rf-ing-unit").value.trim();
         const itemName = row.querySelector(".rf-ing-item").value.trim();
         // Store the short unit form ("fluid ounces" -> "fl oz") so it's clean at
@@ -3428,6 +3439,7 @@
     aiLinkInput.value = "";
     aiLinkArea.hidden = true;
     aiPhotoInput.value = "";
+    aiPhotoNote.value = "";
     aiPhotoQueue = [];
     renderAiPhotoQueue();
     aiImportPicker.hidden = false;
@@ -3603,7 +3615,9 @@
 
   aiPhotoExtractBtn.addEventListener("click", () => {
     if (!aiPhotoQueue.length) return;
-    runExtraction({ type: "image", images: aiPhotoQueue.slice() });
+    // Optional steer for the AI ("only the brownie recipe on the left page").
+    const note = aiPhotoNote.value.trim();
+    runExtraction({ type: "image", images: aiPhotoQueue.slice(), ...(note ? { note } : {}) });
   });
 
   aiPhotoThumbs.addEventListener("click", (e) => {
@@ -4035,6 +4049,22 @@
     };
   }
 
+  // What the coach knows beyond this recipe: pantry/bar stock and the names of
+  // the cook's other recipes (it reads one in full server-side when needed).
+  function buildCoachContext(it) {
+    const label = (i) => (i.name && i.category && i.name.toLowerCase() !== i.category.toLowerCase()
+      ? `${i.category} (${i.name})` : (i.name || i.category || "")).trim();
+    const stock = (sec) => inventory.filter((i) => i.section === sec && i.status !== "out").map(label).filter(Boolean);
+    return {
+      pantry: stock("pantry"),
+      bar: stock("bar"),
+      out: inventory.filter((i) => i.status === "out").map(label).filter(Boolean),
+      recipes: Object.values(byId)
+        .filter((r) => r.id !== it.id && r.name)
+        .map((r) => ({ name: r.name, section: r.section === "bar" ? "bar" : "kitchen" }))
+    };
+  }
+
   function setCoachMode(mode) {
     coachMode = mode === "tweak" ? "tweak" : "troubleshoot";
     coachModeTroubleshootBtn.classList.toggle("is-active", coachMode === "troubleshoot");
@@ -4122,7 +4152,7 @@
     const token = ++coachToken;
 
     const invokePromise = supabaseClient.functions.invoke("recipe-coach", {
-      body: { mode: coachMode, recipe: serializeRecipeForCoach(it), messages: coachMessages }
+      body: { mode: coachMode, recipe: serializeRecipeForCoach(it), messages: coachMessages, context: buildCoachContext(it) }
     }).catch((error) => ({ error }));
     const timeoutPromise = new Promise((resolve) =>
       setTimeout(() => resolve(EXTRACTION_TIMEOUT), EXTRACTION_TIMEOUT_MS)
