@@ -32,6 +32,12 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 // Generation from a text ingredient list is cheap — Haiku handles it well. Flip
 // this one const to Sonnet if quality testing shows incoherent "Frankenstein" output.
+// Haiku 5.5 was A/B-tested here 2026-10-20 (ai_test_runs/*laneB-haiku-*) and
+// rolled back: ~10x cheaper, but more over-built recipes (14 vs 8 ingredients on
+// a "use what I have" dish), prompt jargon leaking into notes ("Tier-3"), and
+// 2 of 3 allergy prompts tripping the net. It accepts this forced tool_choice
+// and its refusals are handled in runTool — retry with a larger sample and a
+// simplicity-tuned prompt. The NEWEST Sonnet/Opus reject forced tool_choice.
 const MODEL = "claude-haiku-4-5-20251001";
 const ANTHROPIC_VERSION = "2023-06-01";
 // Soft per-user cap on paid Anthropic calls, enforced via increment_generation_usage().
@@ -219,32 +225,170 @@ function buildConstraintLines(
   lines.push("");
   lines.push(`Dietary constraints:`);
   lines.push(`- Diets that MUST be satisfied: ${listOrNone(diets)}`);
-  lines.push(`- ALLERGIES — never include, in any form, including garnish or substitutions: ${listOrNone(allergies)}`);
+  lines.push(`- ALLERGIES — never include, in any form, including garnish or substitutions: ${describeAllergies(allergies)}`);
   lines.push(`- Dislikes to avoid when possible: ${listOrNone(avoid)}`);
   return lines;
 }
 
+// A usable recipe from the model: a name and at least one ingredient.
+// deno-lint-ignore no-explicit-any
+const isRecipe = (r: any) => !!r && !!r.name && Array.isArray(r.ingredients) && r.ingredients.length > 0;
+
+// ==== ALLERGEN NET ====
+// MIRROR: this block is byte-identical in generate-recipe and pair-drink (each
+// function deploys as one file); testing-skills/allergen_net_test.py checks the
+// copies match and runs the cases. Change both or neither.
+//
+// An allergy is often a CATEGORY ("shellfish", "tree nuts", "dairy") that never
+// appears word-for-word in an ingredient list, so a literal match let "shrimp"
+// through a shellfish allergy. Each family lists its foods (including hidden
+// sources: Worcestershire = anchovy, orgeat = almond, Clamato = clam), and its
+// `except` patterns strip free-from forms first ("coconut milk", "peanut
+// butter", "gluten-free pasta") so a safe recipe isn't rejected after a paid call.
+// Keys and foods are lowercase; plain JSON so the test can parse them. Each
+// ingredient line is scanned on its own, so an except pattern can never erase
+// part of another ingredient.
+const ALLERGEN_ALIASES: Record<string, string[]> = {
+  "shellfish": ["shellfish"], "crustacean": ["crustacean"], "mollusc": ["mollusc"], "mollusk": ["mollusc"],
+  "fish": ["fish"], "seafood": ["fish", "shellfish"],
+  "tree nut": ["tree nut"], "nut": ["tree nut", "peanut"], "peanut": ["peanut"], "groundnut": ["peanut"],
+  "dairy": ["dairy"], "milk": ["dairy"], "cow's milk": ["dairy"], "lactose": ["dairy"], "casein": ["dairy"], "whey": ["dairy"],
+  "egg": ["egg"],
+  "gluten": ["gluten"], "wheat": ["gluten"], "celiac": ["gluten"], "coeliac": ["gluten"],
+  "soy": ["soy"], "soya": ["soy"], "soybean": ["soy"],
+  "sesame": ["sesame"], "sesame seed": ["sesame"]
+};
+const ALLERGEN_FAMILIES: Record<string, { foods: string[]; except: string[] }> = {
+  "shellfish": {
+    "foods": ["shellfish", "shrimp", "prawn", "crab", "lobster", "crawfish", "crayfish", "langoustine", "scallop", "clam", "clamato", "mussel", "oyster", "cockle", "squid", "calamari", "octopus"],
+    "except": ["\\boyster mushrooms?\\b", "\\bcrab ?apples?\\b"]
+  },
+  "crustacean": {
+    "foods": ["crustacean", "shrimp", "prawn", "crab", "lobster", "crawfish", "crayfish", "langoustine"],
+    "except": []
+  },
+  "mollusc": {
+    "foods": ["mollusc", "mollusk", "scallop", "clam", "clamato", "mussel", "oyster", "cockle", "squid", "calamari", "octopus"],
+    "except": ["\\boyster mushrooms?\\b"]
+  },
+  "fish": {
+    "foods": ["fish", "salmon", "tuna", "cod", "halibut", "tilapia", "trout", "anchovy", "sardine", "mackerel", "haddock", "snapper", "sea bass", "swordfish", "mahi mahi", "catfish", "pollock", "herring", "bonito", "fish sauce", "worcestershire"],
+    "except": ["\\bvegan fish sauce\\b"]
+  },
+  "tree nut": {
+    "foods": ["tree nut", "almond", "walnut", "pecan", "cashew", "pistachio", "hazelnut", "macadamia", "brazil nut", "pine nut", "chestnut", "praline", "marzipan", "frangipane", "nutella", "orgeat", "frangelico", "nocino"],
+    "except": ["\\bwater chestnuts?\\b"]
+  },
+  "peanut": {
+    "foods": ["peanut", "groundnut", "satay"],
+    "except": []
+  },
+  "dairy": {
+    "foods": ["dairy", "milk", "butter", "buttermilk", "cheese", "cream", "sour cream", "ice cream", "yogurt", "yoghurt", "ghee", "whey", "casein", "half-and-half", "half and half", "creme fraiche", "crème fraîche", "parmesan", "mozzarella", "cheddar", "ricotta", "feta", "mascarpone", "gouda", "brie", "paneer", "baileys", "irish cream"],
+    "except": [
+      "\\b(?:coconut|almond|oat|soy|soya|rice|cashew|hemp|macadamia|hazelnut|pea|flax|plant[- ]based|plant|vegan|non[- ]dairy|dairy[- ]free)(?: (?!and\\b|or\\b|with\\b|plus\\b)[a-z'-]+){0,2} +(?:milk|cream|yogh?urt|butter|cheese|creamer|parmesan|mozzarella|cheddar|ricotta|feta|ghee)s?\\b",
+      "\\b(?:peanut|almond|cashew|nut|sunflower|seed|apple|cocoa|shea|pumpkin|soy) +butter\\b",
+      "\\bbutter ?(?:beans?|lettuce)\\b",
+      "\\bcream of (?:tartar|coconut)\\b",
+      "\\bcream (?:soda|sherry)\\b"
+    ]
+  },
+  "egg": {
+    "foods": ["egg", "egg white", "egg yolk", "eggnog", "mayonnaise", "mayo", "aioli", "meringue", "hollandaise", "bearnaise", "béarnaise"],
+    "except": ["\\b(?:vegan|plant[- ]based|egg[- ]free|eggless) +(?:mayo|mayonnaise|aioli|eggs?)\\b", "\\begg replacer\\b", "\\b(?:flax|chia) eggs?\\b"]
+  },
+  "gluten": {
+    "foods": ["gluten", "wheat", "flour", "bread", "breadcrumb", "bread crumb", "panko", "crouton", "pasta", "spaghetti", "penne", "linguine", "fettuccine", "macaroni", "lasagna", "lasagne", "orzo", "rigatoni", "noodle", "ramen", "udon", "couscous", "barley", "rye", "farro", "semolina", "spelt", "bulgur", "seitan", "soy sauce", "malt", "beer", "pastry", "pie crust", "croissant", "bagel", "pita", "naan", "cracker", "phyllo", "filo"],
+    "except": [
+      "\\b(?:gluten[- ]free|gf) +[\\w'-]+(?: +(?:flour|bread|pasta|noodles?|crumbs?|breadcrumbs?|panko|beer|soy sauce|crackers?|spaghetti|penne|macaroni))?",
+      "\\b(?:rice|almond|coconut|corn|chickpea|oat|tapioca|potato|sweet potato|cassava|sorghum|teff|buckwheat|quinoa|millet|arrowroot|glass|cellophane|shirataki|kelp|zucchini|mung bean) +(?:flour|noodles?|pasta|bread|crumbs?|crackers?)\\b",
+      "\\b(?:ginger|root) +beers?\\b"
+    ]
+  },
+  "soy": {
+    "foods": ["soy", "soya", "soybean", "soy sauce", "tofu", "tempeh", "edamame", "miso", "tamari", "shoyu"],
+    "except": []
+  },
+  "sesame": {
+    "foods": ["sesame", "tahini", "benne", "za'atar", "zaatar", "furikake", "halva", "halvah", "gomasio"],
+    "except": []
+  }
+};
+// "<anything>-free" is never the allergen itself ("nut-free pesto"). Stripped
+// AFTER a family's own `except` patterns, which need the "gluten-free" context.
+const FREE_FROM_RE = /\b[\w']+[- ]free\b/gi;
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// "tree nuts" -> "tree nut", "anchovies" -> "anchovy", "tomatoes" -> "tomato".
+function singularOf(term: string): string {
+  if (term.length <= 3) return term;
+  if (/ies$/.test(term)) return term.slice(0, -3) + "y";
+  if (/oes$/.test(term)) return term.slice(0, -2);
+  if (/[^s]s$/.test(term)) return term.slice(0, -1);
+  return term;
+}
+// Whole word/phrase, tolerating a plural or possessive ("peanuts", "crab's",
+// "anchovies").
+const allergenWordRe = (term: string) => {
+  const forms = [`${escapeRegExp(term)}(?:es|s|'s)?`];
+  if (/[^aeiou]y$/.test(term)) forms.push(`${escapeRegExp(term.slice(0, -1))}ies`);
+  return new RegExp(`\\b(?:${forms.join("|")})\\b`, "i");
+};
+// The families an allergy entry belongs to: "Tree Nuts" -> ["tree nut"]. Empty
+// for anything not in the table, which then falls back to a literal match.
+function allergenFamilies(raw: string): string[] {
+  const term = raw.trim().toLowerCase();
+  return ALLERGEN_ALIASES[term] || ALLERGEN_ALIASES[singularOf(term)] || [];
+}
 // Post-generation safety net: does the recipe actually put an allergen on the
-// plate? Scans the NAME and INGREDIENT items only — NOT notes, because a safe
-// recipe may legitimately mention an allergen in notes to say it was left out
-// ("omits peanuts per your allergy"), and rejecting on that is a false positive.
-// Matches common plural/possessive forms so a bare "peanuts" is caught (a plain
-// \bterm\b misses the plural), while still catching "peanut butter" via the
-// leading word boundary.
-function allergyHit(recipe: { name?: string; ingredients?: Array<{ item?: string }> }, allergies: string[]): string | null {
-  const haystacks: string[] = [];
-  if (recipe.name) haystacks.push(recipe.name);
-  (recipe.ingredients || []).forEach((ing) => { if (ing?.item) haystacks.push(ing.item); });
-  const hay = haystacks.join(" \n ").toLowerCase();
+// plate? Scans the NAME and each INGREDIENT line separately — NOT notes, because
+// a safe recipe may legitimately mention an allergen in notes to say it was left
+// out ("omits peanuts per your allergy"). Returns what to tell the cook — label
+// "shrimp (shellfish)" plus the offending line — or null.
+function allergyHit(recipe: { name?: string; ingredients?: Array<{ item?: string }> }, allergies: unknown[]): { label: string; item: string } | null {
+  // Ingredient lines first: reporting "2 tbsp crushed peanuts" is more useful to
+  // the cook (and to the repair prompt) than the recipe title.
+  const lines: string[] = [];
+  (recipe.ingredients || []).forEach((ing) => { if (ing?.item) lines.push(ing.item); });
+  if (recipe.name) lines.push(recipe.name);
   for (const raw of allergies) {
     const term = String(raw).trim().toLowerCase();
     if (!term) continue;
-    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`\\b${esc}(?:es|s|'s)?\\b`, "i");
-    if (re.test(hay)) return term;
+    const families = allergenFamilies(term);
+    for (const line of lines) {
+      const text = line.toLowerCase();
+      if (!families.length) {
+        if (allergenWordRe(singularOf(term)).test(text.replace(FREE_FROM_RE, " "))) return { label: term, item: line };
+        continue;
+      }
+      for (const fam of families) {
+        const { foods, except } = ALLERGEN_FAMILIES[fam];
+        const scoped = except.reduce((h, pat) => h.replace(new RegExp(pat, "gi"), " "), text).replace(FREE_FROM_RE, " ");
+        const food = foods.find((f) => allergenWordRe(f).test(scoped));
+        if (food) return { label: food === term || food === singularOf(term) ? term : `${food} (${term})`, item: line };
+      }
+    }
   }
   return null;
 }
+// When the net trips, the function asks once more with exactly what slipped in,
+// instead of failing the cook's (already counted) request outright.
+function allergenRepairText(userText: string, hit: { label: string; item: string }): string {
+  return `${userText}\n\nIMPORTANT: your previous draft included "${hit.item}" — that is ${hit.label}, and the cook is allergic to it. Write it again with that ingredient removed or replaced by a safe alternative, and nothing else from the allergy list above.`;
+}
+// The cook-facing message when the repair also fails.
+const allergenErrorText = (hit: { label: string; item: string }) => `included ${hit.label} (“${hit.item}”), which is on your allergy list`;
+// The allergy list as the prompt states it, each family spelled out so the
+// model avoids the specific foods up front instead of tripping allergyHit.
+function describeAllergies(allergies: unknown[]): string {
+  const parts = allergies.map((a) => String(a).trim()).filter(Boolean).map((a) => {
+    const self = [a.toLowerCase(), singularOf(a.toLowerCase())];
+    const foods = [...new Set(allergenFamilies(a).flatMap((f) => ALLERGEN_FAMILIES[f].foods))]
+      .filter((f) => !self.includes(f));
+    return foods.length ? `${a} (includes ${foods.join(", ")})` : a;
+  });
+  return parts.length ? parts.join("; ") : "none";
+}
+// ==== END ALLERGEN NET ====
 
 // One forced-tool Anthropic call. Returns the tool_use input, or a friendly
 // { error } string on any API/shape failure (both steps share this).
@@ -271,6 +415,13 @@ async function runTool(system: string, toolName: string, schema: unknown, userTe
     return { error: res.status === 429 ? "Rate limit or usage limit reached — try again later." : "AI generation failed. Please try again." };
   }
   const data = await res.json();
+  // Newer models (Haiku 5.5+) run safety classifiers that can decline a request:
+  // HTTP 200, stop_reason "refusal", no tool call. Say so plainly instead of the
+  // generic "couldn't make a recipe" (harmless on models that never refuse).
+  if (data.stop_reason === "refusal") {
+    console.error("generate-recipe: request declined by the model", data.stop_details?.category ?? "");
+    return { error: "The AI declined that request — try rewording it." };
+  }
   if (data.stop_reason === "max_tokens") {
     console.error("generate-recipe: response truncated at max_tokens");
     return { error: "That came out too long — try again." };
@@ -307,7 +458,7 @@ Deno.serve(async (req) => {
     const dietLines = [
       `Dietary constraints:`,
       `- Diets that MUST be satisfied: ${listOrNone(diets)}`,
-      `- ALLERGIES — never include, in any form, including garnish or substitutions: ${listOrNone(allergies)}`,
+      `- ALLERGIES — never include, in any form, including garnish or substitutions: ${describeAllergies(allergies)}`,
       `- Dislikes to avoid when possible: ${listOrNone(avoid)}`
     ];
 
@@ -335,19 +486,25 @@ Deno.serve(async (req) => {
         "",
         `Call save_recipe once with the finished recipe.`
       ].join("\n");
-      const { input: recipe, error } = await runTool(PROMPT_RECIPE_PROMPT, "save_recipe", RECIPE_SCHEMA, askText);
-      if (error) return json({ error });
-      if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
+      const first = await runTool(PROMPT_RECIPE_PROMPT, "save_recipe", RECIPE_SCHEMA, askText);
+      if (first.error) return json({ error: first.error });
+      let recipe = first.input;
+      if (!isRecipe(recipe)) {
         return json({ error: "AI couldn’t turn that into a recipe — try describing it a little differently." });
       }
+      // Safety net, with one repair pass (same counted request) before giving up.
       const promptHit = allergyHit(recipe, allergies);
       if (promptHit) {
-        console.error("generate-recipe(prompt): allergen safety net tripped on", promptHit);
-        return json({ error: `That recipe included ${promptHit}, which is on your allergy list — please try again.` });
+        console.error("generate-recipe(prompt): allergen net tripped on", promptHit.label, "in", promptHit.item, "— repairing");
+        const retry = await runTool(PROMPT_RECIPE_PROMPT, "save_recipe", RECIPE_SCHEMA, allergenRepairText(askText, promptHit));
+        if (!isRecipe(retry.input) || allergyHit(retry.input, allergies)) {
+          return json({ error: `That recipe ${allergenErrorText(promptHit)} — please try again.` });
+        }
+        recipe = retry.input;
       }
       // Model decides kitchen vs bar here (a request may be either); just normalize.
       recipe.section = recipe.section === "bar" ? "bar" : "kitchen";
-      return json({ recipe });
+      return json({ recipe, ...(promptHit ? { allergen_repaired: promptHit } : {}) });
     }
 
     const ingredients = Array.isArray(body.ingredients)
@@ -406,23 +563,27 @@ Deno.serve(async (req) => {
       `Call save_recipe once with the finished recipe.`
     ].join("\n");
 
-    const { input: recipe, error: fullError } = await runTool(SYSTEM_PROMPT, "save_recipe", RECIPE_SCHEMA, fullText);
-    if (fullError) return json({ error: fullError });
-
-    if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
+    const first = await runTool(SYSTEM_PROMPT, "save_recipe", RECIPE_SCHEMA, fullText);
+    if (first.error) return json({ error: first.error });
+    let recipe = first.input;
+    if (!isRecipe(recipe)) {
       return json({ error: "AI couldn’t make a recipe from those ingredients — try adding one or two more." });
     }
 
     // Safety net: even with the hard-lock prompt, never hand back a recipe that
-    // names an allergen. Reject rather than surface something unsafe.
+    // names an allergen. One repair pass (same counted request), then reject.
     const hit = allergyHit(recipe, allergies);
     if (hit) {
-      console.error("generate-recipe: allergen safety net tripped on", hit);
-      return json({ error: `That recipe included ${hit}, which is on your allergy list — please try generating again.` });
+      console.error("generate-recipe: allergen net tripped on", hit.label, "in", hit.item, "— repairing");
+      const retry = await runTool(SYSTEM_PROMPT, "save_recipe", RECIPE_SCHEMA, allergenRepairText(fullText, hit));
+      if (!isRecipe(retry.input) || allergyHit(retry.input, allergies)) {
+        return json({ error: `That recipe ${allergenErrorText(hit)} — please try generating again.` });
+      }
+      recipe = retry.input;
     }
 
     recipe.section = section; // trust the request over the model for the section split
-    return json({ recipe });
+    return json({ recipe, ...(hit ? { allergen_repaired: hit } : {}) });
   } catch (err) {
     console.error("generate-recipe error:", err);
     return json({ error: "Something went wrong. Please try again." });

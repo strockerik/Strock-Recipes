@@ -52,7 +52,15 @@ pick-row flow. A sibling, `testing-skills/unit_display_smoke_test.py`, uses the
 same scaffold to boot a recipe stored in verbose units ("fluid ounces",
 "Milliliters", "Tablespoons") and asserts the rendered amounts abbreviate to
 `fl oz` / `ml` / `tbsp` across Original/US/Metric views (custom units like
-"dash" pass through). It's the **template** for booting the full app headless — the
+"dash" pass through). A third, `testing-skills/logic_regression_test.py`, runs the
+whole **Phase 4 matrix** with exact values against the real `app.js` (it injects
+`window.__T = {…helpers}` just before `initAuth()` so closure functions are
+callable), plus regression probes for the 2026-10-20 fixes and the **Phase 7 XSS**
+payload check — run it after any change to formatting, units, grocery, timers, the
+coach panel, or the recipe form. And `testing-skills/allergen_net_test.py` runs the
+real `ALLERGEN NET` TypeScript block (type-stripped, in Chrome) from
+`generate-recipe`/`pair-drink`: the two copies must be identical, category
+allergies must catch their foods, and free-from forms must not. It's the **template** for booting the full app headless — the
 Supabase stub (a chainable/thenable Proxy query builder + an `onAuthStateChange`
 that fires `INITIAL_SESSION`) is the reusable part; copy it to smoke-test other
 panels without stubs living only in the scratchpad.

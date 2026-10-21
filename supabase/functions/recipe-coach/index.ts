@@ -317,7 +317,7 @@ Deno.serve(async (req) => {
     // turns within minutes, so turns 2+ read this prefix at ~10% instead of
     // re-billing it every turn. The growing `messages` history sits after this
     // breakpoint, so it never invalidates the cache. Sonnet 4.6's min cacheable
-    // prefix is 2048 tokens, which the tool schema + a real recipe clears.
+    // prefix is 1024 tokens, which the tool schema + a real recipe clears.
     const system: Record<string, unknown>[] = [{ type: "text", text: buildSystemPrompt(mode, body.recipe, !!kitchen) }];
     if (kitchen) system.push({ type: "text", text: buildKitchenBlock(kitchen) });
     system[system.length - 1].cache_control = { type: "ephemeral" };

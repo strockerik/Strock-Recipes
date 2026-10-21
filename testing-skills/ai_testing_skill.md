@@ -34,7 +34,7 @@ specific number.
   no secrets). Delete only transient harness scripts and any converted temp
   images. Never commit anything containing the key. The headline metrics also go
   to the `ai-quality-baseline` memory for a quick reference point.
-- **Mirror production models.** Text/URL/generate → `claude-haiku-4-5-20251001`;
+- **Mirror production models.** Text/URL/generate/pair → `claude-haiku-4-5-20251001`;
   images → `claude-sonnet-4-6`. Same as the Edge Functions.
 - **No drift.** Pull the prompts, tag taxonomy, and schema shape from the actual
   Edge Function source at run time (the harness below does this) so you're

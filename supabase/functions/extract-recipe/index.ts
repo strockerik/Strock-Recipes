@@ -1,6 +1,7 @@
 // Supabase Edge Function: extract-recipe
 //
-// Accepts a photo (base64) or pasted text, sends it to Claude Haiku 4.5, and
+// Accepts a photo, pasted text, or a link, sends it to Claude (Haiku 4.5 for
+// text/links, Sonnet 4.6 for photos — after the optional Groq tier), and
 // returns a recipe object shaped to match the `recipes` table. Structured
 // output is produced via tool-use with a forced tool_choice (reliable and
 // widely supported) rather than the newer structured-outputs API.
@@ -23,7 +24,8 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-// Text and URL extraction is easy — Haiku handles it cheaply (~half a cent).
+// Text and URL extraction is easy — Haiku handles it cheaply (~half a cent),
+// and only when the Groq tier misses. (Haiku 5.5: see generate-recipe's note.)
 // Photos, especially messy handwritten recipe cards, need the stronger vision
 // model to read reliably; the extra cost (~1-2 cents) is worth it there.
 const MODEL_TEXT = "claude-haiku-4-5-20251001";
@@ -754,6 +756,13 @@ async function runClaude(model: string, userContent: unknown, noRecipeMessage: s
     return { error: res.status === 429 ? "Rate limit or usage limit reached — try again later." : "AI extraction failed. Please try again." };
   }
   const data = await res.json();
+  // Newer models (Haiku 5.5+) run safety classifiers that can decline a request:
+  // HTTP 200, stop_reason "refusal", no tool call. Say so plainly instead of the
+  // generic "couldn't make a recipe" (harmless on models that never refuse).
+  if (data.stop_reason === "refusal") {
+    console.error("extract-recipe: request declined by the model", data.stop_details?.category ?? "");
+    return { error: "The AI declined to read that — try a different photo, link, or the pasted text." };
+  }
   if (data.stop_reason === "max_tokens") {
     console.error("extract-recipe: response truncated at max_tokens");
     return { error: "That recipe was too long to read in one go — try fewer photos or split it." };
@@ -937,6 +946,15 @@ Deno.serve(async (req) => {
             ...(onYouTube ? { "Cookie": "SOCS=CAI" } : {})
           }
         });
+        // parseAllowedUrl vetted the link we were given, not where redirect:"follow"
+        // landed — a public URL can 302 to localhost or a private address. Re-check
+        // the final URL before reading the body, so internal pages can never be
+        // fed to the model and echoed back as a "recipe".
+        if (pageRes.redirected && !parseAllowedUrl(pageRes.url)) {
+          await pageRes.body?.cancel();
+          console.error("URL redirected to a disallowed address:", url.href, "->", pageRes.url);
+          return json({ error: "That link redirects somewhere we can’t read — copy the recipe text and paste it instead." });
+        }
         html = await pageRes.text();
         // A non-OK status is usually a real "couldn't load it" — unless the
         // body is a bot-challenge page, which the check below handles with a

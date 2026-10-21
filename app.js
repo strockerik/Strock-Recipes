@@ -317,6 +317,18 @@
   const cookSectionsEl = $("#cook-sections");
 
   // ---------- Helpers ----------
+  // Save a Blob as a file via a temporary link. The object URL is revoked on a
+  // later tick rather than straight after click(), which some browsers have
+  // been known to treat as cancelling the download.
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
   function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -360,9 +372,9 @@
     }));
   }
 
-  function ingLine(ing, useScaled, system) {
+  function ingLine(ing, useScaled, system, isBar) {
     const rawAmt = useScaled ? ing.scaled : ing.amount;
-    const conv = convertForDisplay(rawAmt, ing.unit, system || "original");
+    const conv = convertForDisplay(rawAmt, ing.unit, system || "original", isBar);
     const amtStr = conv.amount == null ? "\u2014" : fmtAmount(conv.amount) + (conv.unit ? " " + conv.unit : "");
     return { amtStr, item: ing.item };
   }
@@ -394,6 +406,7 @@
   const ML_PER_CUP = 236.588;
   const ML_PER_TBSP = 14.7868;
   const ML_PER_TSP = 4.92892;
+  const ML_PER_FL_OZ = 29.5735;
   const MIN_SHOPPABLE_GRAMS = 50;
 
   const WEIGHT_TO_G = {
@@ -440,11 +453,23 @@
     return UNIT_ABBREV[key] || String(unit).trim();
   }
 
+  // "fl oz" is always a liquid measure, and in a BAR recipe so is a bare "oz" —
+  // bartenders write "2 oz gin" meaning fluid ounces. Treating it as a weight
+  // showed "56.7 g gin" in Metric and put "1 lb gin" on the grocery list.
+  const FL_OZ_UNITS = new Set(["fl oz", "floz", "fluid ounce", "fluid ounces", "fluid oz"]);
+  const BARE_OZ_UNITS = new Set(["oz", "ounce", "ounces"]);
+  function isFluidOunce(unit, isBar) {
+    const u = String(unit || "").trim().toLowerCase().replace(/\./g, "").replace(/\s+/g, " ");
+    return FL_OZ_UNITS.has(u) || (!!isBar && BARE_OZ_UNITS.has(u));
+  }
+
   // Convert (amount, unit) to a canonical form for combining across recipes:
   // weights -> grams, volumes -> milliliters, everything else is just
-  // spelling-normalized (e.g. "cloves" -> "clove").
-  function canonicalQuantity(amount, unit) {
+  // spelling-normalized (e.g. "cloves" -> "clove"). Fluid ounces stay in fl oz
+  // so a bar restock reads "16 fl oz gin", not cups.
+  function canonicalQuantity(amount, unit, isBar) {
     if (!unit) return { amount, family: null, unit: null };
+    if (isFluidOunce(unit, isBar)) return { amount, family: null, unit: "fl oz" };
     const u = unit.trim().toLowerCase();
     if (WEIGHT_TO_G[u] != null) {
       return { amount: amount == null ? null : amount * WEIGHT_TO_G[u], family: "weight", unit: null };
@@ -470,7 +495,11 @@
   function shoppableQuantity(amount, family, unit) {
     if (amount == null) return { amount: null, unit };
     if (family === "weight") {
-      if (amount < MIN_SHOPPABLE_GRAMS) return { amount: Math.round(amount), unit: "g" };
+      // Round up like every other unit, keeping a decimal under 1 g so a pinch
+      // of saffron reads "0.3 g" instead of "0 g".
+      if (amount < MIN_SHOPPABLE_GRAMS) {
+        return { amount: amount < 1 ? Math.ceil(amount * 10) / 10 : Math.ceil(amount - 1e-9), unit: "g" };
+      }
       const oz = amount / G_PER_OZ;
       return oz >= 12
         ? { amount: ceilToQuarter(amount / G_PER_LB), unit: "lb" }
@@ -528,8 +557,13 @@
   // Units that are neither weight nor volume (cloves, cans, slices, plain
   // counts) and blank "to taste" amounts pass through unchanged — there's no
   // sensible metric form of "2 cloves garlic".
-  function convertForDisplay(amount, unit, system) {
+  function convertForDisplay(amount, unit, system, isBar) {
     if (system === "original" || amount == null || !unit) return { amount, unit: displayUnit(unit) };
+    if (isFluidOunce(unit, isBar)) {
+      if (system !== "metric") return { amount, unit: displayUnit(unit) }; // oz is already the US bar measure
+      const ml = amount * ML_PER_FL_OZ;
+      return ml >= 1000 ? { amount: ml / 1000, unit: "l" } : { amount: ml, unit: "ml" };
+    }
     const u = unit.trim().toLowerCase();
     const gramsPer = WEIGHT_TO_G[u];
     if (gramsPer != null) {
@@ -1984,7 +2018,7 @@
             ${run.group ? `<h4 class="sub-group">${esc(run.group)}</h4>` : ""}
             <ul class="ing-list">
               ${run.items.map((ing) => {
-                const l = ingLine(ing, true, unitSystem);
+                const l = ingLine(ing, true, unitSystem, it.section === "bar");
                 return `<li><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
               }).join("")}
             </ul>`).join("")}
@@ -2029,7 +2063,7 @@
 
     const ingHtml = groupRuns(scaledIngredients(it, servings)).map((run) => {
       const items = run.items.map((ing) => {
-        const l = ingLine(ing, true, system);
+        const l = ingLine(ing, true, system, it.section === "bar");
         const amt = l.amtStr && l.amtStr !== "—" ? `<b>${esc(l.amtStr)}</b> ` : "";
         return `<li>${amt}${esc(l.item)}</li>`;
       }).join("");
@@ -2128,7 +2162,7 @@
     groupRuns(scaledIngredients(it, servings)).forEach((run) => {
       if (run.group) lines.push(`[${run.group}]`);
       run.items.forEach((ing) => {
-        const l = ingLine(ing, true, system);
+        const l = ingLine(ing, true, system, it.section === "bar");
         lines.push(`- ${l.amtStr && l.amtStr !== "—" ? l.amtStr + " " : ""}${l.item}`);
       });
     });
@@ -2165,12 +2199,7 @@
     }
     // Last resort (desktop): download the file so it can be attached manually.
     try {
-      const blob = new Blob([html], { type: "text/html" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = name;
-      a.click();
-      URL.revokeObjectURL(a.href);
+      downloadBlob(new Blob([html], { type: "text/html" }), name);
       toast("Saved the recipe file — attach it to a text or email");
     } catch {
       toast("Sharing isn’t available on this device");
@@ -2273,14 +2302,14 @@
         // "distilled"/"coconut water" normalizes to that, not bare "water").
         if (nameKey === "water" || nameKey === "liquid") return;
         if (skipPantryStaples && isPantryStaple(nameKey)) return;
-        const { amount, family, unit } = canonicalQuantity(ing.scaled, ing.unit);
+        const { amount, family, unit } = canonicalQuantity(ing.scaled, ing.unit, it.section === "bar");
         // Citrus that folded to a bare fruit (peel / zest / fresh-squeezed juice /
         // whole) is counted in fruit, not summed by weight/volume. Plain bottled
         // "lime juice" keeps its name (nameKey stays "lime juice") and is untouched.
         if (CITRUS_YIELD[nameKey]) {
           const raw = String(ing.item).toLowerCase();
           const rc = recipeCitrus.get(nameKey) || { juiceMl: 0, peelG: 0, whole: 0 };
-          if (/\bjuice\b/.test(raw) && family === "volume" && amount != null) rc.juiceMl += amount;
+          if (/\bjuice\b/.test(raw) && amount != null && (family === "volume" || unit === "fl oz")) rc.juiceMl += family === "volume" ? amount : amount * ML_PER_FL_OZ;
           else if (/\b(?:peel|zest|rind)\b/.test(raw) && family === "weight" && amount != null) rc.peelG += amount;
           else rc.whole += (family == null && amount != null ? amount : 1);
           recipeCitrus.set(nameKey, rc);
@@ -2353,8 +2382,9 @@
   // combinedGroceryItems. Same isInPantryStock check the King Soopers sheet uses.
   function partitionPantry(items) {
     const toBuy = [], heldInPantry = [];
+    const stockKeys = inventory.length ? inStockKeys() : null;
     items.forEach((it) => {
-      const held = !it.manual && !pantryKeep.has(it.key) && isInPantryStock(it.item);
+      const held = !it.manual && !pantryKeep.has(it.key) && isInPantryStock(it.item, stockKeys);
       (held ? heldInPantry : toBuy).push(it);
     });
     return { toBuy, heldInPantry };
@@ -2997,12 +3027,19 @@
     const [short, long] = kw.length <= iw.length ? [kw, iw] : [iw, kw];
     return short.every((w) => long.some((x) => fuzzyWordEq(w, x)));
   }
-  function inventoryHaveNeed(ingredients) {
-    if (!inventory.length) return null;
-    const stockKeys = inventory
+  // Normalized names of everything in stock — what pantryNameMatch compares a
+  // grocery line against. Bar rows match on their spirit TYPE (category).
+  // Callers checking many lines compute this once and pass it in: rebuilding it
+  // per line was ~90% of a grocery-panel render (every check-off tap).
+  function inStockKeys() {
+    return inventory
       .filter((i) => i.status === "in")
       .map((i) => normalizeItemName(i.section === "bar" ? i.category : (i.name || i.category)))
       .filter(Boolean);
+  }
+  function inventoryHaveNeed(ingredients) {
+    if (!inventory.length) return null;
+    const stockKeys = inStockKeys();
     const have = [], need = [];
     (ingredients || []).forEach((ing) => {
       const raw = flattenText(ing && ing.item != null ? ing.item : ing);
@@ -3020,7 +3057,7 @@
   // or pantry, status "in")? Same matching as inventoryHaveNeed; used to skip
   // pantry duplicates from the King Soopers cart. Staples aren't "duplicates" —
   // they're assumed-on-hand and already excluded from the list separately.
-  function isInPantryStock(itemName) {
+  function isInPantryStock(itemName, stockKeys) {
     if (!inventory.length) return false;
     // Fresh produce/herbs are perishable — never pantry stock (rule: fresh = buy,
     // dried/ground = pantry). Checked on the raw name before "fresh" is stripped.
@@ -3030,21 +3067,17 @@
     // Fresh produce is perishable — buy it even if a generic "garlic"/"potato" is
     // stocked. A PANTRY_FORM word ("garlic powder") means the shelf-stable form.
     if (FRESH_PRODUCE_RE.test(norm) && !PANTRY_FORM_RE.test(norm)) return false;
-    return inventory
-      .filter((i) => i.status === "in")
-      .map((i) => normalizeItemName(i.section === "bar" ? i.category : (i.name || i.category)))
-      .filter(Boolean)
-      .some((k) => pantryNameMatch(norm, k));
+    return (stockKeys || inStockKeys()).some((k) => pantryNameMatch(norm, k));
   }
   // Why a King Soopers cart line should be skipped by default: a pantry staple
   // (salt/pepper/oil/… — never ordered per recipe, assumed on hand regardless of
   // inventory) or something already stocked in the user's pantry. Returns
   // "staple" | "pantry" | null.
-  function krogerSkipReason(itemName) {
+  function krogerSkipReason(itemName, stockKeys) {
     const norm = normalizeItemName(flattenText(itemName));
     if (!norm) return null;
     if (isPantryStaple(norm)) return "staple";
-    if (isInPantryStock(itemName)) return "pantry";
+    if (isInPantryStock(itemName, stockKeys)) return "pantry";
     return null;
   }
 
@@ -3196,8 +3229,13 @@
     if (e.target === recipeFormPanel) closeRecipeForm();
   });
 
+  // One save at a time: a double-tap (or Enter + tap) on a slow connection
+  // otherwise fires two inserts and saves the recipe twice.
+  let recipeSaving = false;
+  const recipeFormSubmitBtn = recipeForm.querySelector('button[type="submit"]');
   recipeForm.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (recipeSaving) return;
 
     // A PWA left in the background for days can lose its session.
     if (!session) {
@@ -3268,9 +3306,17 @@
     };
 
     recipeFormStatus.textContent = "Saving…";
-    const { error } = id
-      ? await supabaseClient.from("recipes").update(row).eq("id", id)
-      : await supabaseClient.from("recipes").insert(row);
+    recipeSaving = true;
+    recipeFormSubmitBtn.disabled = true;
+    let error;
+    try {
+      ({ error } = id
+        ? await supabaseClient.from("recipes").update(row).eq("id", id)
+        : await supabaseClient.from("recipes").insert(row));
+    } finally {
+      recipeSaving = false;
+      recipeFormSubmitBtn.disabled = false;
+    }
 
     if (error) {
       recipeFormStatus.textContent = `Error: ${error.message}`;
@@ -4052,13 +4098,11 @@
   // What the coach knows beyond this recipe: pantry/bar stock and the names of
   // the cook's other recipes (it reads one in full server-side when needed).
   function buildCoachContext(it) {
-    const label = (i) => (i.name && i.category && i.name.toLowerCase() !== i.category.toLowerCase()
-      ? `${i.category} (${i.name})` : (i.name || i.category || "")).trim();
-    const stock = (sec) => inventory.filter((i) => i.section === sec && i.status !== "out").map(label).filter(Boolean);
+    const stock = (sec) => inventory.filter((i) => i.section === sec && i.status !== "out").map(genIngredientText).filter(Boolean);
     return {
       pantry: stock("pantry"),
       bar: stock("bar"),
-      out: inventory.filter((i) => i.status === "out").map(label).filter(Boolean),
+      out: inventory.filter((i) => i.status === "out").map(genIngredientText).filter(Boolean),
       recipes: Object.values(byId)
         .filter((r) => r.id !== it.id && r.name)
         .map((r) => ({ name: r.name, section: r.section === "bar" ? "bar" : "kitchen" }))
@@ -4072,18 +4116,29 @@
     coachModeTweakBtn.classList.toggle("is-active", coachMode === "tweak");
     coachModeTweakBtn.setAttribute("aria-selected", String(coachMode === "tweak"));
     coachInput.placeholder = COACH_PLACEHOLDERS[coachMode];
+    // A reply still in flight belongs to the OTHER mode's thread — drop it.
+    resetCoachBusy();
     // Restore this mode's saved conversation (within 24h), else start fresh.
     coachStatus.textContent = "";
     restoreCoachState();
     renderCoachThread();
   }
 
+  // Abandon any in-flight turn: sendCoach drops a response whose token is stale,
+  // and that early return skips its own UI reset — so restore it here, or Send
+  // stays disabled after a close/reopen or a mode switch mid-reply.
+  function resetCoachBusy() {
+    coachToken++;
+    coachBusy = false;
+    coachSendBtn.disabled = false;
+    coachLoading.hidden = true;
+  }
+
   function openCoachPanel(id) {
     const it = byId[id];
     if (!it) return;
     coachRecipeId = id;
-    coachToken++;
-    coachLoading.hidden = true;
+    resetCoachBusy();
     coachInput.value = "";
     coachRecipeName.textContent = `· ${it.name}`;
     setCoachMode("troubleshoot");
@@ -4092,9 +4147,15 @@
   }
 
   function closeCoachPanel() {
-    coachToken++;             // abandon any in-flight response
-    coachBusy = false;
+    resetCoachBusy();
     coachPanel.hidden = true;
+  }
+
+  // Coach replies arrive with light Markdown ("**Sherry vinegar** is your best
+  // bet"). Escape first, then render only **bold** — so the asterisks never show
+  // and no model text can inject markup. Line breaks become <br>.
+  function coachTextHtml(text) {
+    return esc(text).replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>");
   }
 
   function renderCoachThread() {
@@ -4114,7 +4175,7 @@
       if (m.role === "assistant" && last && coachLastResult) {
         const sugg = coachLastResult.suggestions || [];
         if (sugg.length) {
-          extra += `<ul class="coach-suggestions">${sugg.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`;
+          extra += `<ul class="coach-suggestions">${sugg.map((s) => `<li>${coachTextHtml(s)}</li>`).join("")}</ul>`;
         }
         const concluded = !coachLastResult.needs_more_info;
         // Action buttons get their own line under the reply (the wrapper is block).
@@ -4126,7 +4187,7 @@
           extra += `<div class="coach-actions"><button type="button" class="ghost-btn small coach-emphasize-btn">✍️ Update recipe to emphasize this</button></div>`;
         }
       }
-      return `<div class="coach-msg ${m.role === "user" ? "user" : "ai"}">${esc(m.content).replace(/\n/g, "<br>")}${extra}</div>`;
+      return `<div class="coach-msg ${m.role === "user" ? "user" : "ai"}">${coachTextHtml(m.content)}${extra}</div>`;
     });
     coachThread.innerHTML = parts.join("");
     coachThread.scrollTop = coachThread.scrollHeight;
@@ -4197,6 +4258,9 @@
     closeCoachPanel();
     openRecipeForm(it);
     fillRecipeFormFromExtraction(revised);
+    // The coach is never sent the source (serializeRecipeForCoach), so its
+    // revised_recipe.source is a blank or a guess — keep the original link.
+    rfSource.value = it.source || "";
     recipeFormStatus.textContent = "AI suggested these changes — please review before saving.";
   }
 
@@ -4792,16 +4856,23 @@
   // cleared on open/close. While paused, `intervalId` is null and `remaining`
   // (seconds left) is authoritative instead of `endsAt`.
   let cookTimer = null;
-  const DURATION_RE = /(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/gi;
+  // A quantity is a number ("10", "1.5"), a fraction ("1/2"), a mixed number
+  // ("1 1/2"), or a vulgar fraction ("½", "1½"). The lookbehind stops a match
+  // starting mid-number, so "1/2 hour" can't be read as "2 hour".
+  const VULGAR_FRACTIONS = { "¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3 };
+  const DURATION_RE = /(?<![\d./])(\d+(?:\.\d+)?)?\s*(?:(\d+)\s*\/\s*(\d+)|([¼½¾⅓⅔]))?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/gi;
   function parseDurations(text) {
     const out = [];
     let m;
     DURATION_RE.lastIndex = 0;
     while ((m = DURATION_RE.exec(text))) {
-      const value = parseFloat(m[1]);
-      const unit = m[2].toLowerCase();
+      const whole = m[1] ? parseFloat(m[1]) : 0;
+      const frac = m[2] && Number(m[3]) ? Number(m[2]) / Number(m[3]) : m[4] ? VULGAR_FRACTIONS[m[4]] : 0;
+      const value = whole + frac;
+      if (!value) continue; // "a few minutes" — no number, no timer
+      const unit = m[5].toLowerCase();
       const seconds = unit.startsWith("h") ? value * 3600 : unit.startsWith("m") ? value * 60 : value;
-      out.push({ seconds: Math.round(seconds), label: m[0] });
+      out.push({ seconds: Math.round(seconds), label: m[0].trim() });
     }
     return out;
   }
@@ -5165,12 +5236,7 @@
   });
 
   $("#download-grocery").addEventListener("click", () => {
-    const blob = new Blob([groceryText()], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "grocery-list.txt";
-    a.click();
-    URL.revokeObjectURL(a.href);
+    downloadBlob(new Blob([groceryText()], { type: "text/plain" }), "grocery-list.txt");
   });
 
   $("#share-grocery").addEventListener("click", async () => {
@@ -5460,12 +5526,7 @@
     return out.join("\n");
   }
   krogerDownloadBtn.addEventListener("click", () => {
-    const blob = new Blob([krogerMatchReport()], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "king-soopers-match-report.txt";
-    a.click();
-    URL.revokeObjectURL(a.href);
+    downloadBlob(new Blob([krogerMatchReport()], { type: "text/plain" }), "king-soopers-match-report.txt");
   });
 
   // ---- Stage B: per-user OAuth ("Connect King Soopers") + one-tap cart push ----
@@ -5590,10 +5651,11 @@
     // Each is one tap to add back.
     const searchResults = Array.isArray(data.results) ? data.results : [];
     krogerExcluded.clear();
+    const stockKeys = inventory.length ? inStockKeys() : null;
     searchResults.forEach((r) => {
       const meta = krogerItemMeta.get(r.key) || {};
       r.amount = meta.amount; r.unit = meta.unit; r.recipes = meta.recipes || [];
-      r.skipReason = krogerSkipReason(r.item); // "staple" | "pantry" | null
+      r.skipReason = krogerSkipReason(r.item, stockKeys); // "staple" | "pantry" | null
       if (r.skipReason) krogerExcluded.add(r.key);
     });
     renderKrogerReview(searchResults);
@@ -5766,12 +5828,7 @@
   });
 
   $("#download-backup").addEventListener("click", () => {
-    const blob = new Blob([exportRecipesJSON()], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = backupFilename();
-    a.click();
-    URL.revokeObjectURL(a.href);
+    downloadBlob(new Blob([exportRecipesJSON()], { type: "application/json" }), backupFilename());
   });
 
   $("#share-backup").addEventListener("click", async () => {

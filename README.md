@@ -448,6 +448,18 @@ on hand (bar liquor by type + optional brand, and pantry staples), and dietary
 preferences/allergies stored on the profile so the generator honors them
 silently across devices.
 
+**Allergies are enforced twice.** The prompt states each allergy with its family
+spelled out ("shellfish (includes shrimp, prawn, crab, … clamato, oyster …)"), and
+after generation a safety net (`allergyHit` in `generate-recipe` and `pair-drink`)
+rejects any recipe whose name or ingredients name an allergen. Category allergies
+— shellfish, crustacean, mollusc, fish, seafood, tree nuts, nuts, peanut, dairy /
+milk / lactose, egg, gluten / wheat / celiac, soy, sesame — expand to their foods,
+including hidden sources (Worcestershire = anchovy, orgeat = almond, Baileys =
+dairy). Free-from forms don't trip it ("coconut milk" under dairy, "gluten-free
+pasta", "ginger beer"). Anything not in the table is matched literally. The table
+lives in an `ALLERGEN NET` block that must stay identical in both functions —
+`testing-skills/allergen_net_test.py` checks that and runs the cases.
+
 **One-time setup (Supabase SQL editor)** — run once:
 
 ```sql
