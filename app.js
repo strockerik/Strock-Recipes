@@ -30,7 +30,12 @@
   const checkedGroceryItems = new Set(); // grocery: combined-item keys checked off
   let shoppingModeOn = false; // big-tap, screen-awake grocery view
   let manualGroceryItems = []; // user-typed items not tied to a recipe: {key,name}; checked state lives in checkedGroceryItems
-  let unitSystem = "original"; // recipe-detail display: "original" | "us" | "metric"
+  let unitSystem = "original"; // recipe-detail display: "original" | "us" | "metric"; persisted
+  // Recipes exist, but the first fetch hasn't landed (or has failed). Without
+  // this the list rendered its "No recipes yet" invitation while the request
+  // was still in flight — and kept it after a failure, so a dropped connection
+  // looked exactly like an empty account.
+  let dataState = "loading"; // "loading" | "ready" | "error"
   let householdServings = null; // "we usually cook for N" default, applied only when first adding a recipe to the grocery list or meal plan
   let aisleOrder = null; // user-customized store-walk order for grocery categories; set in loadUserLocalState
   let seenPickHint = false; // dismissed the "check recipes to build a grocery list" hint
@@ -72,6 +77,9 @@
     sortMode = ["name", "newest", "oldest"].includes(loadLocal("sortMode", "name")) ? loadLocal("sortMode", "name") : "name";
     loadLocal("pantryKeep", []).forEach((k) => pantryKeep.add(k));
     groceryView = loadLocal("groceryView", "aisle") === "recipe" ? "recipe" : "aisle";
+    // A metric household shouldn't have to re-tap Metric on every launch.
+    unitSystem = ["original", "us", "metric"].includes(loadLocal("unitSystem", "original"))
+      ? loadLocal("unitSystem", "original") : "original";
     collapsedInvCats = new Set(loadLocal("invCollapsed", []));
     pruneCoachStore(); // one global sweep of expired coach:v1:* threads
   }
@@ -116,6 +124,13 @@
   const listEl = $("#item-list");
   const searchEl = $("#search");
   const tagFiltersEl = $("#tag-filters");
+  // The scope buttons inside the filter sheet are static markup, so their IDs
+  // stay live; only this cloud is re-rendered.
+  const tagCloudEl = $("#filter-tag-cloud");
+  const searchStickyEl = $("#search-sticky");
+  const modeTabsEl = $(".mode-tabs");
+  const groceryTopBtn = $("#open-grocery-top");
+  const groceryTopCountEl = $("#grocery-top-count");
   const toggleFiltersBtn = $("#toggle-filters");
   const sortSelect = $("#sort-by");
   const toggleFavoritesBtn = $("#toggle-favorites");
@@ -315,6 +330,8 @@
   const cookNextBtn = $("#cook-next");
   const cookIngToggle = $("#cook-ing-toggle");
   const cookSectionsEl = $("#cook-sections");
+  const cookDoneEl = $("#cook-done");
+  const cookDoneSub = $("#cook-done-sub");
 
   // ---------- Helpers ----------
   // Save a Blob as a file via a temporary link. The object URL is revoked on a
@@ -871,7 +888,7 @@
     await ensureProfile(); // guarantee the row exists before writing settings onto it
     const { error } = await supabaseClient.from("profiles")
       .upsert({ id: session.user.id, diet_prefs: dietPrefs }, { onConflict: "id" });
-    if (error) toast("Couldn’t save dietary preferences — try again.");
+    if (error) toast("Couldn’t save dietary preferences — try again.", true);
   }
 
   // ---------- Grocery settings (profile-backed, cross-device) ----------
@@ -898,7 +915,7 @@
     await ensureProfile();
     const { error } = await supabaseClient.from("profiles")
       .upsert({ id: session.user.id, grocery_prefs: { skipStaples: skipPantryStaples, aisleOrder } }, { onConflict: "id" });
-    if (error) toast("Couldn’t save grocery preferences — try again.");
+    if (error) toast("Couldn’t save grocery preferences — try again.", true);
   }
   function scheduleGroceryPrefsSave() {
     clearTimeout(groceryPrefsSaveTimer);
@@ -930,7 +947,7 @@
     await ensureProfile();
     const { error } = await supabaseClient.from("profiles")
       .upsert({ id: session.user.id, kroger_prefs: krogerPrefs }, { onConflict: "id" });
-    if (error) toast("Couldn’t save King Soopers settings — try again.");
+    if (error) toast("Couldn’t save King Soopers settings — try again.", true);
   }
 
   // ---------- Bar & pantry inventory (Supabase-backed) ----------
@@ -948,7 +965,7 @@
     const row = { section: sec, category: category || null, name: name || null, status: status || "in" };
     const { data, error } = await supabaseClient
       .from("inventory_items").insert(row).select().single();
-    if (error) { toast(`Couldn't add: ${error.message}`); return; }
+    if (error) { toastError("Couldn\u2019t add that", error); return; }
     inventory.push(mapInventoryRow(data));
     renderInventoryPanel();
   }
@@ -959,11 +976,11 @@
     item.status = status; // optimistic
     renderInventoryPanel();
     const { error } = await supabaseClient.from("inventory_items").update({ status }).eq("id", id);
-    if (error) { item.status = prev; renderInventoryPanel(); toast(`Couldn't update: ${error.message}`); }
+    if (error) { item.status = prev; renderInventoryPanel(); toastError("Couldn\u2019t update that", error); }
   }
   async function removeInventoryItem(id) {
     const { error } = await supabaseClient.from("inventory_items").delete().eq("id", id);
-    if (error) { toast(`Couldn't remove: ${error.message}`); return; }
+    if (error) { toastError("Couldn\u2019t remove that", error); return; }
     inventory = inventory.filter((i) => i.id !== id);
     renderInventoryPanel();
   }
@@ -997,7 +1014,9 @@
     if (!it) return;
     const prev = basket.has(id) ? { ...basket.get(id) } : null;
     if (on) basket.set(id, { servings: defaultAddServings(it) }); else basket.delete(id);
-    renderList();
+    // This row changes shape (it gains/loses the servings stepper); the other
+    // forty don't need to lose their focus and open state over it.
+    rerenderRow(id);
     renderGroceryBar();
     if (!groceryPanel.hidden) renderGroceryPanel();
     if (!session) return;
@@ -1007,10 +1026,10 @@
       : await supabaseClient.from("grocery_basket_items").delete().eq("recipe_id", id);
     if (error) {
       if (prev) basket.set(id, prev); else basket.delete(id);
-      renderList();
+      rerenderRow(id);
       renderGroceryBar();
       if (!groceryPanel.hidden) renderGroceryPanel();
-      toast(`Couldn't update grocery list: ${error.message}`);
+      toastError("Couldn\u2019t update your grocery list", error);
     }
   }
 
@@ -1021,7 +1040,7 @@
     if (!session) { toast("You've been signed out — sign in again."); return null; }
     const { data, error } = await supabaseClient
       .from("grocery_manual_items").insert({ name, source_inventory_id: sourceInventoryId }).select().single();
-    if (error) { toast(`Couldn't add: ${error.message}`); return null; }
+    if (error) { toastError("Couldn\u2019t add that", error); return null; }
     const item = { key: data.id, name: data.name, sourceInventoryId: data.source_inventory_id };
     manualGroceryItems.push(item);
     renderGroceryBar();
@@ -1033,7 +1052,7 @@
       supabaseClient.from("grocery_manual_items").delete().eq("id", key),
       supabaseClient.from("grocery_checked_items").delete().eq("item_key", key)
     ]);
-    if (error) { toast(`Couldn't remove: ${error.message}`); return; }
+    if (error) { toastError("Couldn\u2019t remove that", error); return; }
     manualGroceryItems = manualGroceryItems.filter((m) => m.key !== key);
     checkedGroceryItems.delete(key);
     renderGroceryBar();
@@ -1054,7 +1073,7 @@
       if (checked) checkedGroceryItems.delete(key); else checkedGroceryItems.add(key);
       renderGroceryProgress();
       if (!groceryPanel.hidden) renderGroceryPanel();
-      toast(`Couldn't save check-off: ${error.message}`);
+      toastError("Couldn\u2019t save that check-off", error);
       return;
     }
     if (checked) {
@@ -1116,6 +1135,7 @@
     renderActiveFilters();
     renderList();
     renderGroceryBar();
+    updateMealplanBadge();
   }
 
   // Drop basket / open-row / active-tag references to recipes or tags that no
@@ -1132,6 +1152,16 @@
   }
 
   async function loadData() {
+    try {
+      await loadDataInner();
+    } catch (err) {
+      console.error("loadData failed:", err);
+      dataState = "error";
+      renderList();
+    }
+  }
+
+  async function loadDataInner() {
     // Recipes, profile names, and my outgoing shares are independent reads —
     // fetch them concurrently rather than waiting on each other in turn.
     const recipesPromise = supabaseClient
@@ -1150,6 +1180,10 @@
     const groceryPromise = loadGroceryList();
     const groceryPrefsPromise = loadMyGroceryPrefs();
     const krogerPrefsPromise = loadMyKrogerPrefs();
+    // The meal plan used to load only when its tab was opened, which meant the
+    // tab's badge was wrong until you went looking — and we now decide whether
+    // to show that tab at all from this data, so it has to be here.
+    const mealPlanPromise = loadMealPlan();
     const sharesPromise = supabaseClient
       .from("recipe_shares")
       .select("recipe_id, shared_with_user_id")
@@ -1158,9 +1192,19 @@
     const { data, error } = await recipesPromise;
 
     if (error) {
-      toast("Couldn’t load your recipes — try refreshing");
+      // These reads are still in flight and nothing is going to await them now;
+      // mark them handled so a failure in one can't surface as an unhandled
+      // rejection against the window.
+      [profilesPromise, inventoryPromise, dietPrefsPromise, groceryPromise,
+       groceryPrefsPromise, krogerPrefsPromise, mealPlanPromise, sharesPromise]
+        .forEach((pr) => { if (pr && pr.catch) pr.catch(() => {}); });
+      // Not the same thing as an empty book: renderList paints a failure state
+      // with a Try again button rather than the first-run invitation.
+      dataState = "error";
+      renderList();
       return;
     }
+    dataState = "ready";
 
     const items = (data || []).map(mapRecipe);
     // RLS only ever returns rows you own or rows explicitly shared with you,
@@ -1188,6 +1232,7 @@
     await groceryPromise;
     await groceryPrefsPromise;
     await krogerPrefsPromise;
+    await mealPlanPromise;
     await migrateLegacyGroceryLocalStorage(); // one-time, no-ops after the first run
 
     // Note: we deliberately do NOT blanket-clear basket / activeTags / openItems
@@ -1222,6 +1267,7 @@
   }
 
   function clearData() {
+    dataState = "loading"; // so signing back in shows placeholders, not "no recipes yet"
     DATA.recipes = [];
     DATA.cocktails = [];
     DATA.sharedRecipes = [];
@@ -1829,16 +1875,27 @@
     const counts = {};
     base.forEach((it) => it.tags.forEach((t) => (counts[t] = (counts[t] || 0) + 1)));
     const tags = Object.keys(counts).sort();
-    tagFiltersEl.innerHTML = tags.map((t) =>
+    tagCloudEl.innerHTML = tags.map((t) =>
       `<button class="tag-chip${activeTags.has(t) ? " is-on" : ""}" data-tag="${esc(t)}">${esc(t)} \u00B7 ${counts[t]}</button>`
     ).join("");
   }
 
+  // Everything narrowing the list surfaces here, so nothing the filter sheet
+  // holds is invisible once that sheet is closed \u2014 including the scope, which
+  // used to have a permanent row of its own above the list.
   function renderActiveFilters() {
-    if (!activeTags.size) { activeFiltersEl.hidden = true; return; }
+    const scopeChip = favoritesOnly
+      ? `<button class="tag-chip is-on" data-scope-off="favorites">\u2605 Favorites \u2715</button>`
+      : sharedOnly
+        ? `<button class="tag-chip is-on" data-scope-off="shared">\uD83D\uDC65 Shared \u2715</button>`
+        : "";
+    // A dot on the 🏷 button, so a narrowed list is obvious even if the chip row
+    // has scrolled out of sight.
+    toggleFiltersBtn.classList.toggle("has-filters", !!(activeTags.size || scopeChip));
+    if (!activeTags.size && !scopeChip) { activeFiltersEl.hidden = true; return; }
     activeFiltersEl.hidden = false;
     activeFiltersEl.innerHTML =
-      "Filtering: " +
+      "Showing: " + scopeChip +
       [...activeTags].map((t) => `<button class="tag-chip is-on" data-tag="${esc(t)}">${esc(t)} \u2715</button>`).join("") +
       ` <button class="ghost-btn small" id="clear-tags">Clear all</button>`;
   }
@@ -1914,11 +1971,115 @@
       if (!basket.has(id)) return; // removed while the debounce was pending
       const { error } = await supabaseClient.from("grocery_basket_items")
         .upsert({ recipe_id: id, servings: basket.get(id).servings }, { onConflict: "user_id,recipe_id" });
-      if (error) toast(`Couldn't save servings: ${error.message}`);
+      if (error) toastError("Couldn\u2019t save those servings", error);
     }, 500));
   }
 
+  // One row's markup, lifted out of renderList so a single row can be redrawn on
+  // its own (see rerenderRow). Toggling a star or a grocery checkbox used to
+  // rebuild every row in the list, which dropped keyboard focus to <body> each
+  // time — ticking five recipes meant five trips back through the Tab order.
+  function itemHtml(it) {
+    const picked = basket.has(it.id);
+    const servings = chosenServings(it);
+    const open = openItems.has(it.id);
+    const mine = it.userId === session?.user?.id;
+    const inTray = mealPlanTray.has(it.id);
+    return `
+    <li class="item${open ? " is-open" : ""}${picked ? " has-serv" : ""}" data-id="${esc(it.id)}">
+      <div class="item-row">
+        <label class="pick-wrap" title="${picked ? "On your grocery list" : "Add to grocery list"}">
+          <input type="checkbox" class="pick" ${picked ? "checked" : ""}
+                 aria-label="Add ${esc(it.name)} to grocery list">
+          <span class="pick-ico" aria-hidden="true">🛒</span>
+        </label>
+        <button class="item-head" aria-expanded="${open}">
+          <span class="item-name">${esc(it.name)}</span>
+          ${it.subtitle ? `<span class="item-sub">${esc(it.subtitle)}</span>` : ""}
+          ${!mine ? `<span class="item-owner">Shared by ${esc(profileNames[it.userId] || "someone")}</span>` : ""}
+          <span class="item-tags">${it.tags.map((t) => `<span class="mini-tag">${esc(t)}</span>`).join("")}</span>
+        </button>
+        ${picked ? `
+        <span class="serv-control" aria-label="Servings for grocery list">
+          <button class="serv-btn" data-step="-1" aria-label="Decrease servings">\u2212</button>
+          <span class="serv-num">${servings}</span>
+          <button class="serv-btn" data-step="1" aria-label="Increase servings">+</button>
+          <span class="serv-label">${esc(it.servingsLabel)}</span>
+        </span>` : ""}
+        <label class="plan-pick-wrap" title="${inTray ? "Staged for the meal plan \u2014 open Meal plan to put it on a day" : "Stage for the meal plan"}">
+          <input type="checkbox" class="plan-pick" ${inTray ? "checked" : ""}
+                 aria-label="Stage ${esc(it.name)} for the meal plan">
+          <span class="plan-pick-ico" aria-hidden="true">\uD83D\uDCC5</span>
+        </label>
+        ${mine ? `<button class="star-btn${it.isFavorite ? " is-on" : ""}" aria-label="${it.isFavorite ? "Remove from favorites" : "Add to favorites"}" aria-pressed="${it.isFavorite}">${it.isFavorite ? "\u2605" : "\u2606"}</button>` : ""}
+        <span class="chevron" aria-hidden="true">\u25B6</span>
+      </div>
+      ${open ? renderDetail(it, servings) : ""}
+    </li>`;
+  }
+
+  // Redraw ONE row and put focus back where it was. For the toggles that
+  // restructure a row (the grocery checkbox adds a servings stepper; the unit
+  // toggle rewrites the open detail) this is both cheaper than renderList and,
+  // more to the point, it doesn't throw away the other forty rows' focus.
+  const ROW_FOCUS_SELECTORS = [
+    ".pick", ".plan-pick", ".star-btn", ".item-head", ".detail-grocery-btn",
+    ".add-to-plan-btn", ".coach-btn", ".pair-btn", ".cook-btn", ".detail-more-btn"
+  ];
+  function rowFocusSelector(el) {
+    const direct = ROW_FOCUS_SELECTORS.find((s) => el.matches(s));
+    if (direct) return direct;
+    // Siblings that only differ by a data attribute need it to be told apart.
+    if (el.matches(".serv-btn, .detail-serv-btn")) {
+      const cls = el.matches(".detail-serv-btn") ? ".detail-serv-btn" : ".serv-btn";
+      return `${cls}[data-step="${el.dataset.step}"]`;
+    }
+    if (el.matches(".unit-toggle-btn")) return `.unit-toggle-btn[data-unit="${el.dataset.unit}"]`;
+    return null;
+  }
+  function rerenderRow(id) {
+    const li = listEl.querySelector(`.item[data-id="${CSS.escape(id)}"]`);
+    const it = byId[id];
+    if (!li || !it) { renderList(); return; }
+    const active = document.activeElement;
+    const focusSel = active && li.contains(active) ? rowFocusSelector(active) : null;
+    li.outerHTML = itemHtml(it);
+    if (focusSel) {
+      const next = listEl.querySelector(`.item[data-id="${CSS.escape(id)}"] ${focusSel}`);
+      if (next) next.focus({ preventScroll: true });
+    }
+  }
+
   function renderList() {
+    // Before the first fetch lands, show placeholder rows rather than the
+    // first-run invitation: a returning user on a slow connection was being
+    // told they had no recipes, and a failed load said the same thing.
+    if (dataState !== "ready" && !Object.keys(byId).length) {
+      pickHintEl.hidden = true;
+      emptyEl.classList.toggle("is-error", dataState === "error");
+      if (dataState === "error") {
+        // Hide the whole count/sort row: a lone "A–Z" dropdown floating over an
+        // error message is just noise.
+        resultCountEl.textContent = "";
+        resultRowEl.hidden = true;
+        listEl.innerHTML = "";
+        emptyEl.hidden = false;
+        emptyEl.innerHTML =
+          "<strong>Couldn\u2019t reach your recipes.</strong>" +
+          "They\u2019re safe in your account \u2014 this is the connection, not your book." +
+          '<button type="button" class="ghost-btn small empty-retry" id="empty-retry">Try again</button>';
+      } else {
+        resultCountEl.textContent = "Loading\u2026";
+        emptyEl.hidden = true;
+        listEl.innerHTML = '<li class="list-skeleton-wrap" aria-hidden="true"><ul class="list-skeleton">' +
+          "<li><span></span><span></span></li>".repeat(3) + "</ul></li>";
+      }
+      renderStagedCount();
+      return;
+    }
+    emptyEl.classList.remove("is-error");
+    resultRowEl.hidden = viewMode !== "recipes";
+
     const items = currentItems();
     resultCountEl.textContent =
       `${items.length} ${section === "recipes" ? "recipe" : "cocktail"}${items.length === 1 ? "" : "s"}`;
@@ -1928,52 +2089,15 @@
       const noun = section === "recipes" ? "recipes" : "cocktails";
       const hasFilter = !!(searchTerm.trim() || activeTags.size);
       emptyEl.textContent = sharedOnly && !hasFilter
-        ? "Nothing's been shared with you yet — when someone shares a recipe with you, it'll show up here."
+        ? "Nothing's been shared with you yet \u2014 when someone shares a recipe with you, it'll show up here."
         : favoritesOnly && !hasFilter
-          ? `No favorite ${noun} yet — tap the ☆ on a recipe to star it.`
+          ? `No favorite ${noun} yet \u2014 tap the \u2606 on a recipe to star it.`
           : (hasFilter || favoritesOnly || sharedOnly)
             ? "Nothing matches that search. Clear a tag or try a different word."
-            : `No ${noun} yet — tap “+ Add recipe” or “✨ Add with AI” to get started.`;
+            : `No ${noun} yet \u2014 tap \u201c+ Add recipe\u201d or \u201c\u2728 Add with AI\u201d to get started.`;
     }
 
-    listEl.innerHTML = items.map((it) => {
-      const picked = basket.has(it.id);
-      const servings = chosenServings(it);
-      const open = openItems.has(it.id);
-      const mine = it.userId === session?.user?.id;
-      const inTray = mealPlanTray.has(it.id);
-      return `
-      <li class="item${open ? " is-open" : ""}${picked ? " has-serv" : ""}" data-id="${esc(it.id)}">
-        <div class="item-row">
-          <label class="pick-wrap" title="${picked ? "On your grocery list" : "Add to grocery list"}">
-            <input type="checkbox" class="pick" ${picked ? "checked" : ""}
-                   aria-label="Add ${esc(it.name)} to grocery list">
-            <span class="pick-ico" aria-hidden="true">🛒</span>
-          </label>
-          <button class="item-head" aria-expanded="${open}">
-            <span class="item-name">${esc(it.name)}</span>
-            ${it.subtitle ? `<span class="item-sub">${esc(it.subtitle)}</span>` : ""}
-            ${!mine ? `<span class="item-owner">Shared by ${esc(profileNames[it.userId] || "someone")}</span>` : ""}
-            <span class="item-tags">${it.tags.map((t) => `<span class="mini-tag">${esc(t)}</span>`).join("")}</span>
-          </button>
-          ${picked ? `
-          <span class="serv-control" aria-label="Servings for grocery list">
-            <button class="serv-btn" data-step="-1" aria-label="Decrease servings">\u2212</button>
-            <span class="serv-num">${servings}</span>
-            <button class="serv-btn" data-step="1" aria-label="Increase servings">+</button>
-            <span class="serv-label">${esc(it.servingsLabel)}</span>
-          </span>` : ""}
-          <label class="plan-pick-wrap" title="${inTray ? "Staged for meal planning \u2014 open Meal plan to place it" : "Add to meal plan"}">
-            <input type="checkbox" class="plan-pick" ${inTray ? "checked" : ""}
-                   aria-label="Add ${esc(it.name)} to meal plan">
-            <span class="plan-pick-ico" aria-hidden="true">\uD83D\uDCC5</span>
-          </label>
-          ${mine ? `<button class="star-btn${it.isFavorite ? " is-on" : ""}" aria-label="${it.isFavorite ? "Remove from favorites" : "Add to favorites"}" aria-pressed="${it.isFavorite}">${it.isFavorite ? "\u2605" : "\u2606"}</button>` : ""}
-          <span class="chevron" aria-hidden="true">\u25B6</span>
-        </div>
-        ${open ? renderDetail(it, servings) : ""}
-      </li>`;
-    }).join("");
+    listEl.innerHTML = items.map(itemHtml).join("");
     renderStagedCount();
   }
 
@@ -2034,7 +2158,7 @@
       </div>
       <div class="detail-actions-row">
         ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
-        <button class="ghost-btn small add-to-plan-btn${mealPlanTray.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${mealPlanTray.has(it.id) ? "✓ In meal plan" : "📅 Add to plan"}</button>
+        <button class="ghost-btn small add-to-plan-btn${mealPlanTray.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${mealPlanTray.has(it.id) ? "✓ Staged for plan" : "📅 Stage for plan"}</button>
         <button class="ghost-btn small detail-grocery-btn${basket.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${basket.has(it.id) ? "✓ In grocery list" : "🛒 Add to grocery list"}</button>
         ${it.section === "kitchen" ? `<button class="ghost-btn small pair-btn" data-id="${esc(it.id)}">🍷 Pair a drink</button>` : ""}
         <button class="ghost-btn small coach-btn" data-id="${esc(it.id)}">✨ Ask AI</button>
@@ -2245,6 +2369,27 @@
     grocerySummary.textContent = recipes > 0
       ? `${recipes} recipe${recipes === 1 ? "" : "s"} in your grocery list`
       : `${manualGroceryItems.length} item${manualGroceryItems.length === 1 ? "" : "s"} in your grocery list`;
+
+    // The mobile ＋ button used to sit on top of this bar, covering "Clear".
+    // Measure it — it wraps to two rows on a narrow phone — and let CSS lift
+    // the button clear of whatever height it actually came out at.
+    document.body.classList.toggle("has-grocery-bar", total > 0);
+    if (total > 0) {
+      document.documentElement.style.setProperty("--grocery-bar-h", `${groceryBar.offsetHeight}px`);
+    }
+
+    // Count on the header cart, so the grocery list has a visible state even
+    // when the bottom bar isn't showing — a list built only out of pantry
+    // restocks had no at-a-glance indicator at all. Deliberately the count of
+    // things *added* rather than lines to buy: that second number means
+    // re-scaling every basket recipe, which is too much for every render.
+    if (groceryTopCountEl) {
+      groceryTopCountEl.hidden = total === 0;
+      groceryTopCountEl.textContent = total > 99 ? "99+" : String(total);
+      groceryTopBtn.setAttribute("aria-label", total === 0
+        ? "Open grocery list"
+        : `Open grocery list, ${total} added`);
+    }
   }
 
   function groceryGroups() {
@@ -2561,15 +2706,36 @@
     }));
   }
 
+  // Same idea as paintStar: the row's calendar checkbox and the open detail's
+  // button are the only things that change, so touch only those.
+  function paintTrayState(id) {
+    const li = listEl.querySelector(`.item[data-id="${CSS.escape(id)}"]`);
+    if (!li) return;
+    const on = mealPlanTray.has(id);
+    const box = li.querySelector(".plan-pick");
+    if (box) box.checked = on;
+    const wrap = li.querySelector(".plan-pick-wrap");
+    if (wrap) {
+      wrap.title = on
+        ? "Staged for the meal plan \u2014 open Meal plan to put it on a day"
+        : "Stage for the meal plan";
+    }
+    const btn = li.querySelector(".add-to-plan-btn");
+    if (btn) {
+      btn.classList.toggle("is-on", on);
+      btn.textContent = on ? "\u2713 Staged for plan" : "\ud83d\udcc5 Stage for plan";
+    }
+  }
   function setTrayMembership(id, on) {
     if (on) mealPlanTray.add(id); else mealPlanTray.delete(id);
     saveLocal("mealTray", [...mealPlanTray]);
+    paintTrayState(id);
     renderStagedCount();
     renderMealPlan();
   }
   function addToMealPlanTray(id) {
     setTrayMembership(id, true);
-    toast("Added to meal plan");
+    toast("Staged \u2014 open Meal plan to put it on a day");
   }
   function removeFromTray(id) {
     setTrayMembership(id, false);
@@ -2592,14 +2758,14 @@
       .insert({ recipe_id: recipeId, plan_date: date, slot, servings })
       .select()
       .single();
-    if (error) { toast(`Couldn't add to plan: ${error.message}`); return; }
+    if (error) { toastError("Couldn\u2019t add that to the plan", error); return; }
     mealPlan.push({ id: data.id, recipeId, date, slot, servings, purchasedAt: null });
     renderMealPlan();
   }
 
   async function removeMealEntry(entryId) {
     const { error } = await supabaseClient.from("meal_plan_entries").delete().eq("id", entryId);
-    if (error) { toast(`Couldn't remove: ${error.message}`); return; }
+    if (error) { toastError("Couldn\u2019t remove that", error); return; }
     mealPlan = mealPlan.filter((e) => e.id !== entryId);
     renderMealPlan();
   }
@@ -2700,7 +2866,7 @@
       ]);
       const rows = [...totals.entries()].map(([recipe_id, servings]) => ({ recipe_id, servings }));
       const { error: e3 } = await supabaseClient.from("grocery_basket_items").insert(rows);
-      if (e1 || e2 || e3) { toast("Couldn't rebuild your grocery list — try again."); return; }
+      if (e1 || e2 || e3) { toast("Couldn't rebuild your grocery list — try again.", true); return; }
     }
     basket.clear();
     checkedGroceryItems.clear();
@@ -2760,7 +2926,7 @@
             <button class="mp-tray-x" data-tray-remove="${esc(id)}" aria-label="Remove from tray">\u00d7</button>
           </span>`;
         }).join("")
-      : `<p class="mp-empty">Open a recipe and tap <b>\ud83d\udcc5 Add to plan</b> to stage it here, then tap it and a day below to schedule it.</p>`;
+      : `<p class="mp-empty">Open a recipe and tap <b>\ud83d\udcc5 Stage for plan</b> to park it here, then tap it and a day below to schedule it.</p>`;
 
     const upcoming = [0, 1, 2, 3, 4, 5, 6].map((i) => mealDayCard(addDays(midnight(), i), false)).join("");
     const history = [1, 2, 3, 4, 5, 6, 7].map((i) => mealDayCard(addDays(midnight(), -i), true)).join("");
@@ -2790,14 +2956,33 @@
         ${history}
       </section>`;
 
-    // Update the tab badge with the count of upcoming planned meals
-    updateMealplanBadge(upcomingCount);
+    updateMealplanBadge();
   }
 
-  function updateMealplanBadge(n) {
+  // Counts what's SCHEDULED in the next 7 days plus what's STAGED in the tray.
+  // It used to count scheduled meals only, so staging a recipe left the detail
+  // button reading "\u2713 In meal plan" while the badge sat at 0 \u2014 three signals
+  // for one piece of state, two of them wrong. Also drives whether the Meal
+  // plan tab is shown at all, so it reads from state rather than taking a count
+  // from whoever happened to call it.
+  function updateMealplanBadge() {
+    const todayStr = isoDate(midnight());
+    const endStr = isoDate(addDays(midnight(), 6));
+    const scheduled = mealPlan.filter((e) => e.date >= todayStr && e.date <= endStr).length;
+    const n = scheduled + mealPlanTray.size;
     const b = $("#mealplan-count");
     b.textContent = n;
     b.hidden = !n;
+    syncModeTabs(n > 0);
+  }
+
+  // The Meal plan tab only earns its 80px of the first screen once there's
+  // something in it. Staging a recipe (\ud83d\udcc5 on any row, or "Stage for plan" in
+  // the open detail) brings it straight back, and the "N recipes staged" pill
+  // under the list is the other way in.
+  function syncModeTabs(hasPlan) {
+    if (!modeTabsEl) return;
+    modeTabsEl.hidden = !hasPlan && viewMode === "recipes";
   }
 
   function setViewMode(mode) {
@@ -2808,6 +2993,9 @@
     modeRecipesBtn.setAttribute("aria-selected", String(recipes));
     modeMealplanBtn.setAttribute("aria-selected", String(!recipes));
     recipesControlsEl.hidden = !recipes;
+    // The sticky search bar is full-bleed, so it sits outside #recipes-controls
+    // and has to be hidden on its own.
+    if (searchStickyEl) searchStickyEl.hidden = !recipes;
     listEl.hidden = !recipes;
     resultRowEl.hidden = !recipes;
     if (!recipes) pickHintEl.hidden = true;
@@ -2817,6 +3005,8 @@
       if (!session) { toast("Sign in to plan meals."); setViewMode("recipes"); return; }
       loadMealPlan().then(() => renderMealPlan());
     }
+    // Never hide the tabs while the planner is the thing on screen.
+    syncModeTabs(mealPlan.length > 0 || mealPlanTray.size > 0);
   }
 
   function syncScope() {
@@ -2824,20 +3014,103 @@
     scopeAllBtn.classList.toggle("is-on", all);
     toggleFavoritesBtn.classList.toggle("is-on", favoritesOnly);
     toggleSharedBtn.classList.toggle("is-on", sharedOnly);
-    scopeAllBtn.setAttribute("aria-selected", String(all));
+    // aria-pressed, not aria-selected: these three are filter toggles in a
+    // group, not tabs. The row used to mix both conventions across one set of
+    // three buttons, which made "All" an invalid control.
+    scopeAllBtn.setAttribute("aria-pressed", String(all));
   }
 
-  function toast(msg) {
+  // role="status" so a screen reader actually hears these: the toast is this
+  // app's main failure channel ("Couldn't update grocery list", "Couldn't load
+  // your recipes") and it was announcing to nobody at all. Failures also hold
+  // about 3x longer \u2014 2.2s is right for "Recipe added" and far too short to
+  // read bad news and work out what to do about it.
+  const TOAST_MS = 2200, TOAST_FAIL_MS = 6500;
+  function toast(msg, isFailure) {
     let t = document.querySelector(".toast");
     if (!t) {
       t = document.createElement("div");
       t.className = "toast";
+      t.setAttribute("role", "status");
       document.body.appendChild(t);
     }
     t.textContent = msg;
+    t.classList.toggle("is-failure", !!isFailure);
     t.classList.add("show");
     clearTimeout(t._timer);
-    t._timer = setTimeout(() => t.classList.remove("show"), 2200);
+    t._timer = setTimeout(() => t.classList.remove("show"), isFailure ? TOAST_FAIL_MS : TOAST_MS);
+  }
+
+  // An Undo affordance needs a real button, so it's a separate element from the
+  // plain toast — that one is pointer-events: none on purpose, so it can never
+  // eat a tap meant for the list underneath it.
+  let actionToastTimer = null;
+  function toastAction(msg, actionLabel, onAction) {
+    let t = document.querySelector(".toast-action");
+    if (!t) {
+      t = document.createElement("div");
+      t.className = "toast-action";
+      t.setAttribute("role", "status");
+      document.body.appendChild(t);
+    }
+    t.innerHTML = '<span class="toast-action-msg"></span>'
+      + '<button type="button" class="toast-action-btn"></button>';
+    t.querySelector(".toast-action-msg").textContent = msg;
+    const btn = t.querySelector(".toast-action-btn");
+    btn.textContent = actionLabel;
+    const dismiss = () => { clearTimeout(actionToastTimer); t.classList.remove("show"); };
+    btn.addEventListener("click", () => { dismiss(); onAction(); });
+    t.classList.add("show");
+    clearTimeout(actionToastTimer);
+    actionToastTimer = setTimeout(dismiss, 9000);
+  }
+
+  // ---------- Error copy ----------
+  // Raw PostgREST/Supabase strings ("JWT expired", "duplicate key value
+  // violates unique constraint \u2026") are not kitchen language, and they used to
+  // go straight into the toast. These three keep the app's own sentence, say
+  // what to do about it, and send the provider's text to the console where it
+  // belongs \u2014 the same thing friendlyAuthError already does for the sign-in
+  // form.
+
+  // A failed save is the error where reassurance matters most: the form is
+  // still filled in, nothing was lost, and pressing Save again is safe.
+  function saveErrorText(error) {
+    if (error && error.message) console.error("Recipe save failed:", error.message);
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    return offline
+      ? "Couldn\u2019t save \u2014 you look offline. Your recipe is still here; try again when you\u2019re back."
+      : "Couldn\u2019t save \u2014 your recipe is still here, so try again.";
+  }
+
+  // The Edge Functions author their own user-facing copy \u2014 the daily-cap
+  // notice, the "paste the caption instead" guidance for Instagram, the TikTok
+  // explanation. Prefixing that with "Error:" turned careful writing into
+  // something that reads like a stack trace, so server-authored text is shown
+  // as-is and only a transport failure gets a sentence of ours. The functions
+  // also say "midnight UTC" because that's where the counter lives \u2014 show
+  // the person what that is on their own clock.
+  function aiErrorText(data, error) {
+    let text = data && data.error ? String(data.error) : "";
+    if (!text) {
+      if (error && error.message) console.error("AI call failed:", error.message);
+      return "That didn\u2019t go through \u2014 check your connection and try again.";
+    }
+    if (text.includes("midnight UTC")) {
+      const reset = new Date();
+      reset.setUTCHours(24, 0, 0, 0);
+      const local = reset.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      text = text.replace("midnight UTC", `${local} your time`);
+    }
+    return text;
+  }
+
+  // The general one: any failed write that only had a toast to report in.
+  function toastError(msg, error) {
+    const raw = (error && error.message) || "";
+    if (raw) console.error(msg + ":", raw);
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    toast(offline ? `${msg} \u2014 you look offline.` : `${msg} \u2014 try again.`, true);
   }
 
   // ---------- Recipe form (add / edit / delete) ----------
@@ -2971,6 +3244,7 @@
     rfInventoryCheck.hidden = true;
     rfInventoryCheck.innerHTML = "";
     updateTagGroupsVisibility();
+    recipeFormDirty = false;
     recipeFormPanel.hidden = false;
   }
 
@@ -3096,7 +3370,20 @@
     rfInventoryCheck.hidden = false;
   }
 
-  function closeRecipeForm() {
+  // THE expensive mistake this form could make: every AI import lands here for
+  // review, and both the backdrop tap and Escape used to throw the whole thing
+  // away with no question asked. Meanwhile saving was guarded by a busy flag, a
+  // disabled button and a duplicate-name check \u2014 all the care was on one side.
+  // `force` is the explicit Close button, which stays instant.
+  let recipeFormDirty = false;
+  function markRecipeFormDirty() { recipeFormDirty = true; }
+  function closeRecipeForm(force) {
+    if (!force && recipeFormDirty) {
+      const name = rfName.value.trim();
+      const what = name ? `\u201c${name}\u201d` : "this recipe";
+      if (!confirm(`Discard ${what}? Your changes haven\u2019t been saved.`)) return;
+    }
+    recipeFormDirty = false;
     recipeFormPanel.hidden = true;
   }
 
@@ -3162,6 +3449,10 @@
         : { text: flattenText(s?.text).trim(), group: extractedGroup(s?.group) })
       .filter((s) => s.text);
     rfMethod.innerHTML = method.length ? buildRows(method, (s) => stepRow(s.text)) : stepRow("");
+    // An AI-filled form is unsaved work even before you touch a field — this is
+    // precisely the screen that was being lost to a tap on the dim margin — so
+    // it starts dirty rather than waiting for an edit to mark it.
+    markRecipeFormDirty();
   }
 
   rfAddIngredientBtn.addEventListener("click", () => {
@@ -3223,11 +3514,26 @@
     rfReorderIngredientsBtn.textContent = on ? "✓ Done" : "↕ Reorder";
   });
 
+  // This button has been dead: it was only ever shown and hidden, never wired,
+  // so tapping "Delete recipe" on an open edit form did nothing at all. Delete
+  // was reachable only from the detail row's "⋯ More" menu.
+  deleteRecipeBtn.addEventListener("click", async () => {
+    const it = byId[rfId.value];
+    if (!it) return;
+    await deleteRecipe(it);
+    if (!byId[it.id]) closeRecipeForm(true); // gone — don't leave its form up
+  });
+
   addRecipeBtn.addEventListener("click", () => openRecipeForm(null));
-  closeRecipeFormBtn.addEventListener("click", closeRecipeForm);
+  // The ✕ Close button is an explicit "I'm done with this" \u2014 no second guess.
+  closeRecipeFormBtn.addEventListener("click", () => closeRecipeForm(true));
   recipeFormPanel.addEventListener("click", (e) => {
     if (e.target === recipeFormPanel) closeRecipeForm();
   });
+  // One listener on the form catches the static fields and the ingredient/step
+  // rows that get added as you go.
+  recipeForm.addEventListener("input", markRecipeFormDirty);
+  recipeForm.addEventListener("change", markRecipeFormDirty);
 
   // One save at a time: a double-tap (or Enter + tap) on a slow connection
   // otherwise fires two inserts and saves the recipe twice.
@@ -3308,35 +3614,57 @@
     recipeFormStatus.textContent = "Saving…";
     recipeSaving = true;
     recipeFormSubmitBtn.disabled = true;
-    let error;
+    let error, insertedId = null;
     try {
-      ({ error } = id
-        ? await supabaseClient.from("recipes").update(row).eq("id", id)
-        : await supabaseClient.from("recipes").insert(row));
+      if (id) {
+        ({ error } = await supabaseClient.from("recipes").update(row).eq("id", id));
+      } else {
+        // .select() so we know which row to open once the list reloads.
+        const res = await supabaseClient.from("recipes").insert(row).select("id").single();
+        error = res.error;
+        insertedId = res.data ? res.data.id : null;
+      }
     } finally {
       recipeSaving = false;
       recipeFormSubmitBtn.disabled = false;
     }
 
     if (error) {
-      recipeFormStatus.textContent = `Error: ${error.message}`;
+      recipeFormStatus.textContent = saveErrorText(error);
       return;
     }
 
-    closeRecipeForm();
+    recipeFormDirty = false;
+    closeRecipeForm(true);
     toast(id ? "Recipe updated" : "Recipe added");
     await loadData();
+    // Land on the recipe you just spent five minutes on, rather than dropping
+    // back to an unchanged list with it filed somewhere under A\u2013Z.
+    // openExistingRecipe already expands a row and scrolls it into view.
+    const savedId = id || insertedId;
+    if (savedId && byId[savedId]) openExistingRecipe(savedId);
   });
 
+  // Repaint the one star rather than the whole list \u2014 except in Favorites
+  // view, where un-starring genuinely takes the row out of the list.
+  function paintStar(item) {
+    if (favoritesOnly) { renderList(); return; }
+    const btn = listEl.querySelector(`.item[data-id="${CSS.escape(item.id)}"] .star-btn`);
+    if (!btn) { renderList(); return; }
+    btn.classList.toggle("is-on", item.isFavorite);
+    btn.setAttribute("aria-pressed", String(item.isFavorite));
+    btn.setAttribute("aria-label", item.isFavorite ? "Remove from favorites" : "Add to favorites");
+    btn.textContent = item.isFavorite ? "\u2605" : "\u2606";
+  }
   async function toggleFavorite(item) {
     const next = !item.isFavorite;
     item.isFavorite = next; // optimistic
-    renderList();
+    paintStar(item);
     const { error } = await supabaseClient.from("recipes").update({ is_favorite: next }).eq("id", item.id);
     if (error) {
       item.isFavorite = !next;
-      renderList();
-      toast(`Error: ${error.message}`);
+      paintStar(item);
+      toastError("Couldn\u2019t save that favorite", error);
     }
   }
 
@@ -3361,7 +3689,7 @@
       shared_with_user_id: foundId,
       shared_by_user_id: session.user.id
     });
-    if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+    if (error) { statusEl.textContent = aiErrorText(null, error); return; }
 
     (sharesByRecipe[item.id] || (sharesByRecipe[item.id] = [])).push(foundId);
     if (!profileNames[foundId]) await loadProfiles(); // pick up the new recipient's display name
@@ -3374,7 +3702,7 @@
       .delete()
       .eq("recipe_id", item.id)
       .eq("shared_with_user_id", userId);
-    if (error) { toast(`Error: ${error.message}`); return; }
+    if (error) { toastError("That didn\u2019t work", error); return; }
     sharesByRecipe[item.id] = (sharesByRecipe[item.id] || []).filter((id) => id !== userId);
     renderList();
   }
@@ -3389,7 +3717,7 @@
       .delete()
       .eq("recipe_id", item.id)
       .eq("shared_with_user_id", session.user.id);
-    if (error) { toast(`Couldn’t remove: ${error.message}`); return; }
+    if (error) { toastError("Couldn\u2019t remove that", error); return; }
     openItems.delete(item.id);
     await loadData();
     toast("Removed from your shared recipes.");
@@ -3440,22 +3768,47 @@
     // A copy is a fresh, unfavorited recipe owned by me.
     const row = { ...toBackupRow(item), user_id: session.user.id, is_favorite: false };
     const { error } = await supabaseClient.from("recipes").insert(row);
-    if (error) { toast(`Error: ${error.message}`); return; }
+    if (error) { toastError("That didn\u2019t work", error); return; }
     toast("Copied to your book");
     await loadData();
   }
 
+  // Some of these recipes exist nowhere else: photographed off a handwritten
+  // card, typed out once from memory, pulled from a video that has since gone
+  // private. A native confirm() is the one dialog people dismiss on reflex, so
+  // the real protection is keeping the row in hand and offering it back. The
+  // confirm can then stop threatening and just say what's about to happen.
   async function deleteRecipe(item) {
-    if (!confirm(`Delete "${item.name}"? This can't be undone.`)) return;
+    if (!confirm(`Delete \u201c${item.name}\u201d? You\u2019ll have a few seconds to undo.`)) return;
+    // toBackupRow omits user_id (it's an export shape), and an insert needs it —
+    // copyToMyBook adds it the same way. created_at is carried over too, so an
+    // undo puts the recipe back where it was in a "Newest" sort rather than
+    // sending it to the top. The id is deliberately NOT reused: this is a fresh
+    // row, which is why the message says "restored".
+    const restoreRow = {
+      ...toBackupRow(item),
+      user_id: session.user.id,
+      created_at: item.createdAt || undefined
+    };
     const { error } = await supabaseClient.from("recipes").delete().eq("id", item.id);
     if (error) {
-      toast(`Error: ${error.message}`);
+      toastError("Couldn\u2019t delete that recipe", error);
       return;
     }
     openItems.delete(item.id);
     basket.delete(item.id);
-    toast("Recipe deleted");
+    mealPlanTray.delete(item.id);
+    saveLocal("mealTray", [...mealPlanTray]);
     await loadData();
+    // Restoring re-inserts the recipe itself. Anything the database cascaded
+    // away with it (a grocery-basket entry, a planned meal) doesn't come back,
+    // which is why the message is "restored" rather than "undeleted".
+    toastAction(`\u201c${item.name}\u201d deleted`, "Undo", async () => {
+      const { error: reErr } = await supabaseClient.from("recipes").insert(restoreRow);
+      if (reErr) { toastError("Couldn\u2019t put that recipe back", reErr); return; }
+      toast("Recipe restored");
+      await loadData();
+    });
   }
 
   // ---------- AI recipe import ----------
@@ -3570,7 +3923,7 @@
     if (error || data?.error) {
       aiImportPicker.hidden = false;
       aiImportLoading.hidden = true;
-      aiImportStatus.textContent = `Error: ${data?.error || error.message}`;
+      aiImportStatus.textContent = aiErrorText(data, error);
       // A link that can't be read (bot-walled site, video with no recipe) should
       // route straight to the path that always works — pasting the text.
       if (payload.type === "url") {
@@ -3848,7 +4201,7 @@
     if (token !== generationToken || generatePanel.hidden) return; // stale / cancelled
     if (result === GENERATION_TIMEOUT) return genFail("That's taking too long — check your connection and try again.", "form");
     const { data, error } = result;
-    if (error || data?.error) return genFail(`Error: ${data?.error || error.message}`, "form");
+    if (error || data?.error) return genFail(aiErrorText(data, error), "form");
     genConcepts = Array.isArray(data.concepts) ? data.concepts : [];
     if (!genConcepts.length) return genFail("Couldn't come up with ideas — try different ingredients.", "form");
     renderConcepts();
@@ -3874,7 +4227,7 @@
     if (token !== generationToken || generatePanel.hidden) return; // stale / cancelled
     if (result === GENERATION_TIMEOUT) return genFail("That's taking too long — check your connection and try again.", "concepts");
     const { data, error } = result;
-    if (error || data?.error) return genFail(`Error: ${data?.error || error.message}`, "concepts");
+    if (error || data?.error) return genFail(aiErrorText(data, error), "concepts");
     closeGeneratePanel();
     openRecipeForm(null);
     fillRecipeFormFromExtraction(data.recipe);
@@ -3958,7 +4311,7 @@
     const fail = (msg) => { promptForm.hidden = false; promptLoading.hidden = true; promptStatus.textContent = msg; };
     if (result === GENERATION_TIMEOUT) return fail("That's taking too long — check your connection and try again.");
     const { data, error } = result;
-    if (error || data?.error) return fail(`Error: ${data?.error || error.message}`);
+    if (error || data?.error) return fail(aiErrorText(data, error));
     closePromptPanel();
     openRecipeForm(null);
     fillRecipeFormFromExtraction(data.recipe);
@@ -4232,7 +4585,7 @@
     }
     const { data, error } = raced;
     if (error || data?.error) {
-      coachStatus.textContent = `Error: ${data?.error || error.message}`;
+      coachStatus.textContent = aiErrorText(data, error);
       return;
     }
 
@@ -4404,7 +4757,7 @@
     pairLoading.hidden = true;
     if (result === PAIR_TIMEOUT) { pairStatus.textContent = "That's taking too long — check your connection and try again."; return; }
     const { data, error } = result;
-    if (error || data?.error) { pairStatus.textContent = `Error: ${data?.error || error.message}`; return; }
+    if (error || data?.error) { pairStatus.textContent = aiErrorText(data, error); return; }
     pairOptions = Array.isArray(data.options) ? data.options : [];
     // Bar-anchored option first, meal pairings after — deterministic order
     // regardless of how the model returned them (keeps indices aligned with
@@ -4511,7 +4864,7 @@
     pairLoading.hidden = true;
     if (result === PAIR_TIMEOUT) { pairStatus.textContent = "That's taking too long — check your connection and try again."; renderPairOptions(); return; }
     const { data, error } = result;
-    if (error || data?.error) { pairStatus.textContent = `Error: ${data?.error || error.message}`; renderPairOptions(); return; }
+    if (error || data?.error) { pairStatus.textContent = aiErrorText(data, error); renderPairOptions(); return; }
     closePairPanel();
     openRecipeForm(null);
     fillRecipeFormFromExtraction(data.recipe);
@@ -4623,9 +4976,24 @@
   });
 
   // Tag chips (filter panel + active-filter row)
+  function resetScope() {
+    favoritesOnly = false;
+    sharedOnly = false;
+    toggleFavoritesBtn.setAttribute("aria-pressed", "false");
+    toggleSharedBtn.setAttribute("aria-pressed", "false");
+    syncScope();
+  }
   function handleTagClick(e) {
+    // The scope chip in the active-filters row carries .tag-chip too, so it has
+    // to be matched before the tag branch (which would otherwise read an
+    // undefined data-tag and add it to the filter set).
+    if (e.target.closest("[data-scope-off]")) {
+      resetScope();
+      refreshViews();
+      return;
+    }
     const chip = e.target.closest(".tag-chip");
-    if (chip) {
+    if (chip && chip.dataset.tag) {
       const t = chip.dataset.tag;
       activeTags.has(t) ? activeTags.delete(t) : activeTags.add(t);
       refreshViews();
@@ -4633,6 +5001,7 @@
     }
     if (e.target.id === "clear-tags") {
       activeTags.clear();
+      resetScope();
       refreshViews();
     }
   }
@@ -4706,14 +5075,16 @@
     if (e.target.closest(".add-to-plan-btn")) {
       if (mealPlanTray.has(id)) removeFromTray(id);
       else addToMealPlanTray(id);
-      renderList();
-      return;
+      return; // setTrayMembership repaints the row
     }
 
     const unitBtn = e.target.closest(".unit-toggle-btn");
     if (unitBtn) {
       unitSystem = unitBtn.dataset.unit;
-      renderList();
+      saveLocal("unitSystem", unitSystem); // survives a reload now
+      // It's a global setting, so every OPEN detail repaints \u2014 but only the
+      // open ones, which is usually exactly one.
+      [...openItems].forEach(rerenderRow);
       return;
     }
 
@@ -4776,8 +5147,8 @@
     renderCookIngredients();
     cookIngredients.hidden = true;
     cookIngToggle.setAttribute("aria-expanded", "false");
+    hideCookDone();
     cookPanel.hidden = false;
-    document.body.style.overflow = "hidden";
     renderCookStep();
     requestWakeLock();
   }
@@ -4803,6 +5174,7 @@
   }
 
   function renderCookStep() {
+    if (cookDone) hideCookDone();
     const total = cookSteps.length;
     const step = cookSteps[cookIdx];
     const prefix = step.group ? `${step.group} · ` : "";
@@ -4812,7 +5184,12 @@
     renderStepTimers(step);
     cookProgressBar.style.width = `${((cookIdx + 1) / total) * 100}%`;
     cookPrevBtn.disabled = cookIdx === 0;
-    cookNextBtn.textContent = cookIdx === total - 1 ? "Done ✓" : "Next →";
+    const onLast = cookIdx === total - 1;
+    cookNextBtn.textContent = onLast ? "Done ✓" : "Next →";
+    // Tapping the body doesn't advance off the last step any more, so stop
+    // telling people it does.
+    const tapHint = cookPanel.querySelector(".cook-tap-hint");
+    if (tapHint) tapHint.hidden = onLast;
     cookBody.scrollTop = 0;
     renderCookSectionBar();
     renderCookRail();
@@ -5012,9 +5389,35 @@
         </ul>`).join("")}`;
   }
 
+  // Reaching the end is now a place you arrive at, not the exit. Advancing off
+  // the last step used to close cook mode outright — and because the whole step
+  // body is tap-to-advance, a tap meant to re-read step 9 of 9 dropped you back
+  // into the list with the wake lock released and nothing to show for it.
+  let cookDone = false;
+  function showCookDone() {
+    cookDone = true;
+    cookPanel.classList.add("is-done");
+    cookBody.hidden = true;
+    cookIngredients.hidden = true;
+    cookIngToggle.setAttribute("aria-expanded", "false");
+    cookDoneEl.hidden = false;
+    const n = cookSteps.length;
+    cookDoneSub.textContent = cookItem
+      ? `${cookItem.name} \u2014 all ${n} step${n === 1 ? "" : "s"}.`
+      : `All ${n} steps.`;
+    cookProgressBar.style.width = "100%";
+    const btn = $("#cook-done-close");
+    if (btn) btn.focus({ preventScroll: true });
+  }
+  function hideCookDone() {
+    cookDone = false;
+    cookPanel.classList.remove("is-done");
+    cookDoneEl.hidden = true;
+    cookBody.hidden = false;
+  }
   function cookNext() {
     if (cookIdx >= cookSteps.length - 1) {
-      closeCookMode();
+      showCookDone();
       return;
     }
     cookIdx++;
@@ -5027,7 +5430,6 @@
   }
   function closeCookMode() {
     cookPanel.hidden = true;
-    document.body.style.overflow = "";
     releaseWakeLock();
     stopCookTimer();
   }
@@ -5056,16 +5458,22 @@
     const dy = e.changedTouches[0].clientY - swipeStartY;
     if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       cookSwiped = true;
-      if (dx < 0) cookNext(); else cookPrev(); // swipe left = forward, right = back
+      // Same rule as the tap: a left-swipe on the last step doesn't finish.
+      if (dx < 0) { if (cookIdx < cookSteps.length - 1) cookNext(); } else cookPrev();
     }
   }, { passive: true });
 
-  // Tap the step body to advance (suppress if a swipe just fired)
+  // Tap the step body to advance (suppress if a swipe just fired). On the LAST
+  // step the tap does nothing: finishing has to be the explicit "Done ✓", so
+  // re-reading the final step can't throw you out of cook mode.
   cookBody.addEventListener("click", () => {
     if (cookSwiped) { cookSwiped = false; return; }
+    if (cookIdx >= cookSteps.length - 1) return;
     cookNext();
   });
   cookNextBtn.addEventListener("click", cookNext);
+  $("#cook-done-back").addEventListener("click", () => { hideCookDone(); renderCookStep(); });
+  $("#cook-done-close").addEventListener("click", closeCookMode);
   cookPrevBtn.addEventListener("click", cookPrev);
   cookCloseBtn.addEventListener("click", closeCookMode);
   cookIngToggle.addEventListener("click", () => {
@@ -5082,7 +5490,10 @@
   });
   document.addEventListener("keydown", (e) => {
     if (cookPanel.hidden) return;
-    if (e.key === "ArrowRight") { e.preventDefault(); cookNext(); }
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      if (cookIdx < cookSteps.length - 1) cookNext();
+    }
     else if (e.key === "ArrowLeft") { e.preventDefault(); cookPrev(); }
     else if (e.key === "Escape") {
       // Consume the keypress: this handler hides the panel synchronously, so
@@ -5148,7 +5559,7 @@
         supabaseClient.from("grocery_manual_items").delete().eq("user_id", session.user.id),
         supabaseClient.from("grocery_checked_items").delete().eq("user_id", session.user.id)
       ]);
-      if (e1 || e2 || e3) { toast("Couldn't clear the list — try again."); return; }
+      if (e1 || e2 || e3) { toast("Couldn't clear the list — try again.", true); return; }
     }
     basket.clear();
     manualGroceryItems = [];
@@ -5856,24 +6267,143 @@
     }
   });
 
-  // Escape closes the grocery / backup panel / meal plan / recipe form / AI import.
-  // Cook mode sits on top of everything and has its own Escape handler —
-  // don't also close the panels underneath it on the same keypress.
+  // ---------- Sheets: focus, scroll lock, Escape ----------
+  // Every sheet here is shown by flipping its `hidden` attribute, from about a
+  // dozen different call sites. Rather than thread focus handling through all of
+  // them (and miss the next one), watch the attribute: whatever flips it, the
+  // sheet gets the same treatment. That means these panels now
+  //   - move focus inside themselves, so Tab stops walking the recipe list that
+  //     is still sitting behind an aria-modal="true" dialog,
+  //   - hand focus back to whatever opened them,
+  //   - and lock the page behind them, which only cook mode used to do.
+  const SHEET_CLOSERS = new Map();
+  const openSheets = [];                 // innermost last
+  const sheetOpener = new WeakMap();     // sheet -> element to restore focus to
+
+  function registerSheet(el, closer) {
+    if (!el) return;
+    SHEET_CLOSERS.set(el, closer || (() => { el.hidden = true; }));
+  }
+  function closeTopSheet() {
+    const top = openSheets[openSheets.length - 1];
+    if (!top) return false;
+    (SHEET_CLOSERS.get(top) || (() => { top.hidden = true; }))();
+    return true;
+  }
+  // Reference-counted, so closing an inner sheet doesn't unlock the page while
+  // an outer one is still open.
+  function syncBodyScrollLock() {
+    document.body.style.overflow = openSheets.length ? "hidden" : "";
+  }
+  function onSheetOpened(el) {
+    if (openSheets.includes(el)) return;
+    sheetOpener.set(el, document.activeElement);
+    openSheets.push(el);
+    syncBodyScrollLock();
+    // Several panels already focus a field of their own right after opening
+    // (the AI text box, the coach reply box, the ZIP lookup). This observer
+    // fires as a microtask, i.e. after that — so only take focus if nothing in
+    // the sheet has it yet.
+    if (!el.contains(document.activeElement)) {
+      const first = el.querySelector('[aria-label^="Close"], .cook-close-btn')
+        || el.querySelector("button, [href], input, select, textarea");
+      if (first) first.focus({ preventScroll: true });
+    }
+  }
+  function onSheetClosed(el) {
+    const i = openSheets.indexOf(el);
+    if (i === -1) return;
+    openSheets.splice(i, 1);
+    syncBodyScrollLock();
+    const opener = sheetOpener.get(el);
+    sheetOpener.delete(el);
+    // Only pull focus back if it's still inside the sheet we just closed —
+    // otherwise we'd yank it away from wherever the user has since moved.
+    if (opener && document.body.contains(opener) &&
+        (document.activeElement === document.body || el.contains(document.activeElement))) {
+      opener.focus({ preventScroll: true });
+    }
+  }
+
+  registerSheet(groceryPanel, closeGroceryPanel);
+  registerSheet(backupPanel);
+  registerSheet(guidePanel);
+  registerSheet(accountPanel);
+  registerSheet(placeSheet, closePlaceSheet);
+  registerSheet(recipeFormPanel, () => closeRecipeForm());
+  registerSheet(aiImportPanel, closeAiImport);
+  registerSheet(coachPanel, closeCoachPanel);
+  registerSheet(inventoryPanel);
+  registerSheet(generatePanel, closeGeneratePanel);
+  registerSheet(promptPanel, closePromptPanel);
+  registerSheet(cookPanel, closeCookMode);
+  // These two were simply missing from the old Escape handler: Escape in the
+  // Pair-a-drink sheet did nothing, and in the King Soopers review sheet it
+  // closed the grocery panel *underneath* and left the sheet up.
+  registerSheet(pairPanel, closePairPanel);
+  registerSheet(krogerPanel, closeKrogerPanel);
+
+  const sheetObserver = new MutationObserver((records) => {
+    records.forEach((r) => {
+      const el = r.target;
+      if (el.hidden) onSheetClosed(el); else onSheetOpened(el);
+    });
+  });
+  SHEET_CLOSERS.forEach((_, el) => {
+    sheetObserver.observe(el, { attributes: true, attributeFilter: ["hidden"] });
+    if (!el.hidden) onSheetOpened(el);
+  });
+
+  // One Escape, one sheet — innermost first. The old handler ran every branch
+  // without returning, so a stacked pair (the King Soopers sheet over the
+  // grocery list) collapsed both on a single keypress. Cook mode keeps its own
+  // handler for the arrow keys and calls stopImmediatePropagation, so it never
+  // reaches this one.
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !cookPanel.hidden) return;
+    if (e.key !== "Escape") return;
     if (!addMenu.hidden) { closeAddMenu(); return; }
     if (!detailMoreMenu.hidden) { closeDetailMoreMenu(); return; }
-    if (!groceryPanel.hidden) closeGroceryPanel();
-    if (!backupPanel.hidden) backupPanel.hidden = true;
-    if (!guidePanel.hidden) guidePanel.hidden = true;
-    if (!accountPanel.hidden) accountPanel.hidden = true;
-    if (!placeSheet.hidden) closePlaceSheet();
-    if (!recipeFormPanel.hidden) closeRecipeForm();
-    if (!aiImportPanel.hidden) closeAiImport();
-    if (!coachPanel.hidden) closeCoachPanel();
-    if (!inventoryPanel.hidden) inventoryPanel.hidden = true;
-    if (!generatePanel.hidden) closeGeneratePanel();
-    if (!promptPanel.hidden) closePromptPanel();
+    closeTopSheet();
+  });
+
+  // role="tab" announces "tab 1 of 2" and promises arrow-key navigation; none of
+  // these tablists had a key handler, so the promise was empty. One listener
+  // covers all of them (Kitchen/Bar, Recipes/Meal plan, Pantry/Bar, the coach's
+  // two modes, the three drink kinds).
+  document.querySelectorAll('[role="tablist"]').forEach((list) => {
+    list.addEventListener("keydown", (e) => {
+      const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+      const step = keys[e.key];
+      const tabs = [...list.querySelectorAll('[role="tab"]')].filter((t) => !t.disabled && t.offsetParent !== null);
+      if (!step || tabs.length < 2) return;
+      const i = tabs.indexOf(document.activeElement);
+      if (i === -1) return;
+      e.preventDefault();
+      // Focus only — the tab is activated with Enter or Space. Automatic
+      // activation would be fine for Kitchen/Bar, but the drink-kind tabs each
+      // fire an AI call, and arrowing past one shouldn't spend anything.
+      tabs[(i + step + tabs.length) % tabs.length].focus();
+    });
+  });
+
+  // Keep --header-h in step with the sticky header, which the search row sticks
+  // underneath. The header wraps to two rows on a phone, so this isn't a
+  // constant we can hard-code.
+  const siteHeaderEl = document.querySelector(".site-header");
+  function measureHeader() {
+    if (!siteHeaderEl) return;
+    document.documentElement.style.setProperty("--header-h", `${siteHeaderEl.offsetHeight}px`);
+  }
+  if (window.ResizeObserver && siteHeaderEl) new ResizeObserver(measureHeader).observe(siteHeaderEl);
+  window.addEventListener("resize", measureHeader);
+  measureHeader();
+
+  // Retry from the failed-load state.
+  emptyEl.addEventListener("click", (e) => {
+    if (!e.target.closest("#empty-retry")) return;
+    dataState = "loading";
+    renderList();
+    loadData();
   });
 
   // ---------- Init ----------
@@ -5881,5 +6411,6 @@
   renderTagFilters();
   renderList();
   renderGroceryBar();
+  updateMealplanBadge(); // also decides whether the Meal plan tab is shown
   initAuth();
 })();

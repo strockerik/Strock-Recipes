@@ -41,15 +41,20 @@ var FAKE_RECIPES=[{id:"r1",user_id:USER_ID,section:"kitchen",name:"Test Recipe",
   created_at:"2026-01-01T00:00:00Z"}];
 var FAKE_INVENTORY=[{id:"i1",section:"pantry",category:"Spices",name:"oregano",status:"in"},
                     {id:"i2",section:"pantry",category:"Produce",name:"lemons",status:"out"}];
-function builder(tbl){var val=function(){
+function builder(tbl){var single=false;var val=function(){
   if(tbl==="recipes") return {data:FAKE_RECIPES,error:null};
   if(tbl==="inventory_items") return {data:FAKE_INVENTORY,error:null};
-  if(tbl==="profiles") return {data:{id:USER_ID,display_name:"T",diet_prefs:null,grocery_prefs:null,kroger_prefs:null},error:null};
+  // A list select returns rows, .single() returns one. Returning the object for
+  // both made loadProfiles' forEach throw, so every run of this harness was
+  // silently testing a half-finished load (no tag cloud, no refreshViews).
+  if(tbl==="profiles") return single
+    ? {data:{id:USER_ID,display_name:"T",diet_prefs:null,grocery_prefs:null,kroger_prefs:null},error:null}
+    : {data:[{id:USER_ID,display_name:"T"}],error:null};
   return {data:[],error:null};};
  var p=new Proxy({},{get:function(t,k){
   if(k==="then")return function(f,r){return Promise.resolve(val()).then(f,r)};
   if(k==="catch")return function(r){return Promise.resolve(val()).catch(r)};
-  return function(){return p}}});return p;}
+  return function(){if(k==="single"||k==="maybeSingle")single=true;return p}}});return p;}
 window.supabase={createClient:function(){return{
  from:builder,
  auth:{onAuthStateChange:function(cb){setTimeout(function(){cb("INITIAL_SESSION",{user:{id:USER_ID,email:"t@t.co"}})},0);
@@ -93,6 +98,42 @@ async function run(){try{
     A("search field >=260px wide (is "+Math.round(sw)+"px)", sw >= 260,
       "too narrow to read a placeholder on a phone");
   }
+
+  // ---- geometry the stylesheet owns; this is the only styled harness ----
+  // Search sticks under the header instead of scrolling away with the list.
+  var sticky=document.querySelector("#search-sticky");
+  if(sticky){
+    var scs=getComputedStyle(sticky);
+    A("search row is sticky", scs.position==="sticky", "position="+scs.position);
+    A("search sticks below the measured header", parseFloat(scs.top)>40, "top="+scs.top);
+  }
+
+  // Finger-sized hit areas. The glyphs stay small by design; an invisible
+  // centred ::after box does the catching, so measure that rather than the
+  // glyph. 44px where there's room, 38px for the two right-edge controls that
+  // would otherwise swallow the chevron beside them.
+  var pick=document.querySelector(".item .pick");
+  if(pick){ click(pick); await delay(160); }
+  [[".pick-wrap",44],[".serv-btn",44],[".plan-pick-wrap",38],[".star-btn",38]].forEach(function(pair){
+    var el=document.querySelector(".item "+pair[0]);
+    if(!el){ A("hit area "+pair[0]+" present", false, "not rendered"); return; }
+    var after=getComputedStyle(el,"::after");
+    var w=parseFloat(after.width), h=parseFloat(after.height);
+    A("hit area "+pair[0]+" is "+pair[1]+"px (is "+Math.round(w)+"x"+Math.round(h)+")",
+      Math.round(w)===pair[1] && Math.round(h)===pair[1], "width="+after.width+" height="+after.height);
+  });
+
+  // The ＋ button used to sit on top of the grocery bar, covering "Clear".
+  var fab=document.querySelector("#add-fab"), gbar=document.querySelector("#grocery-bar");
+  if(fab && gbar && !gbar.hidden && fab.offsetParent!==null){
+    var fr=fab.getBoundingClientRect(), gr=gbar.getBoundingClientRect();
+    var overlap = fr.bottom > gr.top && fr.top < gr.bottom && fr.right > gr.left && fr.left < gr.right;
+    A("the ＋ button clears the grocery bar", !overlap,
+      "fab="+Math.round(fr.top)+".."+Math.round(fr.bottom)+" bar top="+Math.round(gr.top));
+    A("the ＋ button stays on screen", fr.bottom <= window.innerHeight + 1,
+      "fab bottom="+Math.round(fr.bottom)+" vh="+window.innerHeight);
+  }
+  if(pick){ click(document.querySelector(".item .pick")); await delay(160); }
   show("#grocery-panel"); await delay(70); ov("grocery");
   click(document.querySelector('[data-grocery-view="recipe"]')); await delay(70); ov("grocery by-recipe");
   click(document.querySelector('[data-grocery-view="aisle"]')); await delay(50);

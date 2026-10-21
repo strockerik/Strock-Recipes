@@ -49,6 +49,7 @@ manifest.json / icons/                  iPhone home-screen PWA support
 supabase/functions/extract-recipe/      Edge Function source (Deno/TS) for AI extraction
 supabase/functions/recipe-coach/        Edge Function source (Deno/TS) for the AI recipe coach
 data/recipes.js, data/cocktails.js      pre-migration backup of the original static data (unused)
+testing-skills/*.py                     headless Chrome harnesses (no backend, no spend)
 ```
 
 `config.js` exposes the Supabase URL and **anon** key. That is intentional and
@@ -403,7 +404,10 @@ writable row from a recipe shared with them.
 
 Plan what to cook across the week and shop for it in one pass:
 
-- On any recipe, tap **📅 Add to Weekly Meal Plan** (next to ▶ Cook) to stage it.
+- On any recipe, tap **📅 Stage for plan** (next to ▶ Cook) — or the 📅 box on
+  the row itself — to stage it. It reads "✓ Staged for plan" once it's in the
+  tray; staging is *not* scheduling, and the wording is deliberate (it used to
+  say "✓ In meal plan", which it wasn't).
 - Open **📅 Meal Plan** (top controls) for a three-part page:
   - **Recipes to plan** (top) — your staged recipes. Tap one to *arm* it.
   - **Upcoming 7 days** (middle) — with a recipe armed, tap a day's
@@ -415,8 +419,10 @@ Plan what to cook across the week and shop for it in one pass:
   normal grocery list — a recipe planned on two days has its servings summed,
   and those days are marked "✓ purchased."
 
-The staging tray is per-session; the schedule itself is saved per-user in
-Supabase, so it follows you across devices. The app only ever shows a rolling
+The staging tray lives in this device's localStorage (so it does *not* follow
+you to another device); the schedule itself is saved per-user in Supabase, so
+that part does. The Meal plan tab only appears once something is staged or
+scheduled — the 📅 controls on a recipe are the way in. The app only ever shows a rolling
 window of the past 7 and next 7 days.
 
 **One-time setup (Supabase SQL editor)** — run once:
@@ -1181,6 +1187,51 @@ recipes, but the query runs on every load:
 ```sql
 create index if not exists recipes_user_name on public.recipes (user_id, name);
 ```
+
+## UI conventions worth not undoing
+
+These came out of the UX review of 2026-10-20 and are load-bearing in more than
+one place. `testing-skills/ux_review_smoke_test.py` guards all of them.
+
+**Sheets manage themselves.** Every `.grocery-panel` / `.cook-panel` is watched
+by a `MutationObserver` on its `hidden` attribute (see "Sheets: focus, scroll
+lock, Escape" in `app.js`). Whatever flips `hidden` — a click handler, a test,
+a future panel — the sheet gets focus moved into it, the page behind locked,
+focus handed back on close, and Escape closing the innermost one only. Don't
+reintroduce per-panel focus or `body.style.overflow` handling; register the
+panel with `registerSheet()` instead. A panel that focuses its own field right
+after opening still wins: the observer only takes focus if nothing inside has
+it.
+
+**Toggles patch their row, they don't rebuild the list.** `renderList()`
+replaces every row's markup, which drops keyboard focus to `<body>`. The star,
+the grocery checkbox, the 📅 box and the unit toggle all go through
+`paintStar` / `paintTrayState` / `rerenderRow` instead. Reach for `renderList()`
+only when the *set* of rows changes.
+
+**Three list states, not two.** `dataState` is `loading` | `ready` | `error`.
+A failed load must never render the "No recipes yet" invitation — that read as
+"your recipes are gone" on a bad connection. `loadData` is wrapped so anything
+thrown lands in the error state with a Try again button, rather than leaving
+the placeholder rows up forever.
+
+**Small glyphs get an invisible 44px hit area**, never a bigger glyph — see the
+`::after` overlay block in `style.css`. The two right-edge row controls (📅 and
+★) use 38px instead, because a full 44 would swallow the chevron 12px away.
+`viewport_smoke_test.py` measures these.
+
+**`--faint` must stay at 4.5:1 on `--paper`.** It carries every piece of quiet
+text in the app and is used ~96 times; it was #8A8276 (3.67:1) until the review.
+
+**Unsaved work is confirmed before it's discarded.** `closeRecipeForm()` asks
+unless passed `force` — the ✕ Close button is the only thing that passes it. An
+AI-filled form counts as dirty from the moment it's filled, because that's the
+screen most worth not losing.
+
+**Failures use `toastError` / `toast(msg, true)`**, never a raw provider string:
+Supabase messages are not kitchen language. Server-authored copy from the Edge
+Functions (daily-cap notices, the Instagram guidance) goes through
+`aiErrorText`, which shows it as written rather than prefixing it with "Error:".
 
 ## Local preview
 

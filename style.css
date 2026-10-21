@@ -3,7 +3,7 @@
    paper   #FCFBF8   warm white page
    card    #FFFFFF   row background
    ink     #2A2520   text
-   faint   #8A8276   secondary text
+   faint   #6A6254   secondary text (4.5:1 on paper — see --faint below)
    line    #E8E3D9   hairlines
    basil   #3E6B3A   Kitchen accent
    campari #B5402A   Bar accent
@@ -13,7 +13,17 @@
   --paper: #FCFBF8;
   --card: #FFFFFF;
   --ink: #2A2520;
-  --faint: #8A8276;
+  /* Secondary text. Was #8A8276, which is 3.67:1 on --paper and fails WCAG AA
+     (4.5:1) — and this variable carries the *quiet* text: subtitles, hints,
+     aisle headings, recipe counts, every placeholder, the empty state. That's
+     also the text most often read at arm's length on a kitchen counter, in
+     glare. #6A6254 is the same warm family at 5.8:1. Used ~96 times, so this
+     one line is the whole fix. */
+  --faint: #6A6254;
+  /* Set from JS to the sticky header's measured height, so the search row can
+     stick directly underneath it at any width. The fallback covers the moment
+     before the first measurement. */
+  --header-h: 72px;
   --line: #E8E3D9;
   --chip: #F3F0E8;
   --accent: #3E6B3A;            /* swapped to campari when Bar tab is active */
@@ -209,7 +219,24 @@ button:focus-visible, input:focus-visible {
 .account-household input { width: 70px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; color: var(--ink); }
 
 /* ---------- Controls ---------- */
-.controls { margin-top: 26px; }
+.controls { margin-top: 14px; }
+
+/* Search sticks under the header instead of scrolling away with the list.
+   Search is how you navigate a book of 40+ recipes; having to scroll back to
+   the top of the list to reach it was the single most-repeated bit of friction.
+   Full-bleed (negative margin out of .wrap's gutter, padding back in) so list
+   cards passing underneath are properly occluded — the inner div restores the
+   normal content width, so .search-row keeps exactly the geometry it had. */
+.search-sticky {
+  position: sticky;
+  top: var(--header-h);
+  z-index: 15;                      /* under the header (20), over the list */
+  margin-inline: -20px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+.search-sticky-inner { padding: 10px 20px; }
+
 /* wrap so the filter buttons drop to the next line instead of pushing the
    page wider than a phone screen */
 .search-row { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -255,6 +282,11 @@ button:focus-visible, input:focus-visible {
 .solid-btn:disabled { opacity: 0.45; cursor: default; }
 
 /* Tag filter cloud */
+/* The filter sheet now holds both halves of "which recipes am I looking at" —
+   the All/Favorites/Shared scope and the tag cloud — so the main screen doesn't
+   carry a permanent 103px chip row for a control used a few times a week. The
+   active scope always surfaces as a chip in .active-filters, so it's never
+   hidden state. */
 .tag-filters {
   margin-top: 12px;
   padding: 14px;
@@ -262,8 +294,23 @@ button:focus-visible, input:focus-visible {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 12px;
+}
+.filter-group-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 8px;
+}
+.filter-scope-row, .filter-tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; }
+.filter-tag-cloud:empty::after {
+  content: "No tags on these recipes yet.";
+  font-size: 0.85rem;
+  color: var(--faint);
 }
 .tag-chip {
   font-family: var(--font-mono);
@@ -727,6 +774,26 @@ button:focus-visible, input:focus-visible {
 @media (min-width: 560px) { .serv-label { display: inline; } }
 
 .empty-state { color: var(--faint); text-align: center; margin: 48px 0; }
+/* A failed load used to render the "No recipes yet" invitation, so a dropped
+   connection was indistinguishable from an empty account. This is the third
+   state: darker text (it's news, not a nudge) and a way back. */
+.empty-state.is-error { color: var(--ink); }
+.empty-state.is-error strong { display: block; margin-bottom: 6px; }
+/* A block, not an inline run-on at the end of the sentence. */
+.empty-state .empty-retry { display: block; margin: 16px auto 0; }
+
+/* Placeholder rows for the moment between "signed in" and "recipes arrived".
+   Deliberately unanimated — the global prefers-reduced-motion rule strips
+   animation anyway, and a static card reads as "loading" well enough. */
+.list-skeleton { list-style: none; margin: 0 0 40px; padding: 0; }
+.list-skeleton li {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); margin-bottom: 10px;
+  padding: 18px 16px; display: flex; flex-direction: column; gap: 9px;
+}
+.list-skeleton span { display: block; height: 11px; border-radius: 4px; background: var(--chip); }
+.list-skeleton span:first-child { width: 46%; }
+.list-skeleton span:last-child { width: 26%; height: 9px; }
 
 /* ---------- Grocery bar & panel ---------- */
 .grocery-bar {
@@ -769,6 +836,11 @@ button:focus-visible, input:focus-visible {
   max-width: 760px;
   max-height: 82vh;
   overflow-y: auto;
+  /* Stop the page behind from taking over the scroll once the sheet hits its
+     end — on iOS that chaining is what makes a sheet feel like it's sliding
+     off its own content. Body scroll is locked in JS while a sheet is open;
+     this handles the gesture itself. */
+  overscroll-behavior: contain;
   padding-top: 18px;
   padding-bottom: calc(24px + env(safe-area-inset-bottom));
 }
@@ -1287,6 +1359,43 @@ button:focus-visible, input:focus-visible {
   pointer-events: none;
 }
 .toast.show { opacity: 1; }
+/* Failures read as failures, and hold ~3x longer (see TOAST_FAIL_MS). White on
+   this red is 8.2:1. */
+.toast.is-failure { background: #8E2F1E; }
+
+/* Toast with an action in it (currently just Undo after a delete). Separate from
+   .toast because this one has to accept taps. */
+.toast-action {
+  position: fixed;
+  bottom: 88px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 14px;
+  max-width: calc(100vw - 32px);
+  background: var(--ink);
+  color: #fff;
+  font-size: 0.85rem;
+  padding: 8px 10px 8px 18px;
+  border-radius: 999px;
+  z-index: 70;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+.toast-action.show { opacity: 1; pointer-events: auto; }
+.toast-action-msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast-action-btn {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255,255,255,0.4);
+  background: transparent;
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 0.85rem; font-weight: 600;
+  border-radius: 999px;
+  padding: 7px 16px;
+  cursor: pointer;
+}
+.toast-action-btn:hover { background: rgba(255,255,255,0.14); }
 
 /* ---------- AI recipe import ---------- */
 .ai-import-picker {
@@ -1431,6 +1540,7 @@ button:focus-visible, input:focus-visible {
   gap: 10px;
   max-height: 46vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px 2px;
 }
 .coach-empty {
@@ -1653,6 +1763,7 @@ button:focus-visible, input:focus-visible {
 .cook-body {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -1785,6 +1896,30 @@ button:focus-visible, input:focus-visible {
   cursor: default;
 }
 
+/* The end of a cook. Advancing off the last step used to exit cook mode
+   outright — and since the step body is tap-to-advance, a tap meant to re-read
+   step 9 of 9 dropped you back in the list with the wake lock released. Now the
+   last step's body tap does nothing, "Done ✓" lands here, and leaving is a
+   deliberate choice. */
+.cook-done {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 16px; text-align: center; padding: 24px;
+}
+.cook-done-mark {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.9rem; line-height: 1;
+}
+.cook-done-h { font-family: var(--font-display); font-weight: 700; font-size: 1.9rem; margin: 0; }
+.cook-done-sub { margin: 0; color: var(--faint); font-size: 0.95rem; max-width: 30ch; }
+.cook-done-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.cook-panel.is-done .cook-nav,
+.cook-panel.is-done .cook-rail,
+.cook-panel.is-done .cook-sections { display: none; }
+
 /* ✕ Exit button — replaces the old "Done" ghost-btn in the cook head */
 .cook-close-btn {
   border: 1px solid rgba(255,255,255,0.25);
@@ -1831,6 +1966,7 @@ button:focus-visible, input:focus-visible {
 
 /* Round icon button (Guide "?") */
 .icon-btn {
+  position: relative;
   width: 38px; height: 38px; border-radius: 50%;
   border: 1px solid var(--line); background: var(--card);
   color: var(--faint); font-size: 1rem; font-weight: 700;
@@ -1838,6 +1974,17 @@ button:focus-visible, input:focus-visible {
   transition: .15s;
 }
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Count on the header cart, so the grocery list has a visible state even when
+   the bottom bar isn't there (a list built only from pantry restocks). */
+.icon-btn-badge {
+  position: absolute; top: -3px; right: -3px;
+  min-width: 18px; height: 18px; padding: 0 4px; box-sizing: border-box;
+  border-radius: 999px; border: 1.5px solid var(--paper);
+  background: var(--accent); color: #fff;
+  font-family: var(--font-mono); font-size: 0.62rem; font-weight: 500;
+  display: inline-flex; align-items: center; justify-content: center;
+}
 
 /* Avatar button (initials) */
 .avatar-btn {
@@ -1861,8 +2008,16 @@ button:focus-visible, input:focus-visible {
   background: var(--accent); color: #fff; border-radius: 999px; padding: 2px 8px;
 }
 
-/* Scope selector (All / Favorites / Shared) */
-.scope-bar { margin: 18px 0 16px; }
+/* Scope selector (All / Favorites / Shared). Lives inside the filter sheet now,
+   where there's no pill track behind it — so give these three their own outlined
+   chip treatment at every width (the ≤560px block below does the same thing for
+   the .scope pills used by the inventory and grocery panels). */
+.filter-scope-row .scope-btn {
+  border: 1px solid var(--line); background: var(--card); padding: 9px 16px;
+}
+.filter-scope-row .scope-btn.is-on {
+  background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: none;
+}
 .scope {
   display: inline-flex; background: var(--chip); border-radius: 999px; padding: 5px; gap: 4px;
 }
@@ -1907,6 +2062,14 @@ button:focus-visible, input:focus-visible {
   font-size: 1rem; cursor: pointer; padding: 6px 8px; border-radius: 7px; line-height: 1;
 }
 .search-filter-btn:hover { color: var(--accent); background: var(--accent-soft); }
+/* A dot when something is narrowing the list — the scope and tags both live
+   behind this button now, so it has to carry their state. */
+.search-filter-btn.has-filters { color: var(--accent); }
+.search-filter-btn.has-filters::after {
+  content: ""; position: absolute; top: 3px; right: 4px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); border: 1.5px solid var(--card);
+}
 .search-filter-btn[aria-expanded="true"] { color: var(--accent); background: var(--accent-soft); }
 
 /* ＋ Add split button */
@@ -1934,8 +2097,15 @@ button:focus-visible, input:focus-visible {
 .meal-plan-view { margin-top: 18px; display: flex; flex-direction: column; gap: 22px; }
 
 /* Mobile FAB */
+/* Sits above the home indicator, and rides up over the grocery bar when that
+   appears — the two used to overlap, with the FAB covering the bar's "Clear"
+   button. The bar's own padding already includes the safe-area inset, so the
+   lifted position doesn't add it a second time; --grocery-bar-h is measured in
+   JS because the bar wraps to two rows on a narrow phone. */
 .add-fab {
-  position: fixed; right: 18px; bottom: 20px; z-index: 40;
+  position: fixed; right: 18px; z-index: 40;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  transition: bottom 0.18s;
   width: 58px; height: 58px; border-radius: 50%;
   border: 0; background: var(--accent); color: #fff;
   font-size: 1.7rem; line-height: 1; cursor: pointer;
@@ -1951,11 +2121,25 @@ button:focus-visible, input:focus-visible {
   .site-title { order: 1; }
   .account-area { order: 2; }
   .section-tabs { order: 3; }
-  /* Four header icons now share the top row with the title on a phone — tighten
-     spacing and slightly shrink the round buttons so nothing runs off-screen. */
+  /* Four header icons share the top row with the title on a phone — tighten
+     spacing and slightly shrink the round buttons so nothing runs off-screen.
+     They didn't actually fit: at 375px the title measured 177px and the icons
+     154px, which with the 16px row gap came to 347 against 335px of content
+     width, so the row wrapped and the header stood 172px tall instead of ~122.
+     Tighter gap, slightly smaller title, and the title truncates as a last
+     resort rather than pushing the icons onto a row of their own. */
+  .header-row { gap: 8px; }
   .account-area { gap: 6px; }
   .icon-btn, .avatar-btn { width: 34px; height: 34px; }
-  .site-title { font-size: 1.35rem; }
+  .site-title {
+    font-size: 1.2rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .account-area { flex: 0 0 auto; }
 
   /* Section toggle + mode tabs full width */
   .section-tabs { display: flex; width: 100%; }
@@ -1977,6 +2161,11 @@ button:focus-visible, input:focus-visible {
   /* Hide the desktop ＋ Add button row; FAB takes over */
   .result-row-actions { display: none; }
 }
+/* Everything pinned to the bottom rides above the grocery bar when it's up —
+   the ＋ button and both kinds of toast were all landing on top of it. */
+body.has-grocery-bar .add-fab,
+body.has-grocery-bar .toast,
+body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76px)); }
 @media (min-width: 561px) { .add-fab { display: none; } }
 
 /* ---------- Dietary preferences (account panel) ---------- */
@@ -2039,7 +2228,12 @@ button:focus-visible, input:focus-visible {
 .kroger-row-x,
 .inv-remove,
 .inv-restock,
-.g-manual-remove {
+.g-manual-remove,
+.pick-wrap,
+.serv-btn,
+.detail-serv-btn,
+.plan-pick-wrap,
+.star-btn {
   position: relative;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
@@ -2047,11 +2241,28 @@ button:focus-visible, input:focus-visible {
 .kroger-row-x::after,
 .inv-remove::after,
 .inv-restock::after,
-.g-manual-remove::after {
+.g-manual-remove::after,
+.pick-wrap::after,
+.serv-btn::after,
+.detail-serv-btn::after {
   content: "";
   position: absolute;
   left: 50%; top: 50%;
   width: 44px; height: 44px;
+  transform: translate(-50%, -50%);
+}
+/* The recipe row's own controls were the worst offenders and never got this
+   treatment: the calendar is a hidden checkbox behind a ~15px glyph and the star
+   is ~22px, both in the strip a right thumb lands on. They sit 12px apart with
+   the (clickable) chevron 12px further on, so a full 44px box here would swallow
+   its neighbour — 38px clears the chevron by 4px and still more than doubles
+   both targets. Widen the row gap before widening these. */
+.plan-pick-wrap::after,
+.star-btn::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 38px; height: 38px;
   transform: translate(-50%, -50%);
 }
 
