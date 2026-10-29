@@ -81,6 +81,8 @@
     unitSystem = ["original", "us", "metric"].includes(loadLocal("unitSystem", "original"))
       ? loadLocal("unitSystem", "original") : "original";
     collapsedInvCats = new Set(loadLocal("invCollapsed", []));
+    const pending = loadLocal("pendingChecks", {});
+    pendingChecks = pending && typeof pending === "object" && !Array.isArray(pending) ? pending : {};
     pruneCoachStore(); // one global sweep of expired coach:v1:* threads
   }
   function maybeShowIntro() {
@@ -208,6 +210,7 @@
   const pickHintDismissBtn = $("#pick-hint-dismiss");
   const introCardEl = $("#intro-card");
   const homeTipEl = $("#home-tip");
+  const offlineBannerEl = $("#offline-banner");
   const introDismissBtn = $("#intro-dismiss");
 
   const addRecipeAiBtn = $("#add-recipe-ai");
@@ -1004,6 +1007,7 @@
     manualGroceryItems = manualRes.error ? [] : (manualRes.data || []).map((r) => ({ key: r.id, name: r.name, sourceInventoryId: r.source_inventory_id }));
     checkedGroceryItems.clear();
     if (!checkedRes.error) (checkedRes.data || []).forEach((r) => checkedGroceryItems.add(r.item_key));
+    applyPendingChecks(); // ticks made offline outrank the last-synced copy
   }
 
   // Optimistic: mirrors updateInventoryStatus's mutate-then-rollback shape,
@@ -1066,9 +1070,12 @@
   // manual call in the Bar & Pantry panel.
   async function syncCheckedItem(key, checked) {
     if (!session) return;
+    // Offline, keep the tick and sync it later — see "Offline" below.
+    if (session.offline) { queuePendingCheck(key, checked); return; }
     const { error } = checked
       ? await supabaseClient.from("grocery_checked_items").upsert({ item_key: key }, { onConflict: "user_id,item_key" })
       : await supabaseClient.from("grocery_checked_items").delete().eq("item_key", key);
+    if (error && isOfflineError(error)) { queuePendingCheck(key, checked); return; }
     if (error) {
       if (checked) checkedGroceryItems.delete(key); else checkedGroceryItems.add(key);
       renderGroceryProgress();
@@ -1241,6 +1248,7 @@
     pruneStaleState();
     reconcileBatchServings();
     refreshViews();
+    flushPendingChecks(); // no-op offline; otherwise sends any ticks made offline
   }
 
   // One-time heal for the serving-size fixes: a recipe that shouldn't scale to the
@@ -1268,6 +1276,11 @@
 
   function clearData() {
     dataState = "loading"; // so signing back in shows placeholders, not "no recipes yet"
+    pendingChecks = {};
+    // A signed-out device keeps no copy of anyone's recipes.
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: "clear-data" });
+    }
     DATA.recipes = [];
     DATA.cocktails = [];
     DATA.sharedRecipes = [];
@@ -1306,6 +1319,86 @@
     refreshViews();
   }
 
+  // ---------- Offline ----------
+  // sw.js serves the app and the last-synced data with no connection; this half
+  // keeps the page honest about it. Reads come from that copy. Grocery check-offs
+  // — the one change worth making with no signal, standing in a store — are kept
+  // and replayed when the connection returns; every other write needs a network
+  // and says so through its usual "couldn't save" message.
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch((err) => console.error("Service worker registration failed:", err));
+    });
+  }
+
+  // supabase-js's own storage key for the session (sb-<project ref>-auth-token).
+  // Never let a malformed URL stop the app from starting — offline open is a nicety.
+  const AUTH_STORAGE_KEY = (() => {
+    try { return `sb-${new URL(SUPABASE_URL).hostname.split(".")[0]}-auth-token`; } catch { return ""; }
+  })();
+  // The user of a session supabase-js still holds in storage, or null.
+  function storedSessionUser() {
+    try {
+      const stored = AUTH_STORAGE_KEY ? JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || "null") : null;
+      if (!stored || !stored.refresh_token) return null;
+      if (stored.user && stored.user.id) return stored.user;
+      const claims = JSON.parse(atob(stored.access_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+      return claims.sub ? { id: claims.sub, email: claims.email || "" } : null;
+    } catch { return null; }
+  }
+
+  function renderOfflineBanner() {
+    offlineBannerEl.hidden = !(session && (session.offline || navigator.onLine === false));
+  }
+  window.addEventListener("offline", renderOfflineBanner);
+  window.addEventListener("online", () => {
+    renderOfflineBanner();
+    if (!session) return;
+    // An offline session has no live token yet: refreshing it fires
+    // TOKEN_REFRESHED, which reloads the data (see initAuth).
+    if (session.offline) { supabaseClient.auth.refreshSession().catch(() => {}); return; }
+    loadData(); // fresh data, and loadData replays any queued check-offs
+  });
+
+  // Check-offs made offline: item key -> checked (the latest tap wins), kept
+  // per user in localStorage until they reach the server.
+  let pendingChecks = {};
+  function isOfflineError(error) {
+    return navigator.onLine === false ||
+      /failed to fetch|load failed|networkerror|network request failed/i.test(String((error && error.message) || error || ""));
+  }
+  function queuePendingCheck(key, checked) {
+    pendingChecks[key] = checked;
+    saveLocal("pendingChecks", pendingChecks);
+  }
+  function applyPendingChecks() {
+    Object.entries(pendingChecks).forEach(([key, checked]) => {
+      if (checked) checkedGroceryItems.add(key); else checkedGroceryItems.delete(key);
+    });
+  }
+  let flushingChecks = false;
+  async function flushPendingChecks() {
+    if (flushingChecks || !session || session.offline) return;
+    const entries = Object.entries(pendingChecks);
+    if (!entries.length) return;
+    flushingChecks = true;
+    try {
+      for (const [key, checked] of entries) {
+        const { error } = checked
+          ? await supabaseClient.from("grocery_checked_items").upsert({ item_key: key }, { onConflict: "user_id,item_key" })
+          : await supabaseClient.from("grocery_checked_items").delete().eq("item_key", key);
+        if (error && isOfflineError(error)) break; // still no connection — keep the rest
+        if (error) console.error("Dropping a queued check-off the server refused:", key, error.message);
+        // Synced (or refused for good — the server's list wins on the next load).
+        // A newer tap on the same item while this was in flight stays queued.
+        if (pendingChecks[key] === checked) delete pendingChecks[key];
+      }
+      saveLocal("pendingChecks", pendingChecks);
+    } finally {
+      flushingChecks = false;
+    }
+  }
+
   // ---------- Auth ----------
   function initialsFrom(email) {
     const local = (email || "").split("@")[0];
@@ -1338,8 +1431,20 @@
     // resumes after sitting in the background.
     supabaseClient.auth.onAuthStateChange((event, newSession) => {
       const wasSignedIn = !!session;
+      const wasOffline = !!(session && session.offline);
+      // Opened with no connection after the access token expired (tokens last an
+      // hour): supabase-js reports no session, but keeps the stored one — it only
+      // deletes that on a real auth rejection. So a stored session here means
+      // "offline", not "signed out": carry on read-only as that user while the
+      // service worker serves their last-synced data. The real session replaces
+      // this one as soon as a refresh gets through.
+      if (!newSession && event === "INITIAL_SESSION") {
+        const user = storedSessionUser();
+        if (user) newSession = { user, offline: true };
+      }
       session = newSession;
       updateAuthUI();
+      renderOfflineBanner();
       if (session) {
         if (window.location.hash) history.replaceState(null, "", window.location.pathname + window.location.search);
         // TOKEN_REFRESHED fires roughly hourly — no need to refetch and
@@ -1348,7 +1453,9 @@
         loadedUserId = session.user.id;
         if (userChanged) loadUserLocalState();
         if (userChanged && event !== "PASSWORD_RECOVERY") setTimeout(maybeShowIntro, 0);
-        if (userChanged || event !== "TOKEN_REFRESHED") setTimeout(loadData, 0);
+        // Coming back from an offline session, the first real token is the cue to
+        // swap the cached copy for live data.
+        if (userChanged || event !== "TOKEN_REFRESHED" || wasOffline) setTimeout(loadData, 0);
         // Returning from a Kroger "Connect King Soopers" login (?code=…&state=…).
         if (/[?&]code=/.test(window.location.search) && /[?&]state=/.test(window.location.search)) {
           setTimeout(handleKrogerOAuthReturn, 0);

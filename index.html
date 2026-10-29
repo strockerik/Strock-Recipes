@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <!-- Content Security Policy: the page runs only its own scripts (no inline
+       script, no eval), styles from itself + Google Fonts, and talks only to this
+       Supabase project. data:/blob: images are the AI-import photo previews.
+       Keep this in step with config.js if the Supabase project ever changes. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://olzmcwcybleulazvgxeq.supabase.co wss://olzmcwcybleulazvgxeq.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>The House Index — Recipes & Cocktails</title>
   <meta name="description" content="A personal index of kitchen recipes and house cocktails.">
 
@@ -69,6 +74,11 @@
   </header>
 
   <main class="wrap">
+
+    <p id="offline-banner" class="offline-banner" role="status" hidden>
+      <b>You’re offline</b> — showing your last synced copy. Grocery check-offs
+      sync when you’re back; other changes need a connection.
+    </p>
 
     <div id="intro-card" class="intro-card" hidden>
       <p class="intro-text">
@@ -954,7 +964,7 @@
        version you want and bump the filename here:
        curl -sL https://cdn.jsdelivr.net/npm/@supabase/supabase-js@<ver>/dist/umd/supabase.min.js \
          -o vendor/supabase-<ver>.min.js -->
-  <script src="vendor/supabase-2.111.0.min.js"></script>
+  <script src="vendor/supabase-2.118.0.min.js"></script>
   <script src="config.js"></script>
   <script src="app.js"></script>
 </body>

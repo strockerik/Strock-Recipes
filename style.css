@@ -399,6 +399,18 @@ button:focus-visible, input:focus-visible {
   border: 1px solid var(--accent);
 }
 .intro-text { margin: 0; font-size: 0.92rem; color: var(--ink); line-height: 1.45; }
+/* Offline: a quiet, persistent note rather than a toast — it stays true for as
+   long as the connection is gone. */
+.offline-banner {
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--paper);
+  border: 1px dashed var(--faint);
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
 .intro-card .ghost-btn { flex: 0 0 auto; }
 @media (max-width: 560px) {
   .intro-card { flex-direction: column; align-items: stretch; }
