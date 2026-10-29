@@ -44,7 +44,20 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const DAILY_GENERATION_LIMIT = 20;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+// Supabase is retiring the legacy anon key (by end of 2026). Prefer the new
+// publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed by name) and
+// fall back to the legacy SUPABASE_ANON_KEY, so this works before, during and
+// after the switch. Either one is only the "apikey"; the caller's own JWT in
+// the Authorization header is what RLS sees.
+function supabaseClientKey(): string {
+  try {
+    const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
+    const key = typeof keys.default === "string" ? keys.default : Object.values(keys).find((v) => typeof v === "string");
+    if (key) return key as string;
+  } catch { /* unset or not JSON — use the legacy key */ }
+  return Deno.env.get("SUPABASE_ANON_KEY")!;
+}
+const SUPABASE_CLIENT_KEY = supabaseClientKey();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -392,8 +405,28 @@ function describeAllergies(allergies: unknown[]): string {
 
 // One forced-tool Anthropic call. Returns the tool_use input, or a friendly
 // { error } string on any API/shape failure (both steps share this).
+// Strict tool use (Haiku 4.5+): the API guarantees the tool input matches the
+// schema, so no comma-joined tags or stringified amounts reach the app. Strict
+// mode 400s on array-length keywords, so strictify() drops them (the code trims
+// to 3 concepts / 3 tags itself) and closes every object (additionalProperties).
+// deno-lint-ignore no-explicit-any
+function strictify(node: any): any {
+  if (Array.isArray(node)) return node.map(strictify);
+  if (node && typeof node === "object") {
+    // deno-lint-ignore no-explicit-any
+    const out: any = {};
+    for (const [k, v] of Object.entries(node)) {
+      if (k === "maxItems" || k === "minItems") continue; // unsupported in strict mode
+      out[k] = strictify(v);
+    }
+    if (out.type === "object" && out.properties) out.additionalProperties = false;
+    return out;
+  }
+  return node;
+}
+
 async function runTool(system: string, toolName: string, schema: unknown, userText: string): Promise<{ input?: any; error?: string }> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const send = (strict: boolean) => fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -404,11 +437,20 @@ async function runTool(system: string, toolName: string, schema: unknown, userTe
       model: MODEL,
       max_tokens: 8192,
       system,
-      tools: [{ name: toolName, description: "Return the structured result.", input_schema: schema }],
+      tools: [strict
+        ? { name: toolName, description: "Return the structured result.", input_schema: strictify(schema), strict: true }
+        : { name: toolName, description: "Return the structured result.", input_schema: schema }],
       tool_choice: { type: "tool", name: toolName },
       messages: [{ role: "user", content: [{ type: "text", text: userText }] }]
     })
   });
+  let res = await send(true);
+  // A strict schema the API won't compile is a 400 (unbilled). Retry once without
+  // strict so a schema slip degrades to the old behaviour, not a broken feature.
+  if (res.status === 400) {
+    console.error("strict tool schema rejected — retrying without strict:", (await res.text()).slice(0, 300));
+    res = await send(false);
+  }
   if (!res.ok) {
     const errText = await res.text();
     console.error("Anthropic API error:", res.status, errText);
@@ -443,7 +485,7 @@ Deno.serve(async (req) => {
     // Verify the caller is a logged-in user before spending any API budget.
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return json({ error: "Please sign in first." });
-    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_CLIENT_KEY, {
       global: { headers: { Authorization: authHeader } }
     });
     const { data: userData, error: userError } = await supabaseClient.auth.getUser();

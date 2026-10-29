@@ -216,7 +216,7 @@ the 20/day cap** — budget accordingly.
 
 ```bash
 SB="https://olzmcwcybleulazvgxeq.supabase.co"
-ANON="$(grep -oE 'eyJ[A-Za-z0-9._-]+' config.js | head -1)"   # anon key is public/RLS-bound
+ANON="$(grep -oE 'eyJ[A-Za-z0-9._-]+|sb_publishable_[A-Za-z0-9_-]+' config.js | head -1)"   # anon key is public/RLS-bound
 EMAIL="$(grep -oE 'TEST_EMAIL=.*' notes.md | cut -d= -f2)"
 PASS="$(grep -oE 'TEST_PASSWORD=.*' notes.md | cut -d= -f2)"
 TOKEN="$(curl -s "$SB/auth/v1/token?grant_type=password" -H "apikey: $ANON" \

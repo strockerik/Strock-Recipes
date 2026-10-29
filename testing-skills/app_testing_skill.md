@@ -60,7 +60,14 @@ payload check — run it after any change to formatting, units, grocery, timers,
 coach panel, or the recipe form. And `testing-skills/allergen_net_test.py` runs the
 real `ALLERGEN NET` TypeScript block (type-stripped, in Chrome) from
 `generate-recipe`/`pair-drink`: the two copies must be identical, category
-allergies must catch their foods, and free-from forms must not. It's the **template** for booting the full app headless — the
+allergies must catch their foods, and free-from forms must not. `testing-skills/offline_csp_test.py` covers what no other
+harness can see: the real page **head** (its Content Security Policy — any
+violation fails), the real `sw.js` against a local server switched "offline", and
+the app's offline session + queued grocery check-offs. It runs Chrome in real time
+(service-worker installs never resolve under `--virtual-time-budget`) and has the
+pages POST results back. `testing-skills/tiktok_embed_test.py` runs
+extract-recipe's TikTok embed-page parser. **Never** loop over `testing-skills/*.py`
+blindly: `extraction_compare.py` makes paid calls (it now refuses without `--yes`). It's the **template** for booting the full app headless — the
 Supabase stub (a chainable/thenable Proxy query builder + an `onAuthStateChange`
 that fires `INITIAL_SESSION`) is the reusable part; copy it to smoke-test other
 panels without stubs living only in the scratchpad.

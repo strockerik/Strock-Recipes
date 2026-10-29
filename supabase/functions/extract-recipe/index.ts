@@ -45,7 +45,20 @@ const MAX_IMAGE_NOTE_CHARS = 300;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+// Supabase is retiring the legacy anon key (by end of 2026). Prefer the new
+// publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed by name) and
+// fall back to the legacy SUPABASE_ANON_KEY, so this works before, during and
+// after the switch. Either one is only the "apikey"; the caller's own JWT in
+// the Authorization header is what RLS sees.
+function supabaseClientKey(): string {
+  try {
+    const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
+    const key = typeof keys.default === "string" ? keys.default : Object.values(keys).find((v) => typeof v === "string");
+    if (key) return key as string;
+  } catch { /* unset or not JSON — use the legacy key */ }
+  return Deno.env.get("SUPABASE_ANON_KEY")!;
+}
+const SUPABASE_CLIENT_KEY = supabaseClientKey();
 
 // ---- Cheap-LLM tier (Groq) --------------------------------------------------
 // Optional open-model tier for the mechanical text->JSON extraction paths (text
@@ -491,11 +504,13 @@ function schemaOrgToRecipe(node: unknown, url: URL, meta: { siteName: string }):
 }
 
 // ---------- TikTok ----------
-// TikTok's official, keyless oEmbed endpoint returns the video's caption
-// (`title`) and creator (`author_name`) — the legitimate channel for reading a
-// post server-side. Recipe TikToks usually carry the recipe in the caption;
-// there is no free, ToS-clean transcript source, so caption-only is the honest
-// ceiling here (thin captions get paste guidance instead).
+// TikTok's official, keyless oEmbed endpoint returned the video's caption
+// (`title`) and creator (`author_name`). Around 2026-10-18 it started returning
+// only a bare player iframe (embed_type, embed_product_id — no title or author),
+// so the caption is now read from TikTok's public embed page when oEmbed has
+// none (see fetchTikTokEmbed). Recipe TikToks usually carry the recipe in the
+// caption; there is no free, ToS-clean transcript source, so caption-only is the
+// honest ceiling here (thin captions get paste guidance instead).
 function tikTokUrl(raw: string): URL | null {
   const url = raw ? parseAllowedUrl(raw) : null;
   if (!url) return null;
@@ -503,7 +518,7 @@ function tikTokUrl(raw: string): URL | null {
   return h === "tiktok.com" || h.endsWith(".tiktok.com") ? url : null;
 }
 
-async function fetchTikTokOEmbed(videoUrl: string): Promise<{ title?: string; author_name?: string } | null> {
+async function fetchTikTokOEmbed(videoUrl: string): Promise<{ title?: string; author_name?: string; embed_product_id?: string } | null> {
   try {
     const res = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(videoUrl)}`, {
       redirect: "follow",
@@ -528,6 +543,50 @@ async function resolveTikTokShortLink(shortUrl: string): Promise<string | null> 
       headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" }
     });
     return res.url || null;
+  } catch {
+    return null;
+  }
+}
+
+// The numeric video id: /video/123…, /photo/123…, or the embed URLs.
+function tikTokVideoId(href: string | null | undefined): string | null {
+  const m = String(href || "").match(/\/(?:video|photo|v2|v1)\/(\d{8,})/);
+  return m ? m[1] : null;
+}
+
+// TikTok's public embed page (/embed/v2/<id>) ships the post as JSON in a
+// <script id="__FRONTITY_CONNECT_STATE__"> tag: the caption at
+// videoData.itemInfos.text and the creator at videoData.authorInfos. Pure, so
+// it can be tested against a saved page.
+function parseTikTokEmbedState(html: string): { caption: string; author: string } | null {
+  const m = html.match(/<script[^>]*id="__FRONTITY_CONNECT_STATE__"[^>]*>([\s\S]*?)<\/script>/);
+  if (!m) return null;
+  try {
+    const data = JSON.parse(m[1])?.source?.data || {};
+    for (const entry of Object.values(data)) {
+      // deno-lint-ignore no-explicit-any
+      const vd = (entry as any)?.videoData;
+      const caption = typeof vd?.itemInfos?.text === "string" ? vd.itemInfos.text.trim() : "";
+      if (!vd) continue;
+      const author = String(vd.authorInfos?.nickName || vd.authorInfos?.uniqueId || "").trim();
+      return { caption, author };
+    }
+  } catch { /* malformed state — treat as unreadable */ }
+  return null;
+}
+
+async function fetchTikTokEmbed(videoId: string): Promise<{ caption: string; author: string } | null> {
+  try {
+    const res = await fetch(`https://www.tiktok.com/embed/v2/${videoId}`, {
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "text/html",
+        "Accept-Language": "en-US,en;q=0.9"
+      }
+    });
+    if (!res.ok) return null;
+    return parseTikTokEmbedState(await res.text());
   } catch {
     return null;
   }
@@ -734,7 +793,9 @@ async function runGroq(userText: string): Promise<{ recipe?: any; error?: string
 // { recipe } or { error } (friendly, already input-specific via noRecipeMessage).
 // deno-lint-ignore no-explicit-any
 async function runClaude(model: string, userContent: unknown, noRecipeMessage: string): Promise<{ recipe?: any; error?: string }> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  // Strict tool use guarantees a schema-valid recipe, but only Haiku 4.5 supports
+  // it here — Sonnet 4.6 (photos) does not, so the vision path stays as it was.
+  const send = (strict: boolean) => fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -746,11 +807,21 @@ async function runClaude(model: string, userContent: unknown, noRecipeMessage: s
       model,
       max_tokens: 8192,
       system: SYSTEM_PROMPT,
-      tools: [{ name: "save_recipe", description: "Save the extracted recipe.", input_schema: RECIPE_SCHEMA }],
+      tools: [strict
+        ? { name: "save_recipe", description: "Save the extracted recipe.", input_schema: RECIPE_SCHEMA_STRICT, strict: true }
+        : { name: "save_recipe", description: "Save the extracted recipe.", input_schema: RECIPE_SCHEMA }],
       tool_choice: { type: "tool", name: "save_recipe" },
       messages: [{ role: "user", content: userContent }]
     })
   });
+  const useStrict = model === MODEL_TEXT;
+  let res = await send(useStrict);
+  // A strict schema the API won't compile is a 400 (unbilled). Retry once without
+  // strict so a schema slip degrades to the old behaviour, not a broken feature.
+  if (useStrict && res.status === 400) {
+    console.error("strict tool schema rejected — retrying without strict:", (await res.text()).slice(0, 300));
+    res = await send(false);
+  }
   if (!res.ok) {
     console.error("Anthropic API error:", res.status, await res.text());
     return { error: res.status === 429 ? "Rate limit or usage limit reached — try again later." : "AI extraction failed. Please try again." };
@@ -840,7 +911,7 @@ Deno.serve(async (req) => {
     // Verify the caller is a logged-in user before spending any API budget.
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return json({ error: "Please sign in first." });
-    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_CLIENT_KEY, {
       global: { headers: { Authorization: authHeader } }
     });
     const { data: userData, error: userError } = await supabaseClient.auth.getUser();
@@ -899,14 +970,27 @@ Deno.serve(async (req) => {
       // get paste guidance and the frontend's "Paste text instead" button.
       const url = tikTokUrl(body.url.trim())!;
       let tk = await fetchTikTokOEmbed(url.href);
+      let resolved: string | null = null;
       if (!tk) {
         // Short links (vm.tiktok.com, /t/) sometimes need resolving first.
-        const resolved = await resolveTikTokShortLink(url.href);
+        resolved = await resolveTikTokShortLink(url.href);
         if (resolved && resolved !== url.href) tk = await fetchTikTokOEmbed(resolved);
       }
-      const caption = (tk?.title || "").trim();
-      const author = (tk?.author_name || "").trim();
-      console.error(`extract-recipe tiktok: oembed=${tk ? "ok" : "null"} caption=${caption.length}`);
+      let caption = (tk?.title || "").trim();
+      let author = (tk?.author_name || "").trim();
+      let via = tk ? "oembed" : "none";
+      // oEmbed no longer carries the caption (2026-10) — read the embed page.
+      if (caption.replace(/\s/g, "").length < 80) {
+        let videoId = tk?.embed_product_id || tikTokVideoId(url.href) || tikTokVideoId(resolved);
+        if (!videoId && !resolved) videoId = tikTokVideoId(await resolveTikTokShortLink(url.href));
+        const embed = videoId ? await fetchTikTokEmbed(videoId) : null;
+        if (embed?.caption) {
+          caption = embed.caption;
+          author = author || embed.author;
+          via = "embed";
+        }
+      }
+      console.error(`extract-recipe tiktok: via=${via} caption=${caption.length}`);
       if (caption.replace(/\s/g, "").length < 80) {
         return json({ error: "This TikTok’s caption doesn’t contain the recipe (it may only be spoken in the video). Copy the caption — and jot down any spoken steps — then use Paste text here." });
       }

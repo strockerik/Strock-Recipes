@@ -50,7 +50,20 @@ const MAX_RECIPE_LOOKUPS = 2;      // get_recipe calls per cook message
 const MAX_LOOKUP_CHARS = 8000;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+// Supabase is retiring the legacy anon key (by end of 2026). Prefer the new
+// publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed by name) and
+// fall back to the legacy SUPABASE_ANON_KEY, so this works before, during and
+// after the switch. Either one is only the "apikey"; the caller's own JWT in
+// the Authorization header is what RLS sees.
+function supabaseClientKey(): string {
+  try {
+    const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
+    const key = typeof keys.default === "string" ? keys.default : Object.values(keys).find((v) => typeof v === "string");
+    if (key) return key as string;
+  } catch { /* unset or not JSON — use the legacy key */ }
+  return Deno.env.get("SUPABASE_ANON_KEY")!;
+}
+const SUPABASE_CLIENT_KEY = supabaseClientKey();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -287,7 +300,7 @@ Deno.serve(async (req) => {
     // Verify the caller is a logged-in user before spending any API budget.
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return json({ error: "Please sign in first." });
-    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_CLIENT_KEY, {
       global: { headers: { Authorization: authHeader } }
     });
     const { data: userData, error: userError } = await supabaseClient.auth.getUser();

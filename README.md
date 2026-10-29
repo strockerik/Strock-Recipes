@@ -44,18 +44,28 @@ Browser (GitHub Pages)                 Supabase
 index.html                              the page (auth gate, list, recipe form, AI import, grocery panel)
 style.css                               styling (light theme)
 app.js                                  all client logic
-config.js                               Supabase project URL + anon key (safe to commit)
+config.js                               Supabase project URL + public (anon/publishable) key (safe to commit)
 manifest.json / icons/                  iPhone home-screen PWA support
+sw.js                                   service worker: opens offline with your last-synced data
+vendor/supabase-<ver>.min.js            supabase-js UMD build, vendored (no CDN at runtime)
 supabase/functions/extract-recipe/      Edge Function source (Deno/TS) for AI extraction
 supabase/functions/recipe-coach/        Edge Function source (Deno/TS) for the AI recipe coach
 data/recipes.js, data/cocktails.js      pre-migration backup of the original static data (unused)
 testing-skills/*.py                     headless Chrome harnesses (no backend, no spend)
 ```
 
-`config.js` exposes the Supabase URL and **anon** key. That is intentional and
-safe — the anon key only permits what RLS allows. The **service-role** key
-(which bypasses RLS) must never be committed; it stays in the gitignored
-`notes.md` / `.env.local` for one-off local admin tasks only.
+`config.js` exposes the Supabase URL and the **public** key (the legacy `anon`
+key, or its replacement `sb_publishable_…`). That is intentional and safe — it
+only permits what RLS allows. The **secret** key (`sb_secret_…`, replacing the
+legacy service-role key; both bypass RLS) must never be committed; it stays in
+the gitignored `notes.md` / `.env.local` for one-off local admin tasks only.
+
+**Content Security Policy.** `index.html` carries a CSP `<meta>`: the page runs
+only its own scripts (no inline script, no `eval`), loads styles from itself and
+Google Fonts, images from itself plus `data:`/`blob:` (AI-import photo previews),
+and talks only to this Supabase project. If you add a script, a host the page
+calls, or move Supabase projects, update that tag — `testing-skills/offline_csp_test.py`
+loads the real page head and fails on any violation.
 
 ## Accounts
 
@@ -124,10 +134,11 @@ Use the app — no editing JS files:
   (which still receives the JSON-LD as context when present). **YouTube**
   links (including Shorts) work too: the function reads the recipe out of the
   video's description (and falls back to the auto-generated captions if the
-  description is just a teaser). **TikTok** links work via TikTok's official
-  oEmbed API, which serves the video's caption — where recipe TikToks
-  usually carry the recipe; if the recipe is only spoken in the video, the
-  app says so and routes you to Paste text. **Instagram** stays paste-only:
+  description is just a teaser). **TikTok** links read the video's caption —
+  where recipe TikToks usually carry the recipe — from TikTok's official oEmbed
+  API, or, since oEmbed stopped returning captions (2026-10), from TikTok's
+  public embed page (`/embed/v2/<id>`); if the recipe is only spoken in the
+  video, the app says so and routes you to Paste text. **Instagram** stays paste-only:
   it exposes no server-readable caption without a Facebook developer app
   token. Two other categories of link can't be fetched either, and the app
   will tell you to paste text instead (with a one-tap **📋 Paste text
@@ -1115,6 +1126,28 @@ build the list on one device and send it to Keep from another if you like.
    app. Sign in once and your recipes sync to any device you sign in on with the
    same email + password.
 
+### Offline
+
+Once you've opened the app online, it opens with **no connection** too
+(`sw.js`, a service worker): your recipes, grocery list, meal plan and pantry
+show as of the last time they synced, under a quiet "You're offline" note.
+Cook mode works fully. **Grocery check-offs keep working** — ticks made offline
+are saved on the phone and sent when the connection returns. Every other change
+(saving a recipe, AI features, King Soopers) needs a connection and says so.
+
+How it stays safe and current:
+- The app's own files load **network-first**, so an online visit always gets the
+  latest deploy — the cached copy is only the fallback (and it's used after ~4 s
+  of a stalled connection, for grocery-store "lie-fi").
+- Recipe data is cached **only for a signed-in user's reads**; a different user
+  signing in on the device wipes it, and so does signing out.
+- If an hour-old login can't refresh because you're offline, the app opens as you
+  (read-only) instead of showing the sign-in screen, and swaps in live data as
+  soon as the connection is back.
+- To retire every cached copy of the app shell, bump `VERSION` in `sw.js`. If the
+  service worker ever misbehaves, deploy an `sw.js` whose `activate` handler calls
+  `self.registration.unregister()` — that's the kill switch.
+
 ## Backup & restore
 
 Your recipes live only in Supabase, so keep an off-Supabase copy — especially of
@@ -1134,8 +1167,10 @@ file with three options:
 - **Copy JSON** — copies the text as a fallback.
 
 **Archival + restore, from your Mac (the disaster-recovery path).**
-`scripts/backup_recipes.py` reads `SUPABASE_URL` and the service-role key from the
-environment or the gitignored `notes.md` (same as `migrate_ingredients.py`).
+`scripts/backup_recipes.py` reads `SUPABASE_URL` and the **secret** key from the
+environment (`SUPABASE_SECRET_KEY`) or a `Secret Key: sb_secret_…` line in the
+gitignored `notes.md` — falling back to the legacy service-role key until Supabase
+retires it (same as `migrate_ingredients.py`).
 
 ```bash
 # Write a faithful, timestamped snapshot to backups/house-index-YYYY-MM-DD.json

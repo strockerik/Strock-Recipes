@@ -17,7 +17,7 @@ Groq calls are free-tier; Claude calls cost ~a cent each. force_provider skips
 the daily cap, so this can't exhaust quota. Groq calls are paced to respect the
 free-tier 8000 tokens/min limit.
 
-Run from the repo root:  python3 testing-skills/extraction_compare.py
+Run from the repo root:  python3 testing-skills/extraction_compare.py --yes
 """
 import json, subprocess, sys, re, time, pathlib
 
@@ -33,7 +33,7 @@ def grep1(pattern, path):
     return m.group(0) if m else None
 
 SB = grep1(r"https://[a-z0-9]+\.supabase\.co", "config.js")
-ANON = grep1(r"eyJ[A-Za-z0-9._-]+", "config.js")
+ANON = grep1(r"eyJ[A-Za-z0-9._-]+|sb_publishable_[A-Za-z0-9_-]+", "config.js")
 notes = (REPO / "notes.md").read_text()
 EMAIL = (re.search(r"^TEST_EMAIL=(.*)$", notes, re.M) or [None, None])[1]
 PASS = (re.search(r"^TEST_PASSWORD=(.*)$", notes, re.M) or [None, None])[1]
@@ -87,11 +87,22 @@ def call(item, provider):
     else: body["url"] = item.get("url")
     return curl(FN, HDRS, json.dumps(body))
 
+# This script SPENDS money and daily-cap quota, so it never runs by accident
+# (e.g. from a "run every harness" loop): require --yes, and stop after the
+# first call if the server ignored force_provider. That happens whenever
+# ALLOW_PROVIDER_OVERRIDE isn't set — every call then runs the normal paid path
+# and counts against the test account's cap (it did, by accident, 2026-10-21).
+if "--yes" not in sys.argv:
+    sys.exit("extraction_compare makes PAID calls against the deployed function — "
+             "set ALLOW_PROVIDER_OVERRIDE=1 in Edge Function secrets, then rerun with --yes.")
 rows = []
 print(f"run dir: ai_test_runs/{OUT.name}\n")
-for it in corpus:
+for n, it in enumerate(corpus):
     lbl = it["label"]
     c = call(it, "claude")
+    if n == 0 and "valid" not in c:
+        sys.exit("The server ignored force_provider (ALLOW_PROVIDER_OVERRIDE is not set) — "
+                 "stopping after 1 call so this doesn't run 2x the corpus as normal paid extractions.")
     time.sleep(2)
     g = call(it, "groq")
     # Pace Groq >60s apart: gpt-oss-20b reserves the full max_tokens (4096)

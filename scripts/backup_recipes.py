@@ -21,7 +21,9 @@ by name+section so a second run is a no-op.
 Credentials are never hard-coded — they come from the environment or the
 gitignored notes.md, exactly like migrate_ingredients.py:
   SUPABASE_URL                 e.g. https://xxxx.supabase.co
-  SUPABASE_SERVICE_ROLE_KEY    service-role key (bypasses RLS — admin only)
+  SUPABASE_SECRET_KEY          sb_secret_… key (bypasses RLS — admin only); the
+                               legacy SUPABASE_SERVICE_ROLE_KEY still works until
+                               Supabase retires it (end of 2026)
 
 Usage:
   python3 scripts/backup_recipes.py                              # write a snapshot
@@ -56,7 +58,8 @@ def load_notes():
     m = re.search(r"Project URL:\s*(\S+)", text)
     if m:
         out["url"] = m.group(1)
-    m = re.search(r"Service Role:\s*(\S+)", text)
+    # Prefer the new secret key; the legacy service-role JWT is the fallback.
+    m = re.search(r"Secret Key:\s*(sb_secret_\S+)", text) or re.search(r"Service Role:\s*(\S+)", text)
     if m:
         out["key"] = m.group(1)
     return out
@@ -64,7 +67,8 @@ def load_notes():
 
 notes = load_notes()
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or notes.get("url")
-SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or notes.get("key")
+SERVICE_KEY = (os.environ.get("SUPABASE_SECRET_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+               or notes.get("key"))
 
 args = sys.argv[1:]
 APPLY = "--apply" in args
@@ -78,7 +82,7 @@ if "--owner" in args:
     OWNER = args[i + 1] if i + 1 < len(args) else None
 
 if not SUPABASE_URL or not SERVICE_KEY:
-    sys.exit("Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (env or notes.md).")
+    sys.exit("Missing SUPABASE_URL / SUPABASE_SECRET_KEY (env, or a 'Secret Key:' line in notes.md).")
 
 
 def sb_request(method, path, body=None):
@@ -88,7 +92,9 @@ def sb_request(method, path, body=None):
         method=method,
         headers={
             "apikey": SERVICE_KEY,
-            "Authorization": "Bearer " + SERVICE_KEY,
+            # A new sb_secret_ key is not a JWT and goes in "apikey" only; the
+            # legacy service-role JWT also needs it as the bearer token.
+            **({"Authorization": "Bearer " + SERVICE_KEY} if SERVICE_KEY.startswith("eyJ") else {}),
             "Content-Type": "application/json",
             "Prefer": "return=minimal",
         },
