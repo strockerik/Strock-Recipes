@@ -575,21 +575,38 @@ function parseTikTokEmbedState(html: string): { caption: string; author: string 
   return null;
 }
 
-async function fetchTikTokEmbed(videoId: string): Promise<{ caption: string; author: string } | null> {
-  try {
-    const res = await fetch(`https://www.tiktok.com/embed/v2/${videoId}`, {
-      signal: AbortSignal.timeout(10_000),
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        "Accept": "text/html",
-        "Accept-Language": "en-US,en;q=0.9"
-      }
-    });
-    if (!res.ok) return null;
-    return parseTikTokEmbedState(await res.text());
-  } catch {
-    return null;
+// TikTok answers a random share of embed-page requests with 429 — about a third
+// from a home connection, more from Supabase's shared servers (2026-11-05) —
+// whatever the headers, path or pacing, and each one comes back in well under
+// a second. So retry a few times with short, growing pauses; a real miss (404,
+// a post with no caption) stops at once. `statuses` collects each attempt's
+// outcome for the log line.
+const TIKTOK_EMBED_ATTEMPTS = 6;
+const TIKTOK_EMBED_BUDGET_MS = 9_000;
+async function fetchTikTokEmbed(videoId: string, statuses: string[] = []): Promise<{ caption: string; author: string } | null> {
+  const deadline = Date.now() + TIKTOK_EMBED_BUDGET_MS;
+  for (let attempt = 0; attempt < TIKTOK_EMBED_ATTEMPTS && Date.now() < deadline; attempt++) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, 300 * attempt + Math.random() * 300));
+    try {
+      const res = await fetch(`https://www.tiktok.com/embed/v2/${videoId}`, {
+        signal: AbortSignal.timeout(Math.max(1_000, Math.min(6_000, deadline - Date.now()))),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          "Accept": "text/html",
+          "Accept-Language": "en-US,en;q=0.9"
+        }
+      });
+      statuses.push(String(res.status));
+      if (res.status === 429 || res.status >= 500) { await res.body?.cancel(); continue; }
+      if (!res.ok) return null;
+      const parsed = parseTikTokEmbedState(await res.text());
+      if (parsed) return parsed;
+      statuses.push("nostate"); // a 200 without the post (soft block) — try again
+    } catch {
+      statuses.push("neterr");
+    }
   }
+  return null;
 }
 
 // ---------- YouTube / video helpers ----------
@@ -979,18 +996,19 @@ Deno.serve(async (req) => {
       let caption = (tk?.title || "").trim();
       let author = (tk?.author_name || "").trim();
       let via = tk ? "oembed" : "none";
+      const embedTries: string[] = [];
       // oEmbed no longer carries the caption (2026-10) — read the embed page.
       if (caption.replace(/\s/g, "").length < 80) {
         let videoId = tk?.embed_product_id || tikTokVideoId(url.href) || tikTokVideoId(resolved);
         if (!videoId && !resolved) videoId = tikTokVideoId(await resolveTikTokShortLink(url.href));
-        const embed = videoId ? await fetchTikTokEmbed(videoId) : null;
+        const embed = videoId ? await fetchTikTokEmbed(videoId, embedTries) : null;
         if (embed?.caption) {
           caption = embed.caption;
           author = author || embed.author;
           via = "embed";
         }
       }
-      console.error(`extract-recipe tiktok: via=${via} caption=${caption.length}`);
+      console.error(`extract-recipe tiktok: via=${via} caption=${caption.length} embed=${embedTries.join(",") || "-"}`);
       if (caption.replace(/\s/g, "").length < 80) {
         return json({ error: "This TikTok’s caption doesn’t contain the recipe (it may only be spoken in the video). Copy the caption — and jot down any spoken steps — then use Paste text here." });
       }

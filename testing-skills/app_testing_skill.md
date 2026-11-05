@@ -66,7 +66,7 @@ violation fails), the real `sw.js` against a local server switched "offline", an
 the app's offline session + queued grocery check-offs. It runs Chrome in real time
 (service-worker installs never resolve under `--virtual-time-budget`) and has the
 pages POST results back. `testing-skills/tiktok_embed_test.py` runs
-extract-recipe's TikTok embed-page parser. **Never** loop over `testing-skills/*.py`
+extract-recipe's TikTok embed-page parser and its retry-on-429 (stubbed fetch, no network). **Never** loop over `testing-skills/*.py`
 blindly: `extraction_compare.py` makes paid calls (it now refuses without `--yes`). It's the **template** for booting the full app headless — the
 Supabase stub (a chainable/thenable Proxy query builder + an `onAuthStateChange`
 that fires `INITIAL_SESSION`) is the reusable part; copy it to smoke-test other

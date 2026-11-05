@@ -137,8 +137,11 @@ Use the app — no editing JS files:
   description is just a teaser). **TikTok** links read the video's caption —
   where recipe TikToks usually carry the recipe — from TikTok's official oEmbed
   API, or, since oEmbed stopped returning captions (2026-10), from TikTok's
-  public embed page (`/embed/v2/<id>`); if the recipe is only spoken in the
-  video, the app says so and routes you to Paste text. **Instagram** stays paste-only:
+  public embed page (`/embed/v2/<id>`). TikTok turns away a random share of
+  those requests ("429 Too Many Requests"), so the function retries a few
+  times with short pauses; the function log line shows each try
+  (`embed=429,200`). If the recipe is only spoken in the video, the app says
+  so and routes you to Paste text. **Instagram** stays paste-only:
   it exposes no server-readable caption without a Facebook developer app
   token. Two other categories of link can't be fetched either, and the app
   will tell you to paste text instead (with a one-tap **📋 Paste text
