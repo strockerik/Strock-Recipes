@@ -65,7 +65,7 @@ harness can see: the real page **head** (its Content Security Policy — any
 violation fails), the real `sw.js` against a local server switched "offline", and
 the app's offline session + queued grocery check-offs. It runs Chrome in real time
 (service-worker installs never resolve under `--virtual-time-budget`) and has the
-pages POST results back. `testing-skills/tiktok_embed_test.py` runs
+pages POST results back. `testing-skills/meal_plan_share_test.py` taps 📤 Send plan with the share sheet stubbed and checks the sent page (content, fallbacks, and 360/390/430px layout; `--save FILE` writes it out to look at). `testing-skills/tiktok_embed_test.py` runs
 extract-recipe's TikTok embed-page parser and its retry-on-429 (stubbed fetch, no network). **Never** loop over `testing-skills/*.py`
 blindly: `extraction_compare.py` makes paid calls (it now refuses without `--yes`). It's the **template** for booting the full app headless — the
 Supabase stub (a chainable/thenable Proxy query builder + an `onAuthStateChange`

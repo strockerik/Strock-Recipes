@@ -432,6 +432,24 @@ Plan what to cook across the week and shop for it in one pass:
 - Tap **🛒 Create grocery list** to roll every upcoming planned meal into the
   normal grocery list — a recipe planned on two days has its servings summed,
   and those days are marked "✓ purchased."
+- Tap **📤 Send plan** to send the coming week to the household as one
+  self-contained page (through the share sheet, like a recipe's 📤 Send).
+  It has three parts, with jump links between them:
+  - **The week**: each day's meals, today first. Empty nights show as
+    "Nothing planned", and each meal links to its recipe below.
+  - **Shopping list**: the same merged list "Create grocery list" would build,
+    in your aisle order with checkboxes. Staples you skip are left off, and
+    pantry stock is listed as "already at home". It never touches your actual
+    grocery list.
+  - **Recipes**: each recipe once, with the days it's cooked and its
+    ingredients at the planned servings (one list per size if two nights
+    differ). There are no methods; an imported recipe links to its original
+    for those.
+
+  The page has no script, so its checkboxes work wherever it opens. Printing
+  puts the week, the list and the recipes on separate pages: one for the
+  fridge, one for the store. Where a file can't be shared it sends the same
+  content as plain text, and on a desktop it downloads the file.
 
 The staging tray lives in this device's localStorage (so it does *not* follow
 you to another device); the schedule itself is saved per-user in Supabase, so

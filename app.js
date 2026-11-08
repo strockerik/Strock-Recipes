@@ -2292,19 +2292,8 @@
     const accent = it.section === "bar" ? "#B5402A" : "#3E6B3A";
     const kicker = it.section === "bar" ? "Bar" : "Kitchen";
 
-    const ingHtml = groupRuns(scaledIngredients(it, servings)).map((run) => {
-      const items = run.items.map((ing) => {
-        const l = ingLine(ing, true, system, it.section === "bar");
-        const amt = l.amtStr && l.amtStr !== "—" ? `<b>${esc(l.amtStr)}</b> ` : "";
-        return `<li>${amt}${esc(l.item)}</li>`;
-      }).join("");
-      return `${run.group ? `<h3 class="grp">${esc(run.group)}</h3>` : ""}<ul class="pts">${items}</ul>`;
-    }).join("");
-
-    const specHtml = it.specs
-      ? Object.entries(it.specs).filter(([, v]) => v)
-          .map(([k, v]) => `<li><b>${esc(k[0].toUpperCase() + k.slice(1))}:</b> ${esc(v)}</li>`).join("")
-      : "";
+    const ingHtml = shareIngredientsHtml(it, servings, system);
+    const specHtml = shareSpecsHtml(it);
 
     const hasMethod = it.method && it.method.length;
     const methodHtml = hasMethod ? groupRuns(it.method).map((run) => {
@@ -2410,31 +2399,44 @@
     return lines.join("\n");
   }
 
-  async function shareRecipeFile(it) {
-    const servings = chosenServings(it);
-    const html = recipeShareHtml(it, servings, unitSystem);
-    const name = recipeFilename(it);
-    // Prefer sharing the actual .html file so it lands as a saveable attachment.
+  // Hand a generated page to the native share sheet as an .html file, so it
+  // lands as a saveable attachment; fall back to plain text for targets that
+  // can't take a file, and on desktop to a download. A cancelled share sheet is
+  // the user's answer, not a failure: it used to fall through to the next tier
+  // and pop a second sheet (or, with no gesture left, a surprise download).
+  // `text` is a function so the long plain-text version is only built if needed.
+  async function shareHtmlFile({ html, filename, title, text, savedMsg }) {
+    const cancelled = (err) => err && err.name === "AbortError";
     if (navigator.canShare) {
       try {
-        const file = new File([html], name, { type: "text/html" });
+        const file = new File([html], filename, { type: "text/html" });
         if (navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: it.name });
+          await navigator.share({ files: [file], title });
           return;
         }
-      } catch { /* fall through to text / download */ }
+      } catch (err) { if (cancelled(err)) return; /* else fall through to text / download */ }
     }
     if (navigator.share) {
-      try { await navigator.share({ title: it.name, text: recipeShareText(it, servings, unitSystem) }); return; }
-      catch { /* user cancelled or unsupported — fall through */ }
+      try { await navigator.share({ title, text: text() }); return; }
+      catch (err) { if (cancelled(err)) return; /* unsupported — fall through */ }
     }
-    // Last resort (desktop): download the file so it can be attached manually.
     try {
-      downloadBlob(new Blob([html], { type: "text/html" }), name);
-      toast("Saved the recipe file — attach it to a text or email");
+      downloadBlob(new Blob([html], { type: "text/html" }), filename);
+      toast(savedMsg);
     } catch {
       toast("Sharing isn’t available on this device");
     }
+  }
+
+  function shareRecipeFile(it) {
+    const servings = chosenServings(it);
+    return shareHtmlFile({
+      html: recipeShareHtml(it, servings, unitSystem),
+      filename: recipeFilename(it),
+      title: it.name,
+      text: () => recipeShareText(it, servings, unitSystem),
+      savedMsg: "Saved the recipe file — attach it to a text or email"
+    });
   }
 
   // Recipients a recipe is currently shared with, by user id.
@@ -2523,15 +2525,17 @@
 
   // Merge ingredients across every recipe in the basket into one shopping
   // list: matching item + unit gets summed, units are converted to what a US
-  // grocery store sells, and pantry staples can be hidden.
-  function combinedGroceryItems() {
+  // grocery store sells, and pantry staples can be hidden. `source` is any
+  // iterable of [recipeId, { servings }] — the basket by default; the meal-plan
+  // page passes the week's totals so it never touches the real basket.
+  function combinedGroceryItems(source = basket) {
     const map = new Map();
     // Citrus is counted in whole fruit, not summed by weight/volume: one lime
     // gives both its juice AND its peel, so within a recipe we take the max of
     // the juice-need and peel-need (plus any whole/garnish fruit) and sum that
     // across recipes. fruit -> { count, recipes:Set }.
     const citrus = new Map();
-    for (const [id, { servings }] of basket) {
+    for (const [id, { servings }] of source) {
       const it = byId[id];
       if (!it) continue;
       const recipeCitrus = new Map(); // fruit -> { juiceMl, peelG, whole }
@@ -2956,13 +2960,7 @@
     const end = isoDate(addDays(midnight(), 6));
     const upcoming = mealPlan.filter((e) => e.date >= start && e.date <= end);
     if (!upcoming.length) { toast("No upcoming meals planned yet."); return; }
-    const totals = new Map();
-    upcoming.forEach((e) => {
-      const it = byId[e.recipeId];
-      if (!it) return;
-      const s = e.servings ?? it.baseServings;
-      totals.set(e.recipeId, (totals.get(e.recipeId) || 0) + s);
-    });
+    const totals = planServingTotals(upcoming);
     if (!totals.size) { toast("Those planned recipes aren't available."); return; }
     // Full server-side replace: wipe the existing basket + check-offs, then
     // write the new one — manual items are deliberately left untouched.
@@ -2987,6 +2985,358 @@
     renderGroceryBar();
     renderGroceryPanel();
     groceryPanel.hidden = false;
+  }
+
+  // ---------- Send the week's plan outside the app ----------
+  // The coming 7 days (the same window as Create grocery list) as one
+  // self-contained page for the household, in the same design language as a
+  // sent recipe. It answers the three things a family asks of a plan:
+  //   - what's on each night        -> the week at a glance (gaps shown, so
+  //                                    "leftovers night" is visible too);
+  //   - what do we need to buy      -> ONE shopping list for the whole week,
+  //                                    merged and in the cook's aisle order;
+  //   - what goes into tonight's    -> each recipe's ingredients at its planned
+  //                                    servings, in the order it's cooked.
+  // No methods (it's a plan, not a cookbook); an imported recipe links back to
+  // its original for those. No script in the page: the list's checkboxes are
+  // plain inputs, so they tick wherever the file opens, and printing gives a
+  // fridge copy (the week) and a store copy (the list) on separate pages.
+
+  // Upcoming entries whose recipe still exists, in day-then-meal order.
+  function upcomingPlanEntries() {
+    const start = isoDate(midnight());
+    const end = isoDate(addDays(midnight(), 6));
+    return mealPlan
+      .filter((e) => e.date >= start && e.date <= end && byId[e.recipeId])
+      .sort((a, b) => a.date.localeCompare(b.date) || SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot));
+  }
+
+  // Servings per recipe across the week: a recipe planned twice is bought twice.
+  function planServingTotals(entries) {
+    const totals = new Map();
+    entries.forEach((e) => {
+      const it = byId[e.recipeId];
+      if (!it) return;
+      totals.set(e.recipeId, (totals.get(e.recipeId) || 0) + (e.servings ?? it.baseServings));
+    });
+    return totals;
+  }
+
+  const SLOT_PLURAL = { breakfast: "breakfasts", lunch: "lunches", dinner: "dinners" };
+  // "5 dinners, 2 lunches and 1 breakfast" — dinner first, it's the plan's spine.
+  function mealCountPhrase(entries) {
+    const parts = [...SLOTS].reverse().map((slot) => {
+      const n = entries.filter((e) => e.slot === slot).length;
+      return n ? `${n} ${n === 1 ? slot : SLOT_PLURAL[slot]}` : "";
+    }).filter(Boolean);
+    return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : (parts[0] || "");
+  }
+
+  function entryWhen(e) {
+    return `${dayLabel(parseIsoDate(e.date)).wd} ${e.slot}`;
+  }
+
+  // Everything the page and its plain-text twin show, computed once.
+  function mealPlanShareModel(entries) {
+    const start = midnight();
+    const days = [0, 1, 2, 3, 4, 5, 6].map((i) => {
+      const d = addDays(start, i);
+      const ds = isoDate(d);
+      return { ...dayLabel(d), entries: entries.filter((e) => e.date === ds) };
+    });
+    // One card per recipe, in the order it's first cooked; the week's meals link to it.
+    const cardMap = new Map();
+    entries.forEach((e) => {
+      if (!cardMap.has(e.recipeId)) cardMap.set(e.recipeId, { it: byId[e.recipeId], entries: [] });
+      cardMap.get(e.recipeId).entries.push(e);
+    });
+    const cards = [...cardMap.values()].map((c, i) => {
+      // Usually every night uses the same servings; if not, one list per size.
+      const bySize = new Map();
+      c.entries.forEach((e) => {
+        const s = e.servings ?? c.it.baseServings;
+        if (!bySize.has(s)) bySize.set(s, []);
+        bySize.get(s).push(e);
+      });
+      return { ...c, anchor: `r${i + 1}`, sizes: [...bySize.entries()].map(([servings, es]) => ({ servings, entries: es })) };
+    });
+    const anchorFor = new Map(cards.map((c) => [c.it.id, c.anchor]));
+    const source = [...planServingTotals(entries)].map(([id, servings]) => [id, { servings }]);
+    const { toBuy, heldInPantry } = partitionPantry(combinedGroceryItems(source));
+    return {
+      startLabel: start.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      rangeLabel: [start, addDays(start, 6)]
+        .map((d) => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })).join(" – "),
+      fileDate: isoDate(start),
+      days, cards, anchorFor,
+      // Slot labels only earn their space when the week mixes meals.
+      showSlots: entries.some((e) => e.slot !== "dinner"),
+      meals: mealCountPhrase(entries),
+      aisles: groceryByCategory(toBuy),
+      toBuyCount: toBuy.length,
+      heldInPantry,
+      skipStaples: skipPantryStaples,
+      manyRecipes: cards.length > 1
+    };
+  }
+
+  // A recipe's ingredient list at a serving size, grouped into its components
+  // ("Dough", "Sauce"). Shared by a sent recipe and the sent meal plan.
+  function shareIngredientsHtml(it, servings, system, groupTag = "h3") {
+    const isBar = it.section === "bar";
+    return groupRuns(scaledIngredients(it, servings)).map((run) => {
+      const items = run.items.map((ing) => {
+        const l = ingLine(ing, true, system, isBar);
+        const amt = l.amtStr && l.amtStr !== "—" ? `<b>${esc(l.amtStr)}</b> ` : "";
+        return `<li>${amt}${esc(l.item)}</li>`;
+      }).join("");
+      return `${run.group ? `<${groupTag} class="grp">${esc(run.group)}</${groupTag}>` : ""}<ul class="pts">${items}</ul>`;
+    }).join("");
+  }
+  function shareSpecsHtml(it) {
+    return it.specs
+      ? Object.entries(it.specs).filter(([, v]) => v)
+          .map(([k, v]) => `<li><b>${esc(k[0].toUpperCase() + k.slice(1))}:</b> ${esc(v)}</li>`).join("")
+      : "";
+  }
+
+  // An imported recipe's original is where its method lives now.
+  function sourceUrl(source) {
+    const s = String(source || "").trim();
+    return /^https?:\/\/\S+$/i.test(s) ? s : "";
+  }
+  function sourceHost(url) {
+    try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+  }
+  function recipeNamesLabel(names) {
+    return names.length <= 2 ? names.join(", ") : `${names.slice(0, 2).join(", ")} +${names.length - 2} more`;
+  }
+
+  function mealPlanShareHtml(m, system) {
+    const weekHtml = m.days.map((d) => {
+      const meals = d.entries.map((e) => {
+        const it = byId[e.recipeId];
+        return `<li>${m.showSlots ? `<span class="slot">${esc(slotLabel(e.slot))}</span>` : ""}<a href="#${m.anchorFor.get(e.recipeId)}">${esc(it.name)}</a></li>`;
+      }).join("");
+      return `<li class="day">
+        <p class="d"><span class="wd">${esc(d.wd)}</span><span class="md">${esc(d.md)}</span></p>
+        ${meals ? `<ul class="meals">${meals}</ul>` : `<p class="none">Nothing planned</p>`}
+      </li>`;
+    }).join("");
+
+    const aislesHtml = m.aisles.map((sec) => `
+      <div class="aisle">
+        <h3>${esc(sec.category)}</h3>
+        <ul class="shop">${sec.items.map((g) => {
+          const qty = groceryQtyStr(g);
+          const forLine = m.manyRecipes && g.recipes.length ? `<small>for ${esc(recipeNamesLabel(g.recipes))}</small>` : "";
+          return `<li><label><input type="checkbox"><span>${qty ? `<b>${esc(qty)}</b> ` : ""}${esc(g.item)}${forLine}</span></label></li>`;
+        }).join("")}</ul>
+      </div>`).join("");
+    const notes = [
+      m.skipStaples ? "Salt, pepper, oil, sugar, butter and flour are left off — check you have enough." : "",
+      m.heldInPantry.length ? `<b>Already at home</b> (from the pantry list): ${esc(m.heldInPantry.map((g) => g.item).join(", "))}.` : ""
+    ].filter(Boolean);
+
+    const cardsHtml = m.cards.map((c) => {
+      const it = c.it;
+      const url = sourceUrl(it.source);
+      const label = esc(it.servingsLabel || "servings");
+      const single = c.sizes.length === 1;
+      const meta = [
+        single ? `${esc(fmtAmount(c.sizes[0].servings))} ${label}${c.entries.length > 1 ? " each time" : ""}` : "",
+        url ? `<a href="${esc(url)}">Full recipe on ${esc(sourceHost(url))} ↗</a>`
+          : (it.source ? `Source: ${esc(it.source)}` : "")
+      ].filter(Boolean).join("  ·  ");
+      const lists = single
+        ? shareIngredientsHtml(it, c.sizes[0].servings, system, "h4")
+        : c.sizes.map((sz) => `<p class="for">${esc(fmtAmount(sz.servings))} ${label} — ${esc(sz.entries.map(entryWhen).join(", "))}</p>${shareIngredientsHtml(it, sz.servings, system, "h4")}`).join("");
+      const specs = shareSpecsHtml(it);
+      return `<article class="card" id="${c.anchor}" style="--c:${it.section === "bar" ? "#B5402A" : "#3E6B3A"}">
+        <p class="when">${esc(c.entries.map(entryWhen).join("  ·  "))}</p>
+        <h3>${esc(it.name)}</h3>
+        ${it.subtitle ? `<p class="lede">${esc(it.subtitle)}</p>` : ""}
+        ${meta ? `<p class="meta">${meta}</p>` : ""}
+        ${lists}
+        ${specs ? `<ul class="pts">${specs}</ul>` : ""}
+      </article>`;
+    }).join("");
+
+    const toBuy = `${m.toBuyCount} ${m.toBuyCount === 1 ? "thing" : "things"} to buy`;
+    const recipesN = `${m.cards.length} ${m.cards.length === 1 ? "recipe" : "recipes"}`;
+    return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meal plan, week of ${esc(m.startLabel)} — The House Index</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="${GUIDE_FONTS}" rel="stylesheet">
+<style>
+  :root { --paper:#FCFBF8; --ink:#2A2520; --lede:#463f37; --faint:#8A8276; --line:#E8E3D9; --accent:#3E6B3A; }
+  * { box-sizing:border-box; }
+  html { -webkit-text-size-adjust:100%; }
+  body { margin:0; background:var(--paper); color:var(--ink);
+         font-family:"Public Sans",-apple-system,system-ui,sans-serif; }
+  .doc { max-width:46em; margin:0 auto; padding:36px clamp(16px,5vw,40px) 64px; }
+  .kicker, .sub, .jump a, h2 .count, .d .wd, .meals .slot, .aisle h3, .card .when, .card .meta, .for, .closer {
+    font-family:"IBM Plex Mono",ui-monospace,monospace; }
+  .kicker { font-size:11px; font-weight:500; letter-spacing:.14em; text-transform:uppercase; color:var(--accent);
+            margin:0 0 10px; display:flex; align-items:center; gap:10px; }
+  .kicker::before { content:""; width:22px; height:2px; background:var(--accent); display:inline-block; }
+  h1 { font-family:"Fraunces",Georgia,serif; font-weight:700; font-size:34px; line-height:1.05;
+       letter-spacing:-.015em; margin:0 0 12px; text-wrap:balance; }
+  .lede { font-size:17px; line-height:1.55; color:var(--lede); margin:0 0 8px; }
+  .sub { font-size:12px; color:var(--faint); margin:0; }
+  .hero { border-bottom:1px solid var(--line); padding-bottom:22px; margin-bottom:8px; }
+  .jump { display:flex; flex-wrap:wrap; gap:8px; list-style:none; margin:16px 0 0; padding:0; }
+  .jump a { display:inline-block; font-size:12px; color:var(--ink); text-decoration:none; background:#fff;
+            border:1px solid var(--line); border-radius:999px; padding:9px 14px; }
+  section { scroll-margin-top:12px; }
+  h2 { font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:23px; margin:30px 0 12px;
+       display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; }
+  h2 .count { font-size:12px; font-weight:500; color:var(--faint); }
+  .hint { font-size:14px; line-height:1.5; color:var(--faint); margin:-4px 0 16px; }
+
+  .week { list-style:none; margin:0; padding:0; border-top:1px solid var(--line); }
+  .day { display:grid; grid-template-columns:4.4em minmax(0,1fr); gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+  .d { margin:0; line-height:1.3; }
+  .d .wd { display:block; font-size:11px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }
+  .d .md { font-size:14px; color:var(--lede); }
+  .meals { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; justify-content:center; }
+  .meals li { font-size:16px; line-height:1.35; overflow-wrap:anywhere; }
+  .meals .slot { display:block; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); }
+  .meals a { color:var(--ink); font-weight:600; text-decoration:none; border-bottom:1px solid var(--line); }
+  .none { margin:0; align-self:center; font-size:14px; font-style:italic; color:var(--faint); }
+
+  .aisle { break-inside:avoid; margin:0 0 20px; }
+  .aisle h3 { font-size:11px; font-weight:500; letter-spacing:.14em; text-transform:uppercase; color:var(--accent);
+              margin:0; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  .shop { list-style:none; margin:0; padding:0; }
+  .shop li { border-bottom:1px dashed var(--line); }
+  .shop label { display:flex; align-items:flex-start; gap:12px; min-height:44px; padding:11px 0; cursor:pointer;
+                font-size:15px; line-height:1.4; color:var(--lede); overflow-wrap:anywhere; }
+  .shop input { flex:none; width:20px; height:20px; margin:0; accent-color:var(--accent); }
+  .shop b { font-weight:600; color:var(--ink); }
+  .shop small { display:block; font-size:12px; color:var(--faint); margin-top:2px; }
+  .shop input:checked + span { text-decoration:line-through; opacity:.5; }
+  .notes { list-style:none; margin:4px 0 0; padding:12px 14px; background:#fff; border:1px solid var(--line);
+           border-radius:12px; font-size:14px; line-height:1.55; color:var(--lede); }
+  .notes li + li { margin-top:6px; }
+  @media (min-width:720px) { .aisles { columns:2; column-gap:36px; } }
+
+  .card { --c:var(--accent); background:#fff; border:1px solid var(--line); border-radius:14px;
+          padding:18px clamp(14px,4vw,22px) 10px; margin:0 0 16px; scroll-margin-top:12px; }
+  .card .when { font-size:11px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; color:var(--c); margin:0 0 8px; }
+  .card h3 { font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:21px; line-height:1.2; margin:0 0 6px; overflow-wrap:anywhere; }
+  .card .lede { font-size:15px; margin:0 0 6px; }
+  .card .meta { font-size:12px; color:var(--faint); margin:0 0 14px; overflow-wrap:anywhere; }
+  .card .meta a { color:var(--c); text-decoration:none; }
+  h4.grp { font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:15px; margin:14px 0 8px; color:var(--lede); }
+  .for { font-size:12px; color:var(--lede); margin:14px 0 8px; }
+  .pts { list-style:none; margin:0 0 8px; padding:0; }
+  .pts li { position:relative; padding-left:20px; font-size:15px; line-height:1.5; margin-bottom:7px; color:var(--lede); overflow-wrap:anywhere; }
+  .pts li::before { content:""; position:absolute; left:0; top:8px; width:7px; height:7px; border-radius:50%; background:var(--c); }
+  .pts li b { font-weight:600; color:var(--ink); }
+  .closer { border-top:1px solid var(--line); margin-top:30px; padding-top:18px; font-size:11px; color:var(--faint); }
+  .closer a { color:var(--accent); text-decoration:none; }
+
+  @media print {
+    @page { margin:1.3cm; }
+    body { background:#fff; }
+    .doc { max-width:none; padding:0; }
+    .jump { display:none; }
+    #shop, #recipes { break-before:page; }
+    h2 { margin-top:0; }
+    .aisles { columns:2; column-gap:28px; }
+    .shop label { min-height:0; padding:5px 0; }
+    .card { break-inside:avoid; border-color:#cfcac0; }
+    a { color:var(--ink) !important; border:0 !important; }
+  }
+</style>
+</head><body>
+<main class="doc">
+  <section class="hero">
+    <p class="kicker">Meal plan</p>
+    <h1>Week of ${esc(m.startLabel)}</h1>
+    <p class="lede">${esc(m.meals)} — ${esc(recipesN)}, ${esc(toBuy)}.</p>
+    <p class="sub">${esc(m.rangeLabel)}</p>
+    <ul class="jump">
+      <li><a href="#week">The week</a></li>
+      <li><a href="#shop">Shopping list</a></li>
+      <li><a href="#recipes">Recipes</a></li>
+    </ul>
+  </section>
+  <section id="week">
+    <h2>The week</h2>
+    <ol class="week">${weekHtml}</ol>
+  </section>
+  <section id="shop">
+    <h2>Shopping list <span class="count">${esc(toBuy)}</span></h2>
+    <p class="hint">Everything for the week in one trip, in aisle order. Tick things off as you go.</p>
+    <div class="aisles">${aislesHtml || `<p class="hint">Nothing to buy — it’s all at home already.</p>`}</div>
+    ${notes.length ? `<ul class="notes">${notes.map((n) => `<li>${n}</li>`).join("")}</ul>` : ""}
+  </section>
+  <section id="recipes">
+    <h2>Recipes <span class="count">${esc(recipesN)} · ingredients only</span></h2>
+    ${cardsHtml}
+  </section>
+  <p class="closer">Made with <a href="${APP_URL}">The House Index</a></p>
+</main>
+</body></html>`;
+  }
+
+  // Plain-text twin for share targets that can't take a file attachment.
+  function mealPlanShareText(m, system) {
+    const lines = [`Meal plan — week of ${m.startLabel}`, m.rangeLabel, "", "THE WEEK"];
+    m.days.forEach((d) => {
+      const meals = d.entries.map((e) => (m.showSlots ? `${slotLabel(e.slot)}: ` : "") + byId[e.recipeId].name);
+      lines.push(`${d.wd} ${d.md}: ${meals.length ? meals.join("; ") : "nothing planned"}`);
+    });
+    lines.push("", "SHOPPING LIST");
+    m.aisles.forEach((sec) => {
+      lines.push(`— ${sec.category.toUpperCase()} —`);
+      sec.items.forEach((g) => {
+        const qty = groceryQtyStr(g);
+        lines.push(`- ${qty ? qty + " " : ""}${g.item}`);
+      });
+    });
+    if (m.skipStaples) lines.push("(Salt, pepper, oil, sugar, butter and flour left off.)");
+    if (m.heldInPantry.length) lines.push(`Already at home: ${m.heldInPantry.map((g) => g.item).join(", ")}`);
+    lines.push("", "RECIPES (ingredients only)");
+    m.cards.forEach((c) => {
+      const it = c.it;
+      lines.push("", `${it.name} — ${c.entries.map(entryWhen).join(", ")}`);
+      c.sizes.forEach((sz) => {
+        lines.push(`[${fmtAmount(sz.servings)} ${it.servingsLabel || "servings"}${c.sizes.length > 1 ? ` — ${sz.entries.map(entryWhen).join(", ")}` : ""}]`);
+        groupRuns(scaledIngredients(it, sz.servings)).forEach((run) => {
+          if (run.group) lines.push(`${run.group}:`);
+          run.items.forEach((ing) => {
+            const l = ingLine(ing, true, system, it.section === "bar");
+            lines.push(`- ${l.amtStr && l.amtStr !== "—" ? l.amtStr + " " : ""}${l.item}`);
+          });
+        });
+      });
+      const url = sourceUrl(it.source);
+      if (url) lines.push(`Full recipe: ${url}`);
+    });
+    lines.push("", `Made with The House Index — ${APP_URL}`);
+    return lines.join("\n");
+  }
+
+  function shareMealPlan() {
+    const entries = upcomingPlanEntries();
+    if (!entries.length) { toast("No upcoming meals planned yet."); return; }
+    // Built synchronously from what's on screen: the share sheet has to open
+    // inside the tap (iOS drops the gesture across an await of the network).
+    const model = mealPlanShareModel(entries);
+    return shareHtmlFile({
+      html: mealPlanShareHtml(model, unitSystem),
+      filename: `meal-plan-${model.fileDate}.html`,
+      title: `Meal plan — week of ${model.startLabel}`,
+      text: () => mealPlanShareText(model, unitSystem),
+      savedMsg: "Saved the meal plan page — attach it to a text or email"
+    });
   }
 
   function mealDayCard(d, isHistory) {
@@ -3050,7 +3400,10 @@
       <section class="mp-section">
         <div class="mp-section-head">
           <h3 class="detail-h">Upcoming 7 days</h3>
-          <button id="mp-make-grocery" class="solid-btn small"${upcomingCount ? "" : " disabled"}>\ud83d\uded2 Create grocery list</button>
+          <div class="mp-head-actions">
+            <button id="mp-send-plan" class="ghost-btn small" title="Send this week's plan as a page: the meals, one shopping list, and each recipe's ingredients"${upcomingCount ? "" : " disabled"}>\ud83d\udce4 Send plan</button>
+            <button id="mp-make-grocery" class="solid-btn small"${upcomingCount ? "" : " disabled"}>\ud83d\uded2 Create grocery list</button>
+          </div>
         </div>
         <div class="mp-view-toggle" role="group" aria-label="Planner view">
           <button type="button" class="mp-view-btn${planView === "dinners" ? " is-active" : ""}" data-plan-view="dinners">Dinners</button>
@@ -5634,6 +5987,7 @@
   $("#staged-count").addEventListener("click", () => setViewMode("mealplan"));
   mealPlanView.addEventListener("click", (e) => {
     if (e.target.closest("#mp-make-grocery")) { groceryFromPlan(); return; }
+    if (e.target.closest("#mp-send-plan")) { shareMealPlan(); return; }
     const viewBtn = e.target.closest("[data-plan-view]");
     if (viewBtn) {
       planView = viewBtn.dataset.planView;

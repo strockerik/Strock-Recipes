@@ -1040,8 +1040,13 @@ button:focus-visible, input:focus-visible {
 
 /* ---------- Weekly meal plan ---------- */
 .mp-section { display: flex; flex-direction: column; gap: 10px; }
-.mp-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mp-section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .mp-section-head .detail-h { margin: 0; }
+/* Send plan + Create grocery list: side by side next to the heading when they
+   fit, dropping under it as a pair on a narrow phone. */
+.mp-head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mp-head-actions > button { min-height: 44px; } /* phone touch target */
+.mp-head-actions .ghost-btn:disabled { opacity: 0.45; cursor: default; }
 .mp-empty { font-size: 0.88rem; color: var(--faint); margin: 0; }
 .mp-tray { display: flex; flex-wrap: wrap; gap: 8px; }
 .mp-tray-item { display: inline-flex; align-items: stretch; }
