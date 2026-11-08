@@ -2,6 +2,12 @@
 (function () {
   "use strict";
 
+  // The app's release number, shown quietly in the page footer. Bump it when a
+  // release ships (minor for features and fixes, e.g. 1.1; major for a big
+  // change). It is a label for people, separate from the service worker's
+  // cache VERSION in sw.js, which only needs bumping to retire old caches.
+  const APP_VERSION = "1.0";
+
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
   let viewMode = "recipes"; // "recipes" | "mealplan"
@@ -6868,6 +6874,12 @@
   });
 
   // ---------- Init ----------
+  const appVersionEl = $("#app-version");
+  if (appVersionEl) {
+    appVersionEl.querySelector(".app-version-num").textContent = `v${APP_VERSION}`;
+    appVersionEl.title = `The House Index, version ${APP_VERSION}`;
+    appVersionEl.hidden = false;
+  }
   syncScope();
   renderTagFilters();
   renderList();

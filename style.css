@@ -1354,9 +1354,26 @@ button:focus-visible, input:focus-visible {
   border-top: 1px solid var(--line);
   margin-top: 24px;
   padding-top: 16px;
-  padding-bottom: 24px;
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
   font-size: 0.8rem;
   color: var(--faint);
+}
+/* The grocery bar is fixed over the bottom of the page; without this the
+   footer (and the version under it) could never scroll out from beneath it. */
+body.has-grocery-bar .site-footer { padding-bottom: calc(24px + var(--grocery-bar-h, 76px)); }
+/* Release number: a small, quiet pill under the footer note. */
+.app-version {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin: 10px 0 0; padding: 2px 9px 2px 7px;
+  border: 1px solid var(--line); border-radius: 999px;
+  font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.04em;
+  color: var(--faint); cursor: default;
+}
+.app-version[hidden] { display: none; }
+.app-version-icon { flex: none; }
+.app-version-sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
 }
 
 /* toast */

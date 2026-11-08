@@ -30,7 +30,11 @@ FRAME_HTML = REPO / "test_vp_frames.html"
 
 APP = r"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RUNNING</title><link rel="stylesheet" href="style.css"></head>
+<title>RUNNING</title><link rel="stylesheet" href="style.css">
+<!-- Geometry is measured at rest: under --virtual-time-budget a CSS transition
+     never advances, so an element mid-transition (the ＋ button lifting over the
+     grocery bar) would be measured at its starting position forever. -->
+<style>*,*::before,*::after{transition:none!important;animation:none!important}</style></head>
 <body><pre id="smoke-results" style="display:none"></pre>
 <script>
 var SUPABASE_URL="http://localhost/stub", SUPABASE_ANON_KEY="stub", USER_ID="u1";
@@ -125,7 +129,12 @@ async function run(){try{
 
   // The ＋ button used to sit on top of the grocery bar, covering "Clear".
   var fab=document.querySelector("#add-fab"), gbar=document.querySelector("#grocery-bar");
-  if(fab && gbar && !gbar.hidden && fab.offsetParent!==null){
+  // Not offsetParent: it's always null for a position:fixed element, which
+  // silently skipped this check until 2026-11-08.
+  function fabShown(){ return !!fab && getComputedStyle(fab).display!=="none"; }
+  A("the ＋ button shows at phone width", fabShown(), "display="+(fab&&getComputedStyle(fab).display));
+  A("picking a recipe brings up the grocery bar", !!gbar && !gbar.hidden, "");
+  if(fab && gbar && !gbar.hidden && fabShown()){
     var fr=fab.getBoundingClientRect(), gr=gbar.getBoundingClientRect();
     var overlap = fr.bottom > gr.top && fr.top < gr.bottom && fr.right > gr.left && fr.left < gr.right;
     A("the ＋ button clears the grocery bar", !overlap,
@@ -133,7 +142,35 @@ async function run(){try{
     A("the ＋ button stays on screen", fr.bottom <= window.innerHeight + 1,
       "fab bottom="+Math.round(fr.bottom)+" vh="+window.innerHeight);
   }
+  // The release number in the footer: shown, small, and never stuck under the
+  // grocery bar or the ＋ button once you scroll to the bottom of the page.
+  var ver=document.querySelector("#app-version");
+  function verChecks(state){
+    if(!ver){ A("version badge present", false, "missing"); return; }
+    window.scrollTo(0, document.documentElement.scrollHeight);
+    var vr=ver.getBoundingClientRect();
+    A("version reachable at the page bottom ("+state+")",
+      !ver.hidden && vr.height>0 && vr.left>=0 && vr.top>=0 && vr.bottom<=window.innerHeight+1,
+      "top="+Math.round(vr.top)+" bottom="+Math.round(vr.bottom)+" vh="+window.innerHeight);
+    if(gbar && !gbar.hidden){
+      var gr=gbar.getBoundingClientRect();
+      A("version scrolls clear of the grocery bar", vr.bottom<=gr.top+1, "ver bottom="+Math.round(vr.bottom)+" bar top="+Math.round(gr.top));
+    }
+    if(fabShown()){
+      var fr=fab.getBoundingClientRect();
+      var hit = vr.bottom > fr.top && vr.top < fr.bottom && vr.right > fr.left && vr.left < fr.right;
+      A("version isn't under the ＋ button ("+state+")", !hit, "ver="+Math.round(vr.left)+".."+Math.round(vr.right)+" fab="+Math.round(fr.left)+".."+Math.round(fr.right));
+    }
+    window.scrollTo(0,0);
+  }
+  if(ver){
+    A("version reads v1.0", ver.querySelector(".app-version-num").textContent==="v1.0" && /version 1\.0/.test(ver.title),
+      ver.querySelector(".app-version-num").textContent+" / "+ver.title);
+    A("version is discreet (<=12px text)", parseFloat(getComputedStyle(ver).fontSize)<=12, getComputedStyle(ver).fontSize);
+  }
+  if(gbar && !gbar.hidden) verChecks("grocery bar up");
   if(pick){ click(document.querySelector(".item .pick")); await delay(160); }
+  verChecks("no grocery bar");
   show("#grocery-panel"); await delay(70); ov("grocery");
   click(document.querySelector('[data-grocery-view="recipe"]')); await delay(70); ov("grocery by-recipe");
   click(document.querySelector('[data-grocery-view="aisle"]')); await delay(50);

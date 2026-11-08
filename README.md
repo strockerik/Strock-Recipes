@@ -1169,6 +1169,15 @@ How it stays safe and current:
   service worker ever misbehaves, deploy an `sw.js` whose `activate` handler calls
   `self.registration.unregister()` — that's the kill switch.
 
+### Version number
+
+The app's release number shows as a small pill at the bottom of the page
+(**v1.0** as of 2026-11-08). It lives in one place: `APP_VERSION` at the top of
+`app.js`. Bump it when a release ships: the minor number for features and
+fixes (1.1, 1.2…), the major number for a big change (2.0). It's a label for
+people only. It is separate from `VERSION` in `sw.js`, which retires cached
+copies and doesn't need to change with each release.
+
 ## Backup & restore
 
 Your recipes live only in Supabase, so keep an off-Supabase copy — especially of
