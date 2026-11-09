@@ -164,7 +164,7 @@ async function run(){try{
     window.scrollTo(0,0);
   }
   if(ver){
-    A("version reads v1.0", ver.querySelector(".app-version-num").textContent==="v1.0" && /version 1\.0/.test(ver.title),
+    A("version reads v"+APP_VERSION+" (app.js APP_VERSION)", ver.querySelector(".app-version-num").textContent==="v"+APP_VERSION && ver.title.indexOf("version "+APP_VERSION)>=0,
       ver.querySelector(".app-version-num").textContent+" / "+ver.title);
     A("version is discreet (<=12px text)", parseFloat(getComputedStyle(ver).fontSize)<=12, getComputedStyle(ver).fontSize);
   }
@@ -221,7 +221,8 @@ setTimeout(poll,1500);
 
 def main():
     keep = "--keep" in sys.argv
-    APP_HTML.write_text(APP)
+    version = re.search(r'const APP_VERSION = "([^"]+)"', (REPO / "app.js").read_text()).group(1)
+    APP_HTML.write_text(APP.replace("<head>", f'<head><script>var APP_VERSION = "{version}";</script>', 1))
     frames = "".join(
         f'<iframe data-w="{w}" src="{APP_HTML.name}" style="width:{w}px;height:900px;border:0"></iframe>'
         for w in WIDTHS)

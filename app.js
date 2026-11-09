@@ -6,11 +6,11 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "1.0";
+  const APP_VERSION = "1.1";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
-  let viewMode = "recipes"; // "recipes" | "mealplan"
+  let viewMode = "recipes"; // "recipes" | "mealplan" | "bottles" (Bar tab only)
   let searchTerm = "";
   let activeTags = new Set();
   let favoritesOnly = false;
@@ -204,6 +204,14 @@
   // B2 header / toolbar elements
   const modeRecipesBtn = $("#mode-recipes");
   const modeMealplanBtn = $("#mode-mealplan");
+  const modeBottlesBtn = $("#mode-bottles");
+  const bottlesView = $("#bottles-view");
+  const bottlePanel = $("#bottle-panel");
+  const bottleBody = $("#bottle-body");
+  const bottleTitle = $("#bottle-title");
+  const closeBottleBtn = $("#close-bottle");
+  const btPhotoCamera = $("#bt-photo-camera");
+  const btPhotoPick = $("#bt-photo-pick");
   const recipesControlsEl = $("#recipes-controls");
   const mealPlanView = $("#meal-plan-view");
   const scopeAllBtn = $("#scope-all");
@@ -961,22 +969,31 @@
 
   // ---------- Bar & pantry inventory (Supabase-backed) ----------
   function mapInventoryRow(r) {
-    return { id: r.id, section: r.section, category: r.category, name: r.name, status: r.status };
+    return { id: r.id, section: r.section, category: r.category, name: r.name, status: r.status, product_id: r.product_id || null };
   }
   async function loadInventory() {
     if (!session) { inventory = []; return; }
     const { data, error } = await supabaseClient
       .from("inventory_items").select("*").order("section").order("category");
     inventory = error ? [] : (data || []).map(mapInventoryRow);
+    loadOwnedScores();
   }
-  async function addInventoryItem({ section: sec, category, name, status }) {
-    if (!session) { toast("You've been signed out — sign in again."); return; }
+  // Returns the new item (or null). A bar bottle from the score card arrives
+  // already linked to its catalog entry; one typed in by hand is linked when
+  // its name is a clear catalog match (linkInventoryToCatalog).
+  async function addInventoryItem({ section: sec, category, name, status, product_id }) {
+    if (!session) { toast("You've been signed out — sign in again."); return null; }
     const row = { section: sec, category: category || null, name: name || null, status: status || "in" };
+    if (product_id) row.product_id = product_id;
     const { data, error } = await supabaseClient
       .from("inventory_items").insert(row).select().single();
-    if (error) { toastError("Couldn\u2019t add that", error); return; }
-    inventory.push(mapInventoryRow(data));
+    if (error) { toastError("Couldn\u2019t add that", error); return null; }
+    const item = mapInventoryRow(data);
+    inventory.push(item);
     renderInventoryPanel();
+    if (item.section === "bar" && !item.product_id) linkInventoryToCatalog(item);
+    else if (item.product_id) loadOwnedScores();
+    return item;
   }
   async function updateInventoryStatus(id, status) {
     const item = inventory.find((i) => i.id === id);
@@ -1314,6 +1331,9 @@
     planView = "dinners";
     inventory = [];
     collapsedInvCats = new Set();
+    bottles.owned = new Map();
+    bottlesInvalidate();
+    if (bottlesView) { bottlesView.innerHTML = ""; delete bottlesView.dataset.built; }
     dietPrefs = { diets: [], allergies: [], avoid: [] };
     mealPlan = [];
     mealPlanTray.clear();
@@ -1855,8 +1875,13 @@
         const restock = i.status !== "in"
           ? `<button type="button" class="inv-restock" data-inv-restock="${i.id}" title="Add to grocery list" aria-label="Add ${esc(label)} to grocery list">🛒</button>`
           : "";
+        const owned = i.section === "bar" && i.product_id ? bottles.owned.get(i.product_id) : null;
+        const scoreChip = owned
+          ? `<button type="button" class="inv-score" data-inv-score="${esc(i.product_id)}" aria-label="Expert score ${scoreText(owned.score_10)} out of 10 for ${esc(i.name || "")} — see where it comes from">${scoreText(owned.score_10)}</button>`
+          : "";
         return `<li class="inv-row">
           <span class="inv-row-name">${label}</span>
+          ${scoreChip}
           <span class="inv-status">${statusBtns}</span>
           ${restock}
           <button type="button" class="inv-remove" data-inv-remove="${i.id}" aria-label="Remove ${esc(label)}">×</button>
@@ -1917,6 +1942,8 @@
     invNameInput.focus();
   });
   inventoryContent.addEventListener("click", (e) => {
+    const scoreBtn = e.target.closest("[data-inv-score]");
+    if (scoreBtn) { if (openBottlePanel()) { btToken++; btShowResult(scoreBtn.dataset.invScore, null, false); } return; }
     const statusBtn = e.target.closest("[data-inv-status]");
     if (statusBtn) { updateInventoryStatus(statusBtn.dataset.id, statusBtn.dataset.invStatus); return; }
     const restock = e.target.closest("[data-inv-restock]");
@@ -1945,6 +1972,642 @@
     inventoryPanel.hidden = true;
     openGeneratePanel("bar");
   });
+
+
+  // ---------- Bottles: the spirits ratings catalog ----------
+  // Bar tab → Bottles. Look a bottle up by label photo (identify-bottle reads it)
+  // or by name (free: normName + spirit_candidates), see its blended expert score
+  // and every review behind it, or have research-bottle look it up on the web —
+  // which saves what it finds to the shared catalog (README "Bottles").
+
+  // ==== NORMALIZE: port of scripts/ratings/normalize.py ====
+  // Same rules as the Python reference and research-bottle's copy, so a typed
+  // name, a label read and a ratings.py import all land on one catalog key.
+  // testing-skills/bottle_normalize_parity_test.py runs all three side by side.
+  const NORM_FOLD = { "ø": "o", "Ø": "O", "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe", "ß": "ss", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "þ": "th", "Þ": "Th", "ð": "d", "Ð": "D" };
+  function stripMarks(text) {
+    return String(text ?? "").normalize("NFKD").replace(/\p{M}/gu, "")
+      .replace(/[øØæÆœŒßłŁđĐþÞðÐ]/g, (c) => NORM_FOLD[c]).replace(/[®™©]/g, "");
+  }
+  const NORM_ABBREV = [
+    [/\by\.?\s?o\.?\b/g, "year old"],
+    [/\byrs?\b/g, "year"],
+    [/\byears?\s+old\b/g, "year old"],
+    [/\byear\b(?!\s+old)/g, "year old"],
+    [/\bb\.?i\.?b\.?\b/g, "bottled in bond"],
+    [/\bs\.?i\.?b\.?\b/g, "single barrel"],
+    [/\bcs\b/g, "cask strength"],
+    [/\bst\b\.?/g, "saint"],
+    [/&/g, " and "]
+  ];
+  function normName(text) {
+    let t = stripMarks(text).toLowerCase();
+    t = t.replace(/(\d)\s*(yo|y\.o\.|yr|yrs)\b/g, "$1 $2");
+    for (const [re, rep] of NORM_ABBREV) t = t.replace(re, rep);
+    t = t.replace(/['’`]/g, "");
+    t = t.replace(/\b(?:[a-z]\.)+[a-z]\b\.?/g, (m) => m.replace(/\./g, ""));
+    t = t.replace(/(?<!\d)\.|\.(?!\d)/g, " ");
+    t = t.replace(/[^a-z0-9.%]+/g, " ");
+    t = t.replace(/\b(the|kentucky straight|straight|whiskey|whisky|liqueur)\b/g, " ");
+    t = t.replace(/\byear old year old\b/g, "year old");
+    return t.replace(/\s+/g, " ").trim();
+  }
+  function parseAttrs(text) {
+    const t = stripMarks(text).toLowerCase();
+    const out = {
+      age_years: null, abv: null, proof: null, batch: null,
+      single_barrel: /single\s+barrel|\bsib\b/.test(t),
+      store_pick: /store pick|selected by|private (barrel|selection)/.test(t)
+    };
+    let m = t.match(/\b(\d{1,2})\s*(?:-|\s)?(?:years?\s*old|years?|yrs?|y\.?o\.?)\b/);
+    if (m) out.age_years = parseInt(m[1], 10);
+    m = t.match(/(\d{2}(?:\.\d{1,2})?)\s*%\s*(?:abv|alc|vol)?/);
+    if (m) out.abv = parseFloat(m[1]);
+    m = t.match(/\b(\d{2,3}(?:\.\d)?)\s*proof\b/);
+    if (m) {
+      out.proof = parseFloat(m[1]);
+      if (out.abv === null) out.abv = Math.round((out.proof / 2) * 100) / 100;
+    }
+    m = t.match(/\bbatch\s*(?:no\.?|#)?\s*([a-z]?\d[\w-]*)/) || t.match(/\b([abc]\d{3})\b/);
+    if (m) out.batch = m[1].toUpperCase();
+    return out;
+  }
+  function attrsCompatible(a, b) {
+    if (a.age_years != null && b.age_years != null && a.age_years !== b.age_years) return false;
+    if (a.abv != null && b.abv != null && Math.abs(a.abv - b.abv) > 0.3) return false;
+    if (a.batch && b.batch && a.batch !== b.batch) return false;
+    return true;
+  }
+  const GENERIC_BOTTLE_WORDS = ["single malt scotch", "single malt", "single village", "london dry", "blended scotch",
+    "kentucky", "tennessee", "american", "irish", "canadian", "japanese", "scotch", "bourbon",
+    "gin", "rum", "rhum", "tequila", "vodka", "mezcal", "brandy", "cognac", "amaro", "spirits",
+    "distillery", "distilling", "company", "co", "and", "of"];
+  const GENERIC_BOTTLE_RE = new RegExp("\\b(" + GENERIC_BOTTLE_WORDS.map((g) => g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")\\b", "g");
+  function bottleWords(key) {
+    return new Set(String(key || "").replace(GENERIC_BOTTLE_RE, " ").split(/\s+/).filter(Boolean));
+  }
+  function sameBottle(keyA, keyB) {
+    const a = bottleWords(keyA), b = bottleWords(keyB);
+    return a.size > 0 && a.size === b.size && [...a].every((w) => b.has(w));
+  }
+  // ==== END NORMALIZE ====
+
+  const BT_LOOKUP_LIMIT = 20;   // KEEP IN SYNC with research-bottle DAILY_LOOKUP_LIMIT
+  const BT_FILTERS = [
+    ["all", "All", null], ["whiskey", "Whiskey", ["whiskey", "bourbon", "rye", "scotch"]],
+    ["rum", "Rum", ["rum"]], ["agave", "Agave", ["tequila", "mezcal"]], ["gin", "Gin", ["gin"]],
+    ["liqueur", "Liqueur", ["liqueur"]], ["amaro", "Amaro", ["amaro"]]
+  ];
+  const bottles = { filter: "all", best: new Map(), total: null, owned: new Map(), sources: null };
+  const pendingLookups = new Map();          // lookup id -> what was being looked up
+  let btToken = 0;                           // bumped on close / new action: stale replies are ignored
+  let btScreen = { name: "start", lookupId: null };
+
+  const scoreText = (n) => (n == null ? "" : Number(n).toFixed(1));
+  const CONF_LABEL = { high: "High confidence", medium: "Medium confidence", low: "Low confidence" };
+  const utcDay = () => new Date().toISOString().slice(0, 10);
+
+  function bottlesInvalidate() { bottles.best.clear(); bottles.total = null; }
+
+  // Scores for a handful of bottles (candidates, owned bottles), keyed by product id.
+  async function btScoresFor(ids) {
+    const want = [...new Set(ids.filter(Boolean))];
+    const out = new Map();
+    for (let i = 0; i < want.length; i += 100) {
+      const { data, error } = await supabaseClient.from("spirit_consensus")
+        .select("product_id,canonical_name,category,n_reviews,n_sources,score_10,confidence")
+        .in("product_id", want.slice(i, i + 100));
+      if (error) { console.error("Couldn't load bottle scores:", error.message); continue; }
+      (data || []).forEach((r) => out.set(r.product_id, r));
+    }
+    return out;
+  }
+  async function btSources() {
+    if (bottles.sources) return bottles.sources;
+    const { data } = await supabaseClient.from("rating_sources").select("id,name,scale");
+    bottles.sources = new Map((data || []).map((s) => [s.id, s]));
+    return bottles.sources;
+  }
+  // Bar bottles linked to the catalog get their score beside them in Bar & Pantry.
+  async function loadOwnedScores() {
+    const ids = inventory.filter((i) => i.section === "bar" && i.product_id).map((i) => i.product_id);
+    if (!ids.length) { bottles.owned = new Map(); return; }
+    bottles.owned = await btScoresFor(ids);
+    if (!inventoryPanel.hidden) renderInventoryPanel();
+  }
+  const ownedProduct = (pid) => inventory.some((i) => i.section === "bar" && i.product_id === pid);
+
+  // A bar bottle added by hand gets linked to its catalog entry when the name
+  // is a clear match, so its score shows up without anyone doing anything.
+  async function linkInventoryToCatalog(item) {
+    if (!item || item.section !== "bar" || !item.name || item.product_id) return;
+    const key = normName(item.name);
+    if (!key) return;
+    const { data, error } = await supabaseClient.rpc("spirit_candidates", { q: key, max_results: 5 });
+    if (error || !data) return;
+    const hits = data.filter((c) => Number(c.score) >= 0.99 || sameBottle(key, normName(c.canonical_name)));
+    if (hits.length !== 1) return;
+    const pid = hits[0].product_id;
+    const { error: upErr } = await supabaseClient.from("inventory_items").update({ product_id: pid }).eq("id", item.id);
+    if (upErr) return;
+    item.product_id = pid;
+    loadOwnedScores();
+  }
+
+  // ---- The Bottles view ----
+  function renderBottlesView() {
+    if (!bottlesView.dataset.built) {
+      bottlesView.innerHTML = `
+        <div class="bt-lookup">
+          <button type="button" id="bt-open" class="solid-btn bt-lookup-btn">📷 Look up a bottle</button>
+          <form id="bt-view-search" class="bt-search" role="search">
+            <input id="bt-view-q" class="search" type="search" placeholder="Or type a name — Weller, Lagavulin 16…" aria-label="Bottle name" autocomplete="off">
+            <button type="submit" class="ghost-btn">Search</button>
+          </form>
+        </div>
+        <div class="bt-best-head">
+          <h2 class="bt-best-title">Best rated</h2>
+          <span id="bt-total" class="bt-total"></span>
+        </div>
+        <div class="bt-filter" role="group" aria-label="Category">
+          ${BT_FILTERS.map(([id, label]) => `<button type="button" class="bt-chip" data-bt-filter="${id}" aria-pressed="false">${label}</button>`).join("")}
+        </div>
+        <ul id="bt-best" class="bt-list" aria-live="polite"></ul>
+        <p class="bt-foot">Ranked by score and by how many reviews back it up. Listed: bottles with at least two reviews or a critic's score — any bottle's score shows when you look it up.</p>`;
+      bottlesView.dataset.built = "1";
+    }
+    bottlesView.querySelectorAll("[data-bt-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.btFilter === bottles.filter)));
+    renderBottlesBest();
+  }
+  async function renderBottlesBest() {
+    const listEl2 = $("#bt-best");
+    const totalEl = $("#bt-total");
+    if (!listEl2) return;
+    const filter = bottles.filter;
+    if (!bottles.best.has(filter)) {
+      listEl2.innerHTML = `<li class="bt-empty">Loading…</li>`;
+      const cats = (BT_FILTERS.find((f) => f[0] === filter) || [])[2];
+      // Medium or high confidence only: a bottle known from one competition medal
+      // (half weight) would otherwise tie a well-reviewed bottle, and there are
+      // hundreds of them. They still have a score when looked up, and join the
+      // list once a lookup adds a review.
+      let query = supabaseClient.from("spirit_consensus")
+        .select("product_id,canonical_name,category,n_reviews,n_sources,score_10,confidence,rank_score")
+        .in("confidence", ["medium", "high"])
+        .order("rank_score", { ascending: false }).limit(60);
+      if (cats) query = query.in("category", cats);
+      const { data, error } = await query;
+      if (error) {
+        console.error("Couldn't load the bottle catalog:", error.message);
+        if (filter === bottles.filter) listEl2.innerHTML = `<li class="bt-empty">Couldn’t load the catalog — check your connection and try again.</li>`;
+        return;
+      }
+      bottles.best.set(filter, data || []);
+    }
+    if (bottles.total == null) {
+      const { count } = await supabaseClient.from("spirit_consensus").select("product_id", { count: "exact", head: true });
+      bottles.total = count ?? null;
+    }
+    if (filter !== bottles.filter) return;    // the filter changed while loading
+    if (totalEl) totalEl.textContent = bottles.total != null ? `${bottles.total.toLocaleString()} bottles scored` : "";
+    const rows = bottles.best.get(filter);
+    listEl2.innerHTML = rows.length ? rows.map(btRowHtml).join("")
+      : `<li class="bt-empty">No well-reviewed bottles here yet — look one up to add its reviews.</li>`;
+  }
+  function btRowHtml(r) {
+    const meta = [invCap(r.category || "other"), `${r.n_reviews} review${r.n_reviews === 1 ? "" : "s"}`, `${r.confidence} confidence`].join(" · ");
+    return `<li><button type="button" class="bt-row" data-bt-product="${esc(r.product_id)}">
+      <span class="bt-score" aria-hidden="true">${scoreText(r.score_10)}</span>
+      <span class="bt-row-main"><span class="bt-row-name">${esc(r.canonical_name)}</span><span class="bt-row-meta">${esc(meta)}</span></span>
+      ${ownedProduct(r.product_id) ? `<span class="bt-own">In your bar</span>` : ""}
+      <span class="sr-only">Score ${scoreText(r.score_10)} out of 10</span>
+    </button></li>`;
+  }
+
+  // ---- The lookup sheet ----
+  function openBottlePanel() {
+    if (!session) { toast("Sign in to look up bottles."); return false; }
+    bottlePanel.hidden = false;
+    return true;
+  }
+  function closeBottlePanel() {
+    btToken++;
+    bottlePanel.hidden = true;
+  }
+  function btSet(name, html, extra) {
+    btScreen = { name, lookupId: null, ...(extra || {}) };
+    bottleBody.innerHTML = html;
+  }
+  function btRecent() { return loadLocal("bottleRecent", []).filter((r) => r && r.id && r.name); }
+  function btRemember(id, name) {
+    saveLocal("bottleRecent", [{ id, name }, ...btRecent().filter((r) => r.id !== id)].slice(0, 5));
+  }
+  function renderBtStart(message) {
+    bottleTitle.textContent = "Look up a bottle";
+    const recent = btRecent();
+    btSet("start", `
+      <button type="button" class="bt-photo-target" data-bt="camera">
+        <span class="bt-photo-icon" aria-hidden="true">📷</span>
+        <span class="bt-photo-title">Photograph the label</span>
+        <span class="bt-photo-hint">Front label, straight on, so the name, age and proof can be read.</span>
+      </button>
+      <button type="button" class="ghost-btn bt-wide" data-bt="pick">Choose a photo instead</button>
+      ${message ? `<p class="bt-msg" role="alert">${esc(message)}</p>` : ""}
+      <div class="bt-or"><span>or type it</span></div>
+      <form class="bt-search" data-bt-form>
+        <input class="search" type="search" name="q" placeholder="e.g. Buffalo Trace" aria-label="Bottle name" autocomplete="off" required>
+        <button type="submit" class="solid-btn">Search</button>
+      </form>
+      <p class="bt-note">A photo is read by AI; a typed name is matched for free. Either way, a bottle not checked this week gets a fresh look at its reviews.</p>
+      ${recent.length ? `<h3 class="bt-sub">Recent</h3><ul class="bt-list">${recent.map((r) =>
+        `<li><button type="button" class="bt-row bt-row-compact" data-bt-product="${esc(r.id)}"><span class="bt-row-main"><span class="bt-row-name">${esc(r.name)}</span></span></button></li>`).join("")}</ul>` : ""}`);
+  }
+  function renderBtBusy(text) {
+    btSet("busy", `<div class="bt-busy" role="status"><span class="spinner" aria-hidden="true"></span><span>${esc(text)}</span></div>`);
+  }
+
+  // What we know about the bottle being looked up: the label's facts if it was
+  // photographed, else whatever the typed name says (age, proof, batch).
+  function btWant(ctx) {
+    const p = parseAttrs(ctx.text);
+    const l = ctx.label || {};
+    return { age_years: l.age_years ?? p.age_years, abv: l.abv ?? p.abv, batch: l.batch ?? p.batch };
+  }
+  async function btFromPhoto(file) {
+    if (!file) return;
+    if (!openBottlePanel()) return;
+    const token = ++btToken;
+    renderBtBusy("Reading the label…");
+    let image;
+    try { image = await processImage(file); } catch (e) { renderBtStart(e.message); return; }
+    const { data, error } = await supabaseClient.functions.invoke("identify-bottle", { body: { image, media_type: "image/jpeg" } })
+      .catch((err) => ({ error: err }));
+    if (token !== btToken || bottlePanel.hidden) return;
+    if (error || data?.error || !data?.label) { renderBtStart(aiErrorText(data, error)); return; }
+    btMatch({ text: data.label.full_name, label: data.label, fromPhoto: true }, token);
+  }
+  function btFromText(text) {
+    const q = String(text || "").trim();
+    if (q.length < 2) return;
+    if (bottlePanel.hidden && !openBottlePanel()) return;
+    btMatch({ text: q, label: null, fromPhoto: false }, ++btToken);
+  }
+  async function btMatch(ctx, token) {
+    renderBtBusy("Searching the catalog…");
+    const key = normName(ctx.text);
+    const { data, error } = await supabaseClient.rpc("spirit_candidates", { q: key, max_results: 6 });
+    if (token !== btToken || bottlePanel.hidden) return;
+    if (error) { renderBtStart("Couldn’t search the catalog — check your connection and try again."); return; }
+    const want = btWant(ctx);
+    const cands = (data || []).filter((c) => attrsCompatible(want, { age_years: c.age_years, abv: c.abv != null ? Number(c.abv) : null, batch: c.batch }));
+    const scores = await btScoresFor(cands.map((c) => c.product_id));
+    if (token !== btToken || bottlePanel.hidden) return;
+    ctx.cands = cands.map((c) => ({ ...c, consensus: scores.get(c.product_id) || null }));
+    // Straight to the score card only on a sure match: an exact alias, or the
+    // same distinguishing words ("Elijah Craig Small Batch Bourbon" = "… Small
+    // Batch", but "Reposado" ≠ "Plata").
+    const sure = ctx.cands.filter((c) => Number(c.score) >= 0.99 || sameBottle(key, normName(c.canonical_name)));
+    if (sure.length === 1) { btShowResult(sure[0].product_id, ctx, false, { verify: true }); return; }
+    if (ctx.cands.length) { renderBtMatch(ctx); return; }
+    renderBtLookup(ctx);
+  }
+  function btLabelCard(ctx) {
+    const l = ctx.label;
+    if (!l) return `<div class="bt-label-card"><span class="bt-kicker">You searched</span><span class="bt-label-name">${esc(ctx.text)}</span></div>`;
+    const facts = [invCap(l.category && l.category !== "other" ? l.category : ""), l.country, l.age_years ? `${l.age_years} years` : "",
+      l.abv ? `${scoreText(l.abv).replace(/\.0$/, "")}% ABV` : "", l.batch ? `batch ${l.batch}` : ""].filter(Boolean).join(" · ");
+    return `<div class="bt-label-card"><span class="bt-kicker">The label reads</span><span class="bt-label-name">${esc(l.full_name)}</span>${facts ? `<span class="bt-label-facts">${esc(facts)}</span>` : ""}</div>`;
+  }
+  function renderBtMatch(ctx) {
+    bottleTitle.textContent = "Which one is it?";
+    btSet("match", `
+      ${btLabelCard(ctx)}
+      <ul class="bt-cands">${ctx.cands.map((c, i) => {
+        const s = c.consensus;
+        const meta = s ? `${s.n_reviews} review${s.n_reviews === 1 ? "" : "s"}${ownedProduct(c.product_id) ? " · in your bar" : ""}`
+          : `No scores yet${ownedProduct(c.product_id) ? " · in your bar" : ""}`;
+        return `<li><button type="button" class="bt-cand" data-bt-pick="${i}">
+          <span class="bt-score${s ? "" : " is-none"}" aria-hidden="true">${s ? scoreText(s.score_10) : "–"}</span>
+          <span class="bt-row-main"><span class="bt-row-name">${esc(c.canonical_name)}</span><span class="bt-row-meta">${esc(meta)}</span></span>
+        </button></li>`;
+      }).join("")}</ul>
+      <button type="button" class="ghost-btn bt-wide bt-accent" data-bt="neither">Neither — look this bottle up</button>`, { ctx });
+  }
+
+  // opts.verify: a lookup landed here — show the score now, then check it is
+  // still current (research-bottle, skipped server-side if checked this week).
+  // opts.status: a line to show where the check status goes.
+  async function btShowResult(pid, ctx, picked, opts) {
+    opts = opts || {};
+    const token = btToken;
+    if (picked && ctx) {
+      // The person said which bottle this label is: remember that spelling.
+      const key = normName(ctx.text);
+      if (key) supabaseClient.rpc("spirit_confirm_alias", { p_product: pid, p_alias_norm: key }).then(({ error }) => {
+        if (error) console.error("Couldn't save the label's spelling:", error.message);
+      });
+    }
+    renderBtBusy("Loading the score…");
+    const [prodRes, consRes, revRes, sources] = await Promise.all([
+      supabaseClient.from("spirit_products").select("id,canonical_name,category,producer,country,age_years,abv,researched_at").eq("id", pid).maybeSingle(),
+      supabaseClient.from("spirit_consensus").select("product_id,n_reviews,n_sources,score_10,confidence").eq("product_id", pid).maybeSingle(),
+      supabaseClient.from("spirit_reviews").select("id,source_id,score_raw,score_10,medal,review_year,url,reviewer,origin,verified").eq("product_id", pid),
+      btSources()
+    ]);
+    if (token !== btToken || bottlePanel.hidden) return;
+    const prod = prodRes.data;
+    if (prodRes.error || !prod) { renderBtStart("Couldn’t load that bottle — try again."); return; }
+    btRemember(prod.id, prod.canonical_name);
+    renderBtResult(prod, consRes.data || null, revRes.data || [], sources, ctx, opts);
+    if (opts.verify && consRes.data) btVerify(prod, ctx);
+  }
+  function btAgo(iso) {
+    if (!iso) return "";
+    const days = Math.floor((Date.now() - Date.parse(iso)) / 864e5);
+    if (days <= 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 30) return `${days} days ago`;
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
+  const btShowing = (pid) => !bottlePanel.hidden && btScreen.name === "result" && btScreen.prod && btScreen.prod.id === pid;
+  function btCheckLine(pid, html) {
+    if (!btShowing(pid)) return;
+    const el = $("#bt-check");
+    if (el) el.innerHTML = html;
+  }
+  // The check behind every lookup of a known bottle: are the scores still what
+  // their pages say, and is there anything new? The card updates in place.
+  async function btVerify(prod, ctx) {
+    const pid = prod.id;
+    const name = prod.canonical_name;
+    btCheckLine(pid, `<span class="spinner" aria-hidden="true"></span> Checking for newer reviews…`);
+    const body = { name, product_id: pid, label: (ctx && ctx.label) || {} };
+    const { data, error } = await supabaseClient.functions.invoke("research-bottle", { body }).catch((err) => ({ error: err }));
+    if (error || data?.error) { btCheckLine(pid, `Couldn’t check for newer reviews: ${esc(aiErrorText(data, error))}`); return; }
+    if (data.status === "fresh") { btCheckLine(pid, `Up to date — reviews checked ${esc(btAgo(data.checked_at))}.`); return; }
+    if (data.status !== "running" || !data.lookup_id) { btCheckLine(pid, "Couldn’t check for newer reviews right now."); return; }
+    watchLookup(data.lookup_id, ctx, (row) => {
+      bottlesInvalidate();
+      if (viewMode === "bottles") renderBottlesBest();
+      if (ownedProduct(pid)) loadOwnedScores();
+      const n = row.added || 0;
+      if (row.status !== "found") { btCheckLine(pid, "The check didn’t finish — try again later."); return; }
+      const status = n ? `Updated — ${n} new review${n === 1 ? "" : "s"} found just now.` : "Up to date — checked just now.";
+      if (btShowing(pid)) { btToken++; btShowResult(pid, ctx, false, { status }); }
+      else if (n) toast(`${name}: ${n} new review${n === 1 ? "" : "s"} added.`);
+    });
+  }
+  function btReviewDetail(r, src) {
+    const raw = r.score_raw != null ? Number(r.score_raw) : null;
+    const scale = src ? src.scale : "";
+    let what = r.medal || "";
+    if (!what && raw != null) {
+      if (scale === "drinkhacker" || (scale === "ten" && raw <= 10)) what = `${raw}/10`;
+      else if (scale === "stars5") what = `${raw} of 5 stars`;
+      else if (scale === "barrels5") what = `${raw} of 5 barrels`;
+      else what = `${raw} points`;
+    }
+    return [what, r.review_year].filter(Boolean).join(" · ");
+  }
+  function renderBtResult(prod, cons, reviews, sources, ctx, opts) {
+    opts = opts || {};
+    bottleTitle.textContent = "Expert score";
+    const checkLine = !cons ? (opts.status ? `<p class="bt-check" id="bt-check">${esc(opts.status)}</p>` : "")
+      : opts.status ? `<p class="bt-check" id="bt-check" role="status">${esc(opts.status)}</p>`
+      : opts.verify ? `<p class="bt-check" id="bt-check" role="status"><span class="spinner" aria-hidden="true"></span> Checking for newer reviews…</p>`
+      : `<p class="bt-check" id="bt-check">${prod.researched_at ? `Reviews last checked ${esc(btAgo(prod.researched_at))}.` : "Reviews not checked by a lookup yet."}
+          <button type="button" class="link-inline" data-bt="verify">Check for newer reviews</button></p>`;
+    const facts = [invCap(prod.category && prod.category !== "other" ? prod.category : ""), prod.producer,
+      prod.age_years ? `${prod.age_years} years` : "", prod.abv ? `${Number(prod.abv).toString()}% ABV` : ""].filter(Boolean).join(" · ");
+    const owned = ownedProduct(prod.id);
+    const sorted = reviews.slice().sort((a, b) => (b.review_year || 0) - (a.review_year || 0) || Number(b.score_10) - Number(a.score_10));
+    const anyField = reviews.some((r) => r.origin === "field" && !r.verified);
+    const scoreBlock = cons
+      ? `<div class="bt-scorecard">
+          <span class="bt-big"><span class="bt-big-num">${scoreText(cons.score_10)}</span><span class="bt-big-of">/10</span></span>
+          <span class="bt-score-side">
+            <span class="bt-conf is-${esc(cons.confidence)}">${CONF_LABEL[cons.confidence] || ""}</span>
+            <span class="bt-score-why">${cons.n_reviews} review${cons.n_reviews === 1 ? "" : "s"} from ${cons.n_sources} source${cons.n_sources === 1 ? "" : "s"}.</span>
+          </span>
+        </div>`
+      : `<div class="bt-scorecard is-empty">
+          <span class="bt-score-why"><b>No expert scores yet.</b> A lookup searches critic reviews and competition results and saves what it finds.</span>
+          <button type="button" class="solid-btn bt-wide" data-bt="research-product">Look it up</button>
+        </div>`;
+    btSet("result", `
+      <div class="bt-result-head">
+        <h3 class="bt-result-name">${esc(prod.canonical_name)}</h3>
+        ${facts ? `<span class="bt-result-facts">${esc(facts)}</span>` : ""}
+      </div>
+      ${scoreBlock}
+      ${checkLine}
+      <div class="bt-actions">
+        ${owned ? `<span class="bt-owned">✓ In your bar</span>` : `<button type="button" class="ghost-btn" data-bt="add">＋ Add to my bar</button>`}
+        <button type="button" class="ghost-btn" data-bt="again">Look up another</button>
+      </div>
+      ${sorted.length ? `<h3 class="bt-sub">Where the score comes from</h3>
+      <ul class="bt-sources">${sorted.map((r) => {
+        const src = sources.get(r.source_id);
+        const name = r.source_id.startsWith("other_") && r.reviewer ? r.reviewer : (src ? src.name : r.source_id);
+        const tag = r.origin === "field" && !r.verified ? `<span class="bt-tag" title="Found by an in-app lookup; counts ¾ until confirmed">AI-found</span>` : "";
+        const inner = `<span class="bt-row-main"><span class="bt-src-name">${esc(name)} ${tag}</span><span class="bt-row-meta">${esc(btReviewDetail(r, src))}</span></span>
+          <span class="bt-src-ten">${scoreText(r.score_10)}</span>`;
+        return `<li>${r.url ? `<a class="bt-src" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${inner}<span class="bt-src-go" aria-hidden="true">↗</span></a>` : `<span class="bt-src">${inner}</span>`}</li>`;
+      }).join("")}</ul>
+      <p class="bt-note">Each review is converted to a 10-point scale. Medals count half, and older reviews count less.${anyField ? " AI-found scores count ¾ until they're confirmed." : ""}</p>` : ""}
+      <button type="button" class="link-inline bt-report" data-bt="report">Wrong bottle?</button>`, { prod, ctx });
+  }
+
+  async function btLookupsLeft() {
+    const { data, error } = await supabaseClient.from("bottle_usage").select("count").eq("kind", "lookup").eq("usage_date", utcDay()).maybeSingle();
+    if (error) return null;
+    return Math.max(0, BT_LOOKUP_LIMIT - (data ? data.count : 0));
+  }
+  async function renderBtLookup(ctx, message, productId) {
+    bottleTitle.textContent = "Not in the catalog yet";
+    const name = ctx.label ? ctx.label.full_name : ctx.text;
+    btSet("lookup", `
+      ${btLabelCard(ctx)}
+      <div class="bt-lookup-card">
+        <b>Not in the catalog yet</b>
+        <span>A lookup searches critic reviews and competition results, keeps only what it can link to, and saves it, so this bottle is instant next time.</span>
+        <button type="button" class="solid-btn bt-wide bt-tall" data-bt="research">Look it up</button>
+        <span class="bt-note bt-center" id="bt-left">Takes about 20–30 seconds</span>
+      </div>
+      ${message ? `<p class="bt-msg" role="alert">${esc(message)}</p>` : ""}
+      <button type="button" class="ghost-btn bt-wide" data-bt="add-unscored">Add “${esc(name)}” to my bar without a score</button>`, { ctx, productId: productId || null });
+    const left = await btLookupsLeft();
+    const el = $("#bt-left");
+    if (el && left != null && btScreen.name === "lookup") {
+      el.textContent = `Takes about 20–30 seconds · ${left} of ${BT_LOOKUP_LIMIT} lookups left today`;
+    }
+  }
+  function renderBtResearching(ctx, lookupId) {
+    bottleTitle.textContent = "Looking it up";
+    btSet("researching", `
+      ${btLabelCard(ctx)}
+      <div class="bt-busy bt-researching" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <span><b>Searching critics, then competition results, then the producer…</b><br>Usually 20–30 seconds.</span>
+      </div>
+      <p class="bt-note">You can close this — the lookup keeps going, and the score will be waiting under Bottles.</p>`, { ctx, lookupId });
+  }
+  function renderBtNone(ctx) {
+    bottleTitle.textContent = "No expert scores found";
+    const name = ctx.label ? ctx.label.full_name : ctx.text;
+    btSet("none", `
+      ${btLabelCard(ctx)}
+      <div class="bt-lookup-card">
+        <b>No expert scores found for this one</b>
+        <span>Nothing turned up that could be linked to a critic’s or competition’s own page. That’s common for new, local or store-only bottles.</span>
+      </div>
+      <button type="button" class="ghost-btn bt-wide" data-bt="add-unscored">Add “${esc(name)}” to my bar without a score</button>
+      <button type="button" class="ghost-btn bt-wide" data-bt="again">Look up another</button>`, { ctx });
+  }
+  async function btResearch(ctx, productId) {
+    const token = ++btToken;
+    renderBtResearching(ctx, null);
+    const body = { name: ctx.label ? ctx.label.full_name : ctx.text, label: ctx.label || {} };
+    if (productId) body.product_id = productId;
+    const { data, error } = await supabaseClient.functions.invoke("research-bottle", { body }).catch((err) => ({ error: err }));
+    // Closing the sheet (or starting something else) doesn't cancel a lookup —
+    // it's already paid for and running server-side — so a running one is
+    // always watched, and a finished one reported by toast if nobody's looking.
+    const here = token === btToken && !bottlePanel.hidden;
+    const name = ctx.label ? ctx.label.full_name : ctx.text;
+    if (error || data?.error) {
+      if (here) renderBtLookup(ctx, aiErrorText(data, error), productId); else toast(aiErrorText(data, error), true);
+      return;
+    }
+    if (data.status === "running" && data.lookup_id) {
+      if (here) btScreen.lookupId = data.lookup_id;
+      watchLookup(data.lookup_id, ctx);
+      return;
+    }
+    if (data.status === "found") {
+      bottlesInvalidate();
+      if (here) btShowResult(data.product_id, ctx, false, { status: "Looked up just now." });
+      else toastAction(`${name}: expert scores found`, "View", () => { if (openBottlePanel()) { btToken++; btShowResult(data.product_id, ctx, false); } });
+      return;
+    }
+    if (data.status === "fresh") {
+      if (here) btShowResult(data.product_id, ctx, false, { status: `Up to date — reviews checked ${btAgo(data.checked_at)}.` });
+      return;
+    }
+    if (data.status === "none") { if (here) renderBtNone(ctx); else toast(`${name}: no expert scores found.`); return; }
+    if (here) renderBtLookup(ctx, "That didn’t go through — try again.", productId);
+  }
+  // Polls the lookup row; keeps going after the sheet closes and reports by toast.
+  // onDone(row), when given, decides what the ending looks like (the check of a
+  // known bottle); otherwise it's a first lookup and lands on its score card.
+  function watchLookup(id, ctx, onDone) {
+    if (pendingLookups.has(id)) return;
+    pendingLookups.set(id, ctx);
+    const started = Date.now();
+    const showing = () => !bottlePanel.hidden && btScreen.name === "researching" && btScreen.lookupId === id;
+    const tick = async () => {
+      const { data } = await supabaseClient.from("spirit_lookups").select("status,product_id,added").eq("id", id).maybeSingle();
+      const st = data ? data.status : "running";
+      if (st === "running") {
+        if (Date.now() - started < 240_000) { setTimeout(tick, 3000); return; }
+        pendingLookups.delete(id);
+        if (onDone) onDone({ status: "timeout" });
+        else if (showing()) renderBtLookup(ctx, "That lookup is taking too long — try again in a few minutes.");
+        return;
+      }
+      pendingLookups.delete(id);
+      if (onDone) { onDone(data); return; }
+      bottlesInvalidate();
+      if (viewMode === "bottles") renderBottlesBest();
+      const name = ctx.label ? ctx.label.full_name : ctx.text;
+      if (st === "found" && data.product_id) {
+        if (showing()) { btToken++; btShowResult(data.product_id, ctx, false, { status: "Looked up just now." }); }
+        else toastAction(`${name}: expert scores found`, "View", () => { if (openBottlePanel()) { btToken++; btShowResult(data.product_id, ctx, false); } });
+      } else if (st === "none") {
+        if (showing()) renderBtNone(ctx); else toast(`${name}: no expert scores found.`);
+      } else if (showing()) {
+        renderBtLookup(ctx, "The lookup didn’t finish — try again.");
+      } else {
+        toast(`${name}: the lookup didn’t finish — try again.`, true);
+      }
+    };
+    setTimeout(tick, 4000);
+  }
+
+  async function btAddToBar(name, category, productId) {
+    const cat = BAR_CATEGORIES.includes(category) ? category : "other";
+    const added = await addInventoryItem({ section: "bar", category: cat, name, status: "in", product_id: productId || null });
+    if (!added) return false;
+    toast(`Added ${name} to your bar`);
+    return true;
+  }
+  async function btReport(prod) {
+    const { error } = await supabaseClient.from("spirit_reports").insert({ product_id: prod.id, kind: "wrong_bottle" });
+    if (error) { toastError("Couldn’t send that", error); return; }
+    toast("Thanks — flagged for a fix.");
+  }
+
+  bottleBody.addEventListener("click", async (e) => {
+    const act = e.target.closest("[data-bt]");
+    const productBtn = e.target.closest("[data-bt-product]");
+    const pickBtn = e.target.closest("[data-bt-pick]");
+    if (productBtn) { btToken++; btShowResult(productBtn.dataset.btProduct, null, false); return; }
+    if (pickBtn && btScreen.ctx) { const c = btScreen.ctx.cands[Number(pickBtn.dataset.btPick)]; if (c) { btToken++; btShowResult(c.product_id, btScreen.ctx, true, { verify: true }); } return; }
+    if (!act) return;
+    const what = act.dataset.bt;
+    if (what === "camera") { btPhotoCamera.value = ""; btPhotoCamera.click(); return; }
+    if (what === "pick") { btPhotoPick.value = ""; btPhotoPick.click(); return; }
+    if (what === "again") { btToken++; renderBtStart(); return; }
+    if (what === "neither" && btScreen.ctx) { renderBtLookup(btScreen.ctx); return; }
+    if (what === "research" && btScreen.ctx) { btResearch(btScreen.ctx, btScreen.productId); return; }
+    if (what === "research-product" && btScreen.prod) {
+      const p = btScreen.prod;
+      btResearch(btScreen.ctx || { text: p.canonical_name, label: null }, p.id);
+      return;
+    }
+    if (what === "add" && btScreen.prod) {
+      act.disabled = true;
+      if (await btAddToBar(btScreen.prod.canonical_name, btScreen.prod.category, btScreen.prod.id)) {
+        act.outerHTML = `<span class="bt-owned">✓ In your bar</span>`;
+        loadOwnedScores();
+      } else act.disabled = false;
+      return;
+    }
+    if (what === "add-unscored" && btScreen.ctx) {
+      const ctx = btScreen.ctx;
+      const name = ctx.label ? ctx.label.full_name : ctx.text;
+      act.disabled = true;
+      if (await btAddToBar(name, ctx.label ? ctx.label.category : "other", btScreen.productId)) act.textContent = "✓ Added to your bar";
+      else act.disabled = false;
+      return;
+    }
+    if (what === "report" && btScreen.prod) { act.disabled = true; btReport(btScreen.prod); return; }
+    if (what === "verify" && btScreen.prod) { btVerify(btScreen.prod, btScreen.ctx); }
+  });
+  bottleBody.addEventListener("submit", (e) => {
+    const form = e.target.closest("[data-bt-form]");
+    if (!form) return;
+    e.preventDefault();
+    btFromText(form.elements.q.value);
+  });
+  btPhotoCamera.addEventListener("change", () => btFromPhoto(btPhotoCamera.files[0]));
+  btPhotoPick.addEventListener("change", () => btFromPhoto(btPhotoPick.files[0]));
+  closeBottleBtn.addEventListener("click", closeBottlePanel);
+  bottlePanel.addEventListener("click", (e) => { if (e.target === bottlePanel) closeBottlePanel(); });
+  bottlesView.addEventListener("click", (e) => {
+    if (e.target.closest("#bt-open")) { if (openBottlePanel()) { btToken++; renderBtStart(); } return; }
+    const f = e.target.closest("[data-bt-filter]");
+    if (f) { bottles.filter = f.dataset.btFilter; renderBottlesView(); return; }
+    const row = e.target.closest("[data-bt-product]");
+    if (row && openBottlePanel()) { btToken++; btShowResult(row.dataset.btProduct, null, false); }
+  });
+  bottlesView.addEventListener("submit", (e) => {
+    if (!e.target.closest("#bt-view-search")) return;
+    e.preventDefault();
+    const input = $("#bt-view-q");
+    if (input && input.value.trim().length >= 2) btFromText(input.value);
+  });
+  modeBottlesBtn.addEventListener("click", () => setViewMode("bottles"));
 
   setAuthMode("signin"); // default the gate to sign-in
 
@@ -3446,18 +4109,24 @@
   // something in it. Staging a recipe (\ud83d\udcc5 on any row, or "Stage for plan" in
   // the open detail) brings it straight back, and the "N recipes staged" pill
   // under the list is the other way in.
+  // On the Bar tab the row is always there, for Bottles; Meal plan within it
+  // still only shows once something is planned.
   function syncModeTabs(hasPlan) {
     if (!modeTabsEl) return;
-    modeTabsEl.hidden = !hasPlan && viewMode === "recipes";
+    const bar = section === "cocktails";
+    modeBottlesBtn.hidden = !bar;
+    modeMealplanBtn.hidden = !hasPlan && viewMode !== "mealplan";
+    modeTabsEl.hidden = !bar && !hasPlan && viewMode === "recipes";
   }
 
   function setViewMode(mode) {
+    if (mode === "bottles" && section !== "cocktails") mode = "recipes";
     viewMode = mode;
     const recipes = mode === "recipes";
-    modeRecipesBtn.classList.toggle("is-active", recipes);
-    modeMealplanBtn.classList.toggle("is-active", !recipes);
-    modeRecipesBtn.setAttribute("aria-selected", String(recipes));
-    modeMealplanBtn.setAttribute("aria-selected", String(!recipes));
+    [[modeRecipesBtn, "recipes"], [modeMealplanBtn, "mealplan"], [modeBottlesBtn, "bottles"]].forEach(([btn, m]) => {
+      btn.classList.toggle("is-active", mode === m);
+      btn.setAttribute("aria-selected", String(mode === m));
+    });
     recipesControlsEl.hidden = !recipes;
     // The sticky search bar is full-bleed, so it sits outside #recipes-controls
     // and has to be hidden on its own.
@@ -3466,10 +4135,15 @@
     resultRowEl.hidden = !recipes;
     if (!recipes) pickHintEl.hidden = true;
     else pickHintEl.hidden = seenPickHint || currentItems().length === 0;
-    mealPlanView.hidden = recipes;
-    if (!recipes) {
+    mealPlanView.hidden = mode !== "mealplan";
+    bottlesView.hidden = mode !== "bottles";
+    if (mode === "mealplan") {
       if (!session) { toast("Sign in to plan meals."); setViewMode("recipes"); return; }
       loadMealPlan().then(() => renderMealPlan());
+    }
+    if (mode === "bottles") {
+      if (!session) { toast("Sign in to look up bottles."); setViewMode("recipes"); return; }
+      renderBottlesView();
     }
     // Never hide the tabs while the planner is the thing on screen.
     syncModeTabs(mealPlan.length > 0 || mealPlanTray.size > 0);
@@ -5274,6 +5948,7 @@
     const it = byId[id];
     if (!it) return;
     section = it.section === "bar" ? "cocktails" : "recipes";
+    if (viewMode === "bottles") setViewMode("recipes");
     document.querySelectorAll(".tab").forEach((b) => {
       const on = b.dataset.section === section;
       b.classList.toggle("is-active", on);
@@ -5381,6 +6056,7 @@
       });
       document.body.classList.toggle("section-cocktails", section === "cocktails");
       activeTags.clear();
+      if (viewMode === "bottles" && section !== "cocktails") setViewMode("recipes");
       refreshViews();
     });
   });
@@ -6809,6 +7485,7 @@
   // closed the grocery panel *underneath* and left the sheet up.
   registerSheet(pairPanel, closePairPanel);
   registerSheet(krogerPanel, closeKrogerPanel);
+  registerSheet(bottlePanel, closeBottlePanel);
 
   const sheetObserver = new MutationObserver((records) => {
     records.forEach((r) => {

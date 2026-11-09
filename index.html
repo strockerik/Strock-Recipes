@@ -102,6 +102,7 @@
 
     <nav class="mode-tabs" role="tablist" aria-label="View">
       <button id="mode-recipes" class="mode-tab is-active" role="tab" aria-selected="true">Recipes</button>
+      <button id="mode-bottles" class="mode-tab" role="tab" aria-selected="false" hidden>🥃 Bottles</button>
       <button id="mode-mealplan" class="mode-tab" role="tab" aria-selected="false">
         📅 Meal plan <span id="mealplan-count" class="mode-tab-badge" hidden></span>
       </button>
@@ -181,6 +182,10 @@
     <p id="empty-state" class="empty-state" hidden></p>
 
     <section id="meal-plan-view" class="meal-plan-view" hidden aria-label="Weekly meal plan"></section>
+
+    <!-- Bar tab → Bottles: look a bottle up (label photo or name) and the ranked
+         catalog. Rendered by renderBottlesView(); README "Bottles". -->
+    <section id="bottles-view" class="bottles-view" hidden aria-label="Bottles"></section>
 
   </main>
 
@@ -442,11 +447,24 @@
             <li><b>🛒 Restock</b> sends an out-of-stock item to your grocery list</li>
             <li><b>Keeps your shopping honest</b> — what's in stock is set aside on the grocery list and left out of your King Soopers cart</li>
             <li><b>Set dietary preferences</b> once and the generator honors them</li>
+            <li><b>Expert scores</b> sit beside the bottles on your bar — tap one to see where it comes from</li>
           </ul>
         </section>
 
         <section class="guide-feature">
-          <p class="guide-kicker">07 — Ask AI</p>
+          <p class="guide-kicker">07 — Bottles</p>
+          <h2 class="guide-h2">What the experts think, in the store aisle</h2>
+          <p class="guide-p">On the <b>Bar</b> tab, open <b>🥃 Bottles</b> and tap <b>Look up a bottle</b>: photograph the label (or type the name) and see its expert score out of 10, how sure that score is, and every review and medal behind it with a link to each.</p>
+          <ul class="guide-pts">
+            <li><b>Best rated</b> ranks every scored bottle in the catalog, by category</li>
+            <li><b>Not in the catalog yet?</b> <b>Look it up</b> searches critic reviews and competition results (about 20 seconds) and saves what it finds for everyone</li>
+            <li><b>Add to my bar</b> straight from the score card</li>
+            <li><b>Wrong bottle?</b> flags a bad match so it gets fixed</li>
+          </ul>
+        </section>
+
+        <section class="guide-feature">
+          <p class="guide-kicker">08 — Ask AI</p>
           <h2 class="guide-h2">A cooking coach for every recipe</h2>
           <p class="guide-p">Open any recipe and tap <b>✨ Ask AI</b> to talk it through. It's a real back-and-forth chat with two modes — reply and keep going until it clicks.</p>
           <ul class="guide-pts">
@@ -736,6 +754,20 @@
       </div>
     </div>
   </div>
+
+  <!-- Look up a bottle: photo/name → match → score card, or a web lookup. One
+       sheet, its screens rendered into #bottle-body by the bt* functions. -->
+  <div id="bottle-panel" class="grocery-panel bottle-panel" role="dialog" aria-modal="true" aria-labelledby="bottle-title" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title" id="bottle-title">Look up a bottle</h2>
+        <button id="close-bottle" class="ghost-btn small" aria-label="Close bottle lookup">Close</button>
+      </div>
+      <div id="bottle-body" class="bottle-body" aria-live="polite"></div>
+    </div>
+  </div>
+  <input type="file" id="bt-photo-camera" accept="image/*" capture="environment" hidden>
+  <input type="file" id="bt-photo-pick" accept="image/*" hidden>
 
   <div id="pair-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Pair a drink" hidden>
     <div class="grocery-panel-inner wrap">

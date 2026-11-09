@@ -50,7 +50,10 @@ sw.js                                   service worker: opens offline with your 
 vendor/supabase-<ver>.min.js            supabase-js UMD build, vendored (no CDN at runtime)
 supabase/functions/extract-recipe/      Edge Function source (Deno/TS) for AI extraction
 supabase/functions/recipe-coach/        Edge Function source (Deno/TS) for the AI recipe coach
+supabase/functions/identify-bottle/     Edge Function: reads a bottle label photo (Bottles)
+supabase/functions/research-bottle/     Edge Function: looks a bottle's scores up on the web, grows the catalog
 data/recipes.js, data/cocktails.js      pre-migration backup of the original static data (unused)
+scripts/ratings/                        spirits ratings catalog builder (see Spirits ratings catalog)
 testing-skills/*.py                     headless Chrome harnesses (no backend, no spend)
 ```
 
@@ -535,6 +538,543 @@ update public.inventory_items set status = 'out' where status = 'low';
 alter table public.inventory_items drop constraint if exists inventory_items_status_check;
 alter table public.inventory_items add constraint inventory_items_status_check check (status in ('in','out'));
 ```
+
+## Spirits ratings catalog
+
+The groundwork for scanning a bottle and seeing what the experts think of it
+(like Distiller or Vivino). The app never queries review sites live: a
+catalog of bottles and their expert scores lives in Supabase, built up over
+time from your Mac with `scripts/ratings/ratings.py`, and the
+`spirit_consensus` view blends each bottle's scores into one **0–10 score in
+0.5 steps**.
+
+**How a score is built.** Each source's raw score is converted to 0–10 through
+that source's own anchor table in `scripts/ratings/normalize.py`, because
+published spirits scores sit almost entirely in 80–97 (dividing by ten would
+squash everything into 8–9.7). IWSC 95 (Gold) → 8.0; a critic's 92 → 8.0.
+The view then takes an age-weighted average; how far to trust it is the
+`confidence` label's job, not the score's:
+
+```
+score_10   = Σ weight·score / Σ weight                     shown rounded to 0.5
+rank_score = (Σ weight·score + 1·7.0) / (Σ weight + 1)     sorting "best bottles" only
+weights:  critic/panel with points 1.0 · competition with points 0.8
+          medal only 0.5 · Jim Murray 0.7 — each halved for every 10 years of age
+```
+
+`rank_score` pulls toward 7.0 as if it were one extra review, so a single old
+rave doesn't top a list. It used to be the displayed score, but with mostly one
+or two older reviews per bottle it squeezed every bottle into 7.0–8.0 (changed
+2026-11-08).
+
+`confidence` is **high** with total weight ≥ 2.5 from at least two sources,
+**medium** at ≥ 1, otherwise **low**. What's stored per review is facts — score,
+medal, year, reviewer, link — never review prose (`excerpt` is capped at 120
+characters and only for a short attributed phrase). Distiller's and
+Tastings.com's (BTI) terms forbid scraping and building databases from them, so
+those go in by hand with `ratings.py score`. IWSC does too, for a different
+reason: its results are public, but every scripted request (robots.txt
+included) gets a Cloudflare bot challenge (checked 2026-11-08), and the script
+doesn't try to get past that.
+
+**One-time setup (Supabase SQL editor)** — run once:
+
+```sql
+create extension if not exists pg_trgm with schema extensions;
+set search_path = public, extensions;   -- so the trigram indexes find gin_trgm_ops
+
+-- Where scores come from. scale = which anchor table in scripts/ratings/normalize.py.
+create table public.rating_sources (
+  id text primary key,
+  name text not null,
+  kind text not null check (kind in ('critic','panel','competition','community','aggregator')),
+  scale text not null,
+  default_weight numeric(3,2) not null,
+  scrape_ok boolean not null default false,
+  homepage text,
+  tos_notes text
+);
+insert into public.rating_sources (id, name, kind, scale, default_weight, scrape_ok, homepage, tos_notes) values
+ ('iwsc','IWSC','competition','iwsc',0.8,false,'https://www.iwsc.net','Public results, but scripts get a Cloudflare challenge: manual entry. Store medal, points, year and link; not judges'' notes.'),
+ ('sfwsc','San Francisco World Spirits Competition','competition','sfwsc',0.5,true,'https://thetastingalliance.com','Medal results are public facts.'),
+ ('whisky_advocate','Whisky Advocate','critic','critic100',1.0,false,'https://whiskyadvocate.com','Check robots.txt and terms before automating; manual entry until then.'),
+ ('wine_enthusiast','Wine Enthusiast','critic','wine_enthusiast',1.0,false,'https://www.wineenthusiast.com','Check terms before automating; manual entry until then.'),
+ ('distiller','Distiller (expert score)','critic','critic100',1.0,false,'https://distiller.com','Terms ban scraping and database building: manual entry only.'),
+ ('bti','Beverage Testing Institute (Tastings.com)','panel','critic100',1.0,false,'https://www.tastings.com','Terms ban scraping and aggregation: manual entry only.'),
+ ('usc','Ultimate Spirits Challenge','panel','critic100',0.8,false,null,'Defunct since 2023; historic scores only.'),
+ ('murray','Jim Murray''s Whisky Bible','critic','murray',0.7,false,null,'Print/ebook: manual entry.'),
+ ('tequila_matchmaker','Tequila Matchmaker (panel score)','panel','tequila_matchmaker',0.8,false,'https://www.tequilamatchmaker.com','Check terms; manual entry until then.'),
+ ('breaking_bourbon','Breaking Bourbon','critic','barrels5',1.0,false,'https://www.breakingbourbon.com','Check terms; manual entry until then.'),
+ ('whiskey_wash','The Whiskey Wash','critic','ten',0.8,false,'https://thewhiskeywash.com','Current 1-10 scale; older reviews used 5 stars or 100 points.'),
+ ('whiskycast','WhiskyCast','critic','critic100',1.0,false,'https://whiskycast.com','Public ratings pages; manual entry.'),
+ ('drinkhacker','Drinkhacker','critic','drinkhacker',1.0,false,'https://www.drinkhacker.com','x/10 with a letter grade (A 9.5, A- 9.0, B+ 8.5, B 8.0); manual entry.'),
+ ('spirit_journal','F. Paul Pacult''s Spirit Journal','critic','stars5',1.0,false,null,'Print newsletter, 1-5 stars; manual entry.'),
+ ('bartender_spirits_awards','Bartender Spirits Awards','competition','critic100',0.5,false,'https://bartenderspiritsawards.com','Results pages give medal and points.'),
+ ('spirits_masters','The Spirits Business Masters','competition','medal',0.5,false,'https://www.thespiritsbusiness.com','Medal-only results articles.'),
+ ('independent','Independent reviewer','critic','critic100',0.5,false,null,'A blog or newsletter''s own 100-point score; reviewer = the publication.')
+on conflict (id) do nothing;
+
+-- The catalog: one row per distinct bottle. Batches and store picks are their own
+-- rows with parent_id pointing at the base expression.
+create table public.spirit_products (
+  id uuid primary key default gen_random_uuid(),
+  canonical_name text not null,
+  name_norm text not null,             -- match key from normalize.norm_name()
+  brand text,
+  producer text,
+  category text,                       -- the app's BAR_CATEGORIES (bourbon, scotch, tequila, ...)
+  country text,
+  region text,
+  age_years int,
+  abv numeric(5,2),
+  batch text,
+  release_year int,
+  cask_finish text,
+  is_single_barrel boolean not null default false,
+  is_store_pick boolean not null default false,
+  pick_name text,
+  parent_id uuid references public.spirit_products(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create unique index spirit_products_identity
+  on public.spirit_products (name_norm, coalesce(batch, ''), coalesce(pick_name, ''));
+create index spirit_products_trgm on public.spirit_products using gin (name_norm gin_trgm_ops);
+
+-- Every spelling of a bottle seen in any source, so the next match is instant.
+create table public.spirit_aliases (
+  alias_norm text primary key,
+  product_id uuid not null references public.spirit_products(id) on delete cascade,
+  source_id text references public.rating_sources(id),
+  created_at timestamptz not null default now()
+);
+create index spirit_aliases_trgm on public.spirit_aliases using gin (alias_norm gin_trgm_ops);
+
+create table public.spirit_barcodes (
+  gtin text primary key,               -- UPC/EAN digits
+  product_id uuid not null references public.spirit_products(id) on delete cascade,
+  source text,
+  created_at timestamptz not null default now()
+);
+
+-- One row per score from one source. product_id null = waiting in the match queue.
+create table public.spirit_reviews (
+  id uuid primary key default gen_random_uuid(),
+  source_id text not null references public.rating_sources(id),
+  source_ref text not null,            -- the source's own id or URL (dedupe key)
+  product_id uuid references public.spirit_products(id) on delete set null,
+  source_name text not null,           -- the bottle's name exactly as the source printed it
+  source_producer text,
+  url text,
+  review_year int,
+  reviewer text,
+  medal text,
+  score_raw numeric,
+  score_10 numeric(4,2),               -- normalized, unrounded
+  weight numeric(3,2) not null,
+  descriptors jsonb,                   -- AI-extracted tasting descriptors (never review prose)
+  excerpt text check (excerpt is null or length(excerpt) <= 120),
+  match_status text not null default 'pending'
+    check (match_status in ('auto','confirmed','pending','rejected')),
+  match_score numeric(4,3),
+  fetched_at timestamptz not null default now(),
+  unique (source_id, source_ref)
+);
+create index spirit_reviews_product on public.spirit_reviews (product_id) where product_id is not null;
+create index spirit_reviews_pending on public.spirit_reviews (fetched_at) where match_status = 'pending';
+
+-- The "what the experts say" paragraph, regenerated only when a bottle gains a source.
+create table public.spirit_summaries (
+  product_id uuid primary key references public.spirit_products(id) on delete cascade,
+  summary_text text not null,
+  review_ids uuid[] not null,
+  model text,
+  updated_at timestamptz not null default now()
+);
+
+-- Scans that found no bottle; ratings.py works through these on its next run.
+create table public.spirit_lookup_queue (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  query text not null check (length(query) between 2 and 200),
+  product_id uuid references public.spirit_products(id) on delete cascade,
+  status text not null default 'open' check (status in ('open','done','no_results')),
+  created_at timestamptz not null default now()
+);
+
+-- Link a bottle in your bar to its catalog entry.
+alter table public.inventory_items
+  add column if not exists product_id uuid references public.spirit_products(id) on delete set null;
+
+-- RLS: the catalog is shared reference data. Signed-in users read it; only the
+-- secret key (ratings.py) writes. The lookup queue is per user.
+alter table public.rating_sources      enable row level security;
+alter table public.spirit_products     enable row level security;
+alter table public.spirit_aliases      enable row level security;
+alter table public.spirit_barcodes     enable row level security;
+alter table public.spirit_reviews      enable row level security;
+alter table public.spirit_summaries    enable row level security;
+alter table public.spirit_lookup_queue enable row level security;
+create policy "signed-in read" on public.rating_sources   for select to authenticated using (true);
+create policy "signed-in read" on public.spirit_products  for select to authenticated using (true);
+create policy "signed-in read" on public.spirit_aliases   for select to authenticated using (true);
+create policy "signed-in read" on public.spirit_barcodes  for select to authenticated using (true);
+create policy "signed-in read" on public.spirit_summaries for select to authenticated using (true);
+create policy "signed-in read matched" on public.spirit_reviews for select to authenticated
+  using (match_status in ('auto','confirmed'));
+create policy "users add lookups" on public.spirit_lookup_queue for insert to authenticated
+  with check (user_id = auth.uid());
+create policy "users see their lookups" on public.spirit_lookup_queue for select to authenticated
+  using (user_id = auth.uid());
+
+-- Bottles that look like q (a normalize.norm_name() key), best first.
+create or replace function public.spirit_candidates(q text, max_results int default 5)
+returns table (product_id uuid, canonical_name text, category text, age_years int,
+               abv numeric, batch text, score real)
+language sql stable set search_path = public, extensions as $$
+  select p.id, p.canonical_name, p.category, p.age_years, p.abv, p.batch, max(x.sim)
+  from (
+    select id as pid, similarity(name_norm, q) as sim from public.spirit_products
+     where similarity(name_norm, q) > 0.2
+    union all
+    select product_id, similarity(alias_norm, q) from public.spirit_aliases
+     where similarity(alias_norm, q) > 0.2
+  ) x
+  join public.spirit_products p on p.id = x.pid
+  group by p.id
+  order by max(x.sim) desc
+  limit least(greatest(max_results, 1), 20);
+$$;
+
+-- One blended score per bottle (formula above). security_invoker so RLS applies.
+create or replace view public.spirit_consensus with (security_invoker = true) as
+with w as (
+  select r.product_id, r.source_id, r.score_10,
+         r.weight * power(0.5, greatest(0, extract(year from now())::int
+                                            - coalesce(r.review_year, extract(year from now())::int)) / 10.0) as w
+  from public.spirit_reviews r
+  where r.product_id is not null and r.score_10 is not null
+    and r.match_status in ('auto','confirmed')
+)
+select p.id as product_id,
+       p.canonical_name,
+       p.category,
+       count(*) as n_reviews,
+       count(distinct w.source_id) as n_sources,
+       round(sum(w.w * w.score_10) / sum(w.w), 2) as score_exact,
+       floor((sum(w.w * w.score_10) / sum(w.w)) * 2 + 0.5) / 2 as score_10,
+       case when sum(w.w) >= 2.5 and count(distinct w.source_id) >= 2 then 'high'
+            when sum(w.w) >= 1 then 'medium' else 'low' end as confidence,
+       round((sum(w.w * w.score_10) + 7.0) / (sum(w.w) + 1), 2) as rank_score
+from w join public.spirit_products p on p.id = w.product_id
+group by p.id, p.canonical_name, p.category;
+```
+
+**Building it, from your Mac.** Every writing command is a dry run until you add
+`--apply`. Credentials come from the environment, `notes.md` or `.env.local`
+(the secret / service-role key — it bypasses RLS, local use only).
+
+```bash
+cd scripts/ratings
+python3 ratings.py seed --apply                       # catalog every named bottle in your bar
+python3 ratings.py product "Weller Full Proof" --category bourbon --apply
+python3 ratings.py score "Knob Creek 12" --source iwsc --raw 95 --year 2022 \
+    --url https://www.iwsc.net/results/detail/120667 --apply   # a result you looked up
+python3 ratings.py score "Knob Creek 9" --source distiller --raw 88 --year 2025 --apply
+python3 ratings.py score "Wyoming Whiskey" --source whiskey_wash --scale critic100 --raw 86 --year 2015 --apply
+python3 ratings.py show                               # consensus scores, best first
+bash first_scores.sh --apply                          # every score found so far, with its source link
+```
+
+`score` needs the bottle in the catalog first (`seed` or `product`). `--scale`
+overrides the source's scale for one review, for a source that changed scales
+(The Whiskey Wash's older reviews are out of 100). `first_scores.sh` is the
+record of what was looked up: only the critic's own review page, the
+competition's own results, or the brand's own awards list count, never a
+retailer, and never a site whose robots.txt keeps scripts or AI agents out. For an
+IWSC result with no points, use `--medal "Silver Outstanding"` instead of
+`--raw`. Packaging, design and highball awards don't count; they're not about
+what's in the bottle.
+
+**The automated collector (`iwsc`, `inspect`, `review`) is parked.** It was
+written for IWSC, which now blocks scripts, so `iwsc` stops with an explanation
+before touching Supabase. The fetch code is kept for a future source that
+allows it. It follows robots.txt (401/403 or an unreachable file means keep
+out), waits 4 s between requests, and caches pages in `scripts/ratings/cache/`
+(gitignored) for 30 days. It links a result to a bottle automatically only on
+a clear name match (similarity ≥ 0.55 with a 0.10 lead) where age, ABV and
+batch don't conflict; everything else waits for `review`.
+`testing-skills/ratings_normalize_test.py` pins the conversions, name matching,
+the IWSC parser (synthetic pages, never checked against real ones) and the
+robots rules, all offline.
+
+### Bottles: looking a bottle up in the app
+
+On the **Bar** tab, **Bottles** sits next to Recipes. It has a **Look up a
+bottle** button (photograph the label, or type a name) and a **Best rated**
+list of every scored bottle in the catalog, filterable by category. A lookup
+lands on one of three screens:
+
+- **One clear match** → the score card: the 0–10 score, its confidence, and
+  every review behind it with a link to the page it came from. *Add to my bar*
+  (or *In your bar*), and *Wrong bottle?* to report a bad match.
+- **Several close matches** → *Which one is it?* (the label's age, proof and
+  batch already rule out the impossible ones). Picking one teaches the catalog
+  that label's wording, so the next scan of it is instant.
+- **Not in the catalog** → *Look it up*: the `research-bottle` function searches
+  critic reviews and competition results on the web and saves what it can cite.
+  About 20–30 seconds; it keeps going if the sheet is closed, and a toast says
+  when it's done.
+
+**A known bottle is re-checked too.** A lookup that lands on a bottle already in
+the catalog shows its score at once, then asks `research-bottle` to *check* it:
+confirm the scores we hold still say what their pages say, and add new ones.
+The card updates in place (“Updated — 2 new reviews” / “Up to date”). The check
+is skipped when that bottle was checked in the last 7 days by anyone
+(`VERIFY_FRESH_DAYS` in the function; 0 = every lookup). Opening a bottle from
+Best rated or a score chip doesn't spend anything; the card says when it was
+last checked and offers *Check for newer reviews*. A known score whose page now
+shows something different is flagged in `ratings.py reports` — never rewritten
+automatically, since a search can land on the wrong bottle's page.
+
+**The searches are curated, best sources first.** Each lookup runs three
+stages, each limited to its own sites, so the best sources are always tried:
+
+1. **Critics' own review sites** — Wine Enthusiast and Drinkhacker for every
+   spirit; Whisky Advocate, Breaking Bourbon, The Whiskey Wash and WhiskyCast
+   for whiskey.
+2. **Competitions' own results** — IWSC, SFWSC (via SevenFifty Daily, which
+   publishes them), The Spirits Business Masters, Bartender Spirits Awards,
+   International Spirits Challenge, Concours Mondial de Bruxelles, NYISC.
+3. **Everything else** minus the blocked list — mainly the producer's own
+   awards page, and other independent critics.
+
+The plan is data: `rating_sources.search_tier / search_domains /
+search_categories` (setup SQL step 7). Add a critic or reorder with SQL; no
+redeploy.
+
+The bottles in **Bar & Pantry** show their score beside them.
+
+Photos go to `identify-bottle` (Claude Haiku reads brand, expression, age, ABV,
+batch from the label — about half a cent; 40 a day). Typed names never touch AI:
+the app normalises the name (the same rules as `normalize.py`, ported to JS) and
+calls `spirit_candidates` directly.
+
+**How lookups grow the shared catalog.** Every review row records where it came
+from: `origin` is `curated` (looked up by hand, `first_scores.sh`), `bulk`
+(a competition's published results, `sfwsc-import`) or `field` (an in-app
+lookup). Field rows start **unverified** and count at ¾ weight in the score
+until they're confirmed — automatically when a later, independent lookup
+finds the same review, or by hand with `ratings.py field`. `research-bottle`
+only keeps a score when:
+
+- its page was in the search results the model actually got (no invented
+  links), and wherever the model cited that page, the cited words contain the
+  score or medal;
+- the site isn't one whose terms forbid this or whose robots.txt keeps AI
+  agents out (Distiller, Tastings.com, Tequila Matchmaker, Forbes, …);
+- it's for this exact bottle (age, proof and batch agree).
+
+A bottle's research is shared: a lookup that finds nothing is remembered for 30
+days, a bottle checked in the last 7 days isn't checked again, and two people
+scanning the same bottle at once share one search. Per-user cap: 20
+lookups or checks a day (≈20–30¢ each, Sonnet 5.5 + web search); a site-wide cap of 200 a
+day protects the bill. *Wrong bottle?* reports land in `ratings.py reports`.
+
+**One-time setup (SQL editor)** — after the catalog SQL above:
+
+```sql
+-- 1. Where each score came from, so lookups can grow the catalog safely.
+alter table public.spirit_reviews
+  add column if not exists origin text not null default 'curated'
+    check (origin in ('curated','bulk','field')),
+  add column if not exists added_by uuid references auth.users(id) on delete set null,
+  add column if not exists verified boolean not null default true,
+  add column if not exists seen_count int not null default 1;
+alter table public.spirit_products
+  add column if not exists researched_at timestamptz,
+  add column if not exists created_by uuid references auth.users(id) on delete set null;
+
+-- 2. Catch-alls for scores a lookup finds outside the named sources.
+insert into public.rating_sources (id, name, kind, scale, default_weight, scrape_ok, homepage, tos_notes) values
+ ('other_critic','Other critic','critic','critic100',0.5,false,null,'Found by an in-app lookup; reviewer = the publication.'),
+ ('other_competition','Other competition','competition','medal',0.5,false,null,'Found by an in-app lookup; reviewer = the competition.')
+on conflict (id) do nothing;
+
+-- 3. One row per lookup: the lock while it runs, the memory of "nothing found",
+--    the audit trail. Written only by the research-bottle function.
+create table public.spirit_lookups (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  query text not null check (length(query) between 2 and 200),
+  name_norm text not null,
+  product_id uuid references public.spirit_products(id) on delete set null,
+  status text not null default 'running' check (status in ('running','found','none','failed')),
+  added int not null default 0,
+  detail text,
+  created_at timestamptz not null default now(),
+  finished_at timestamptz
+);
+create unique index spirit_lookups_one_running on public.spirit_lookups (name_norm) where status = 'running';
+create index spirit_lookups_recent on public.spirit_lookups (name_norm, created_at desc);
+alter table public.spirit_lookups enable row level security;
+create policy "signed-in read" on public.spirit_lookups for select to authenticated using (true);
+
+-- 4. "Wrong bottle?" / "wrong score" from the score card.
+create table public.spirit_reports (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  product_id uuid references public.spirit_products(id) on delete cascade,
+  review_id uuid references public.spirit_reviews(id) on delete cascade,
+  kind text not null check (kind in ('wrong_bottle','wrong_score','other')),
+  note text check (note is null or length(note) <= 300),
+  status text not null default 'open' check (status in ('open','fixed','dismissed')),
+  created_at timestamptz not null default now()
+);
+alter table public.spirit_reports enable row level security;
+create policy "users report" on public.spirit_reports for insert to authenticated
+  with check (user_id = auth.uid());
+create policy "users see their reports" on public.spirit_reports for select to authenticated
+  using (user_id = auth.uid());
+
+-- 5. Picking a bottle teaches the catalog that label's wording.
+create or replace function public.spirit_confirm_alias(p_product uuid, p_alias_norm text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if auth.uid() is null or p_alias_norm is null
+     or length(p_alias_norm) not between 2 and 200 then
+    return;
+  end if;
+  insert into public.spirit_aliases (alias_norm, product_id)
+  select p_alias_norm, p.id from public.spirit_products p where p.id = p_product
+  on conflict (alias_norm) do nothing;
+end;
+$$;
+revoke execute on function public.spirit_confirm_alias(uuid, text) from public;
+revoke execute on function public.spirit_confirm_alias(uuid, text) from anon;
+grant execute on function public.spirit_confirm_alias(uuid, text) to authenticated;
+
+-- 6. Daily caps: label photos ('scan') and web lookups ('lookup'), counted apart.
+create table public.bottle_usage (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  usage_date date not null,
+  kind text not null check (kind in ('scan','lookup')),
+  count int not null default 0,
+  primary key (user_id, usage_date, kind)
+);
+alter table public.bottle_usage enable row level security;
+create policy "users see their usage" on public.bottle_usage for select to authenticated
+  using (user_id = auth.uid());
+
+create or replace function public.increment_bottle_usage(usage_kind text, daily_limit int)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  updated_count int;
+begin
+  insert into public.bottle_usage as bu (user_id, usage_date, kind, count)
+  values (auth.uid(), (now() at time zone 'utc')::date, usage_kind, 1)
+  on conflict (user_id, usage_date, kind) do update
+    set count = bu.count + 1
+    where bu.count < daily_limit
+  returning bu.count into updated_count;
+
+  if updated_count is null then
+    return -1; -- already at/over the limit, not incremented
+  end if;
+  return updated_count;
+end;
+$$;
+revoke execute on function public.increment_bottle_usage(text, int) from public;
+revoke execute on function public.increment_bottle_usage(text, int) from anon;
+grant execute on function public.increment_bottle_usage(text, int) to authenticated;
+
+-- 7. The curated search plan: which sites a lookup searches, in what order,
+--    for which categories. Stage 1 = tier 1 (critics' own review sites),
+--    stage 2 = tier 2 (competitions' own results), stage 3 = the open web minus
+--    the blocked list (mainly producers' own awards pages). Edit these rows to
+--    change the plan; research-bottle reads them on every lookup.
+alter table public.rating_sources
+  add column if not exists search_tier int,
+  add column if not exists search_domains text[],
+  add column if not exists search_categories text[];
+alter table public.spirit_reviews add column if not exists last_checked_at timestamptz;
+insert into public.rating_sources (id, name, kind, scale, default_weight, scrape_ok, homepage, tos_notes) values
+ ('isc','International Spirits Challenge','competition','medal',0.5,false,'https://www.internationalspiritschallenge.com','Medal results.'),
+ ('cmb','Concours Mondial de Bruxelles','competition','medal',0.5,false,'https://concoursmondial.com','Medal results (Grand Gold / Gold / Silver).'),
+ ('nyisc','New York International Spirits Competition','competition','critic100',0.5,false,'https://nyispiritscompetition.com','Medal and points.')
+on conflict (id) do nothing;
+update public.rating_sources r set search_tier = p.tier, search_domains = p.domains, search_categories = p.cats
+from (values
+  ('wine_enthusiast',          1, array['wineenthusiast.com'],                null::text[]),
+  ('drinkhacker',              1, array['drinkhacker.com'],                   null),
+  ('whisky_advocate',          1, array['whiskyadvocate.com'],                array['whiskey','bourbon','rye','scotch']),
+  ('breaking_bourbon',         1, array['breakingbourbon.com'],               array['bourbon','rye','whiskey']),
+  ('whiskey_wash',             1, array['thewhiskeywash.com'],                array['whiskey','bourbon','rye','scotch']),
+  ('whiskycast',               1, array['whiskycast.com'],                    array['whiskey','bourbon','rye','scotch']),
+  ('iwsc',                     2, array['iwsc.net'],                          null),
+  ('sfwsc',                    2, array['daily.sevenfifty.com'],              null),
+  ('spirits_masters',          2, array['thespiritsbusiness.com'],            null),
+  ('bartender_spirits_awards', 2, array['bartenderspiritsawards.com'],        null),
+  ('isc',                      2, array['internationalspiritschallenge.com'], null),
+  ('cmb',                      2, array['concoursmondial.com'],               null),
+  ('nyisc',                    2, array['nyispiritscompetition.com'],         null)
+) as p(id, tier, domains, cats)
+where r.id = p.id;
+
+-- 8. Unverified lookup finds count ¾ until confirmed.
+create or replace view public.spirit_consensus with (security_invoker = true) as
+with w as (
+  select r.product_id, r.source_id, r.score_10,
+         r.weight * (case when r.verified then 1 else 0.75 end)
+                   * power(0.5, greatest(0, extract(year from now())::int
+                                            - coalesce(r.review_year, extract(year from now())::int)) / 10.0) as w
+  from public.spirit_reviews r
+  where r.product_id is not null and r.score_10 is not null
+    and r.match_status in ('auto','confirmed')
+)
+select p.id as product_id,
+       p.canonical_name,
+       p.category,
+       count(*) as n_reviews,
+       count(distinct w.source_id) as n_sources,
+       round(sum(w.w * w.score_10) / sum(w.w), 2) as score_exact,
+       floor((sum(w.w * w.score_10) / sum(w.w)) * 2 + 0.5) / 2 as score_10,
+       case when sum(w.w) >= 2.5 and count(distinct w.source_id) >= 2 then 'high'
+            when sum(w.w) >= 1 then 'medium' else 'low' end as confidence,
+       round((sum(w.w * w.score_10) + 7.0) / (sum(w.w) + 1), 2) as rank_score
+from w join public.spirit_products p on p.id = w.product_id
+group by p.id, p.canonical_name, p.category;
+```
+
+Then deploy two Edge Functions (dashboard paste, as for the others; both use the
+existing `ANTHROPIC_API_KEY` secret): `supabase/functions/identify-bottle` and
+`supabase/functions/research-bottle`. `research-bottle` writes the catalog with
+the function's own service-role key, which Supabase provides to every function.
+
+**Building it up from your Mac:**
+
+```bash
+python3 ratings.py sfwsc-import --year 2025              # preview ~3,000 SFWSC medals
+python3 ratings.py sfwsc-import --year 2025 --apply      # add them (new bottles + medals)
+python3 ratings.py field                                 # walk unverified lookup finds: verify / reject
+python3 ratings.py reports                               # "Wrong bottle?" reports from the app
+```
+
+`sfwsc-import` reads SevenFifty Daily's published SFWSC results PDF (the
+competition's own site keeps AI agents out; SevenFifty's allows scripts). macOS
+PDFKit does the reading through `scripts/ratings/pdf_rows.js`, which splits the
+table by column position — the PDF's text layer runs the columns together. A
+medal joins an existing catalog bottle only on a clear name match with no
+age/ABV/batch conflict; otherwise it becomes a new bottle (category guessed from
+the name). Medals are SFWSC's own tiers (Bronze 5.5 … Double Gold 8.5) at half
+weight. Pass `--url` for another year's PDF.
 
 ## Pair a drink
 

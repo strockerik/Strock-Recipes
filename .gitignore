@@ -31,3 +31,6 @@ data/King Soopers Match/Lime Juice - king-soopers-match-report.txt
 data/King Soopers Match/test 30 recipes REV1 - grocery-list.txt
 data/King Soopers Match/test 30 recipes REV1 - king-soopers-match-report.txt
 data/King Soopers Match/Test account - house-index-backup-2026-07-29.json
+
+# Pages fetched by scripts/ratings/ratings.py (re-downloadable cache)
+scripts/ratings/cache/

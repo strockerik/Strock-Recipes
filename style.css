@@ -2423,3 +2423,141 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
 }
 .rf-inv-lead { margin: 0; font-size: 0.72rem; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
 .rf-inv-part { color: var(--ink); }
+
+/* ---------- Bottles (Bar tab → Bottles, and the lookup sheet) ---------- */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.bottles-view { padding: 4px 0 24px; display: flex; flex-direction: column; gap: 14px; }
+.bt-lookup { display: flex; flex-direction: column; gap: 10px; }
+.bt-lookup-btn { min-height: 52px; font-size: 1rem; font-weight: 700; }
+.bt-search { display: flex; gap: 8px; margin: 0; }
+.bt-search .search { flex: 1; min-width: 0; min-height: 44px; }
+.bt-search button { min-height: 44px; }
+.bt-best-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.bt-best-title, .bt-sub {
+  margin: 0; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent);
+}
+.bt-sub { margin: 6px 0 2px; }
+.bt-total { font-size: 0.8rem; color: var(--faint); }
+.bt-filter { display: flex; flex-wrap: wrap; gap: 6px; }
+.bt-chip {
+  border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  border-radius: 999px; padding: 8px 14px; min-height: 44px;
+  font-size: 0.85rem; font-weight: 600;
+}
+.bt-chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.bt-list, .bt-cands, .bt-sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.bt-row, .bt-src {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 9px 0; border: 0; border-bottom: 1px dotted var(--line);
+  background: none; color: var(--ink); text-align: left; text-decoration: none; font: inherit;
+}
+.bt-row { cursor: pointer; min-height: 52px; }
+.bt-row-compact { min-height: 44px; }
+.bt-list li:last-child .bt-row, .bt-sources li:last-child .bt-src { border-bottom: 0; }
+.bt-score {
+  flex: none; width: 44px; height: 44px; border-radius: var(--radius);
+  background: var(--accent-soft); color: #8E3120;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display); font-weight: 700; font-size: 1.1rem;
+}
+.bt-score.is-none { color: var(--faint); background: var(--chip); }
+.bt-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bt-row-name { font-size: 0.95rem; font-weight: 600; overflow-wrap: anywhere; }
+.bt-row-meta { font-size: 0.8rem; color: var(--faint); }
+.bt-own {
+  flex: none; font-family: var(--font-mono); font-size: 0.7rem; color: #2F5A2C;
+  background: #EDF3EC; border-radius: 999px; padding: 2px 8px;
+}
+.bt-empty { color: var(--faint); font-size: 0.9rem; padding: 14px 0; }
+.bt-foot, .bt-note { margin: 0; font-size: 0.8rem; color: var(--faint); line-height: 1.5; }
+.bt-center { text-align: center; }
+
+.bottle-body { display: flex; flex-direction: column; gap: 14px; }
+.bt-photo-target {
+  min-height: 220px; border: 2px dashed #D9CFC0; border-radius: 14px; background: var(--paper-soft);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 22px; color: var(--ink); text-align: center; font: inherit; cursor: pointer;
+}
+.bt-photo-icon {
+  width: 60px; height: 60px; border-radius: 50%; background: var(--accent);
+  display: flex; align-items: center; justify-content: center; font-size: 1.7rem;
+}
+.bt-photo-title { font-size: 1.1rem; font-weight: 700; }
+.bt-photo-hint { font-size: 0.88rem; color: var(--faint); line-height: 1.5; max-width: 270px; }
+.bt-wide { width: 100%; min-height: 44px; }
+.bt-tall { min-height: 50px; font-size: 1rem; font-weight: 700; }
+.bt-accent { border-color: var(--accent); color: var(--accent); }
+.bt-or { display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: 0.82rem; }
+.bt-or::before, .bt-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.bt-msg { margin: 0; font-size: 0.9rem; color: #8E3120; line-height: 1.5; }
+.bt-busy { display: flex; align-items: center; gap: 12px; padding: 18px 2px; font-size: 0.95rem; line-height: 1.5; }
+.bt-researching { background: var(--paper-soft); border-radius: 14px; padding: 16px; }
+.bt-label-card {
+  display: flex; flex-direction: column; gap: 3px;
+  background: var(--paper-soft); border-radius: 12px; padding: 12px 14px;
+}
+.bt-kicker {
+  font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--faint);
+}
+.bt-label-name { font-size: 1rem; font-weight: 700; }
+.bt-label-facts { font-size: 0.82rem; color: var(--faint); }
+.bt-cands { gap: 10px; }
+.bt-cand {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+  color: var(--ink); text-align: left; font: inherit; cursor: pointer; min-height: 60px;
+}
+.bt-result-head { display: flex; flex-direction: column; gap: 4px; }
+.bt-result-name { margin: 0; font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; line-height: 1.15; }
+.bt-result-facts { font-size: 0.88rem; color: var(--faint); }
+.bt-scorecard {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
+}
+.bt-scorecard.is-empty { flex-direction: column; align-items: stretch; gap: 12px; }
+.bt-big { display: flex; align-items: baseline; gap: 4px; flex: none; }
+.bt-big-num { font-family: var(--font-display); font-weight: 700; font-size: 3.2rem; line-height: 1; color: #8E3120; }
+.bt-big-of { font-family: var(--font-mono); font-size: 0.85rem; color: var(--faint); }
+.bt-score-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1 1 160px; }
+.bt-score-why { font-size: 0.88rem; color: var(--ink); line-height: 1.45; }
+.bt-conf {
+  align-self: flex-start; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; border-radius: 999px; padding: 3px 9px;
+}
+/* Fixed, semantic colors — the confidence level reads the same on either tab. */
+.bt-conf.is-high { background: #3E6B3A; color: #fff; }
+.bt-conf.is-medium { background: #F3E3C3; color: #5C4413; }
+.bt-conf.is-low { background: var(--chip); color: var(--ink); }
+.bt-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.bt-actions > * { flex: 1 1 140px; min-height: 44px; }
+.bt-owned {
+  display: flex; align-items: center; justify-content: center; border-radius: var(--radius);
+  background: #EDF3EC; color: #2F5A2C; font-weight: 700; font-size: 0.92rem;
+}
+.bt-src { min-height: 52px; }
+.bt-src-name { font-size: 0.92rem; font-weight: 600; }
+.bt-src-ten { flex: none; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; color: #8E3120; }
+.bt-src-go { flex: none; color: var(--faint); font-size: 0.9rem; }
+.bt-tag {
+  font-family: var(--font-mono); font-size: 0.65rem; font-weight: 600; color: var(--faint);
+  background: var(--chip); border-radius: 999px; padding: 1px 6px; margin-left: 4px; white-space: nowrap;
+}
+.bt-lookup-card {
+  display: flex; flex-direction: column; gap: 10px; background: var(--card);
+  border: 1px solid var(--line); border-radius: 14px; padding: 16px; font-size: 0.92rem; line-height: 1.5;
+}
+.bt-report { align-self: flex-start; font-size: 0.85rem; min-height: 44px; }
+/* The expert score beside a bottle in Bar & Pantry. */
+.inv-score {
+  flex: none; border: 0; border-radius: 8px; background: #F7ECE9; color: #8E3120;
+  font-family: var(--font-display); font-weight: 700; font-size: 0.88rem;
+  min-width: 44px; min-height: 32px; padding: 4px 8px; cursor: pointer;
+}
+.bt-check { margin: -4px 0 0; font-size: 0.85rem; color: var(--faint); line-height: 1.5; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.bt-check .spinner { width: 14px; height: 14px; }
+.bt-check .link-inline { min-height: 44px; }
