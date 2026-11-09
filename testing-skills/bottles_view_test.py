@@ -77,6 +77,7 @@ var T = {
   spirit_lookups: [], spirit_reports: []
 };
 var QUERIES = [], INSERTS = [], UPDATES = [], RPCS = [], INVOKES = [];
+function INV_ADDS() { return INSERTS.filter(function (i) { return i.table === "inventory_items"; }); }
 var FN = {          // scripted Edge Function replies by name: a function (body) -> data
   "research-bottle": function (b) { return b.product_id ? { status: "fresh", product_id: b.product_id, checked_at: new Date().toISOString() } : { error: "unscripted" }; }
 };
@@ -131,7 +132,8 @@ function candidatesFor(q) {
     "chartreuse": [["p-green", 0.62], ["p-yellow", 0.62]],
     "elijah craig small batch bourbon": [["p-ec", 0.81]],
     "hendricks": [["p-hen", 1.0]],
-    "buffalo trace": T.spirit_products.some(function (p) { return p.id === "p-bt"; }) ? [["p-bt", 1.0]] : []
+    "buffalo trace": T.spirit_products.some(function (p) { return p.id === "p-bt"; }) ? [["p-bt", 1.0]] : [],
+    "banks 5 island blend rum": [["p-banks", 0.81]]
   }[q] || [];
   return C.map(function (c) { var p = T.spirit_products.filter(function (x) { return x.id === c[0]; })[0];
     return { product_id: p.id, canonical_name: p.canonical_name, category: p.category, age_years: p.age_years, abv: p.abv, batch: null, score: c[1] }; });
@@ -315,10 +317,28 @@ async function runTests() {
     assert("the polled lookup lands on the new bottle's score card", txt($(".bt-big")) === "8.0/10" && /AI-found/.test(txt($(".bt-sources"))), txt($(".bt-scorecard")));
     assert("…saying it was just looked up", /Looked up just now/.test(txt($("#bt-check"))), txt($("#bt-check")));
 
-    // ---- Add to my bar (not owned) ----
+    // ---- Add to my bar (not owned): always confirmed in a sheet first ----
     INSERTS = [];
+    assert("Add to my bar is the green add button, not a ghost link", $('[data-bt="add"]').classList.contains("bt-add-btn"), $('[data-bt="add"]').className);
     click($('[data-bt="add"]'));
+    await until(function () { return !$("#bt-add-panel").hidden; });
+    await delay(60);
+    assert("Add to my bar asks first, and nothing is saved yet", txt($("#bt-add-title")) === "Add to your bar?" && INV_ADDS().length === 0, JSON.stringify(INV_ADDS()));
+    assert("…with the bottle's name and category filled in", $("#bt-add-name").value === "Buffalo Trace Kentucky Straight Bourbon" && $("#bt-add-cat").value === "bourbon", $("#bt-add-name").value + " / " + $("#bt-add-cat").value);
+    assert("…and focus in the name field", document.activeElement === $("#bt-add-name"), document.activeElement && (document.activeElement.id || document.activeElement.className));
+    click($("#bt-add-cancel"));
+    await delay(80);
+    assert("Cancel closes it, adds nothing, and leaves Add ready", $("#bt-add-panel").hidden && INV_ADDS().length === 0 && !!$('[data-bt="add"]') && !$('[data-bt="add"]').disabled, "");
+    click($('[data-bt="add"]'));
+    await until(function () { return !$("#bt-add-panel").hidden; });
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await delay(80);
+    assert("Escape cancels the confirm, leaving the score card open under it", $("#bt-add-panel").hidden && !$("#bottle-panel").hidden && INV_ADDS().length === 0, "");
+    click($('[data-bt="add"]'));
+    await until(function () { return !$("#bt-add-panel").hidden; });
+    click($("#bt-add-form .bt-add-btn"));
     await until(function () { return !!$(".bt-actions .bt-owned"); });
+    assert("confirming closes the sheet", $("#bt-add-panel").hidden, "");
     var add = INSERTS.filter(function (i) { return i.table === "inventory_items"; })[0];
     assert("Add to my bar saves a bar row linked to the catalog bottle", !!add && add.row.section === "bar" && add.row.product_id === "p-bt" && add.row.category === "bourbon" && add.row.name === "Buffalo Trace Kentucky Straight Bourbon", JSON.stringify(add));
     assert("…and the button turns into In your bar", /In your bar/.test(txt($(".bt-actions"))), txt($(".bt-actions")));
@@ -353,7 +373,7 @@ async function runTests() {
 
     // ---- a label photo ----
     CHECK["p-ec"] = function () { return { error: "You’ve used today’s 20 bottle lookups — it resets at midnight UTC. Try again tomorrow." }; };
-    FN["identify-bottle"] = function () { return { label: { full_name: "Elijah Craig Small Batch Bourbon", brand: "Elijah Craig", expression: "Small Batch", category: "bourbon", age_years: null, abv: 47, proof: 94, batch: null, single_barrel: false, country: "USA" } }; };
+    FN["identify-bottle"] = function () { return { label: { printed_words: "ELIJAH CRAIG SMALL BATCH KENTUCKY STRAIGHT BOURBON WHISKEY 94 PROOF", full_name: "Elijah Craig Small Batch Bourbon", brand: "Elijah Craig", expression: "Small Batch", category: "bourbon", age_years: null, abv: 47, proof: 94, batch: null, single_barrel: false, country: "USA" } }; };
     INVOKES = [];
     click($('[data-bt="again"]'));
     await until(function () { return !!$("[data-bt-form]"); });
@@ -364,6 +384,50 @@ async function runTests() {
     assert("the label's name, matched by its words, opens the score card", txt($(".bt-big")) === "7.5/10" && /Double Gold · 2022/.test(txt($(".bt-sources"))), txt($(".bt-scorecard")));
     await until(function () { return /Couldn’t check/.test(txt($("#bt-check"))); });
     assert("a check that hits the daily cap says so, keeping the score shown", /Couldn’t check for newer reviews: You’ve used today’s 20 bottle lookups/.test(txt($("#bt-check"))) && txt($(".bt-big")) === "7.5/10", txt($("#bt-check")));
+
+    // ---- a misread label (a BANKS 5 ISLAND BLEND photo read as "Barbancourt…", 2026-11-09) ----
+    T.spirit_products.push({ id:"p-banks", canonical_name:"Banks 5 Island Blend", category:"rum", producer:null, country:null, age_years:null, abv:43 });
+    T.spirit_consensus.push({ product_id:"p-banks", canonical_name:"Banks 5 Island Blend", category:"rum", n_reviews:1, n_sources:1, score_10:8.0, confidence:"low", rank_score:7.0 });
+    FN["identify-bottle"] = function () { return { label: { printed_words: "BANKS 5 ISLAND BLEND RUM", full_name: "Barbancourt Island Blend 5 Rum", brand: "Barbancourt", expression: "Island Blend 5", category: "rum", age_years: null, abv: 43, proof: null, batch: null, single_barrel: false, country: null } }; };
+    INVOKES = [];
+    click($('[data-bt="again"]'));
+    await until(function () { return !!$("[data-bt-form]"); });
+    choosePhoto(pngFile());
+    await until(function () { return !!$(".bt-label-card.is-misread"); });
+    var fix = $(".bt-fix");
+    assert("a name using a brand the label doesn't print is flagged", /BANKS 5 ISLAND BLEND RUM/.test(txt($(".bt-label-card [role=alert]"))), txt($(".bt-label-card")));
+    assert("…with the fix-the-name form open and prefilled", !!fix && fix.open && fix.querySelector("input").value === "Barbancourt Island Blend 5 Rum", fix ? fix.outerHTML.slice(0, 200) : "none");
+    assert("…and nothing spent on the wrong name", !INVOKES.some(function (i) { return i.name === "research-bottle"; }), JSON.stringify(INVOKES.map(function (i) { return i.name; })));
+    fix.querySelector("input").value = "Banks 5 Island Blend Rum";
+    fix.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await resultFor("Banks 5 Island Blend");
+    assert("the fixed name finds the right bottle's score card", txt($(".bt-big")) === "8.0/10", txt($(".bt-scorecard")));
+    INSERTS = [];
+    click($('[data-bt="add"]'));
+    await until(function () { return !$("#bt-add-panel").hidden; });
+    assert("the confirm sheet offers the card's name and category", $("#bt-add-name").value === "Banks 5 Island Blend" && $("#bt-add-cat").value === "rum", $("#bt-add-name").value + " / " + $("#bt-add-cat").value);
+    $("#bt-add-name").value = "Banks 7 Golden Age Blend";
+    click($("#bt-add-form .bt-add-btn"));
+    await until(function () { return !!$(".bt-actions .bt-owned"); });
+    var ren = INV_ADDS()[0];
+    assert("renamed to another bottle: saved under the new name, not linked to this card", !!ren && ren.row.name === "Banks 7 Golden Age Blend" && !ren.row.product_id && ren.row.category === "rum", JSON.stringify(ren));
+    assert("…and the card says what was added, not In your bar", /Added “Banks 7 Golden Age Blend”/.test(txt($(".bt-actions"))) && !/In your bar/.test(txt($(".bt-actions"))), txt($(".bt-actions")));
+    // A misread that happens to be a sure catalog match still stops to ask.
+    FN["identify-bottle"] = function () { return { label: { printed_words: "OLD FORESTER 86 PROOF", full_name: "Elijah Craig Small Batch Bourbon", brand: "Elijah Craig", expression: "Small Batch", category: "bourbon", age_years: null, abv: null, proof: null, batch: null, single_barrel: false, country: "USA" } }; };
+    click($('[data-bt="again"]'));
+    await until(function () { return !!$("[data-bt-form]"); });
+    choosePhoto(pngFile());
+    await until(function () { return screen() === "Which one is it?"; });
+    assert("a misread never jumps straight to a score card, even on a sure match", !$(".bt-result-name") && !!$(".bt-label-card.is-misread") && !!$('[data-bt-pick="0"]'), screen());
+    // Age wording differs between label and name: not a misread.
+    FN["identify-bottle"] = function () { return { label: { printed_words: "THE GLENLIVET 12 YEARS OF AGE SINGLE MALT SCOTCH WHISKY", full_name: "The Glenlivet 12 Year Old Single Malt Scotch", brand: "The Glenlivet", expression: "12", category: "scotch", age_years: 12, abv: 40, proof: null, batch: null, single_barrel: false, country: "Scotland" } }; };
+    click($("#close-bottle"));
+    click($("#bt-open"));
+    await until(function () { return !!$("[data-bt-form]"); });
+    choosePhoto(pngFile());
+    await until(function () { return screen() === "Not in the catalog yet" && /Glenlivet/.test(txt($(".bt-label-card"))); });
+    assert("“12 YEARS OF AGE” on the label vs “12 Year Old” in the name is no misread", !!$(".bt-label-card") && !$(".bt-label-card.is-misread") && !!$(".bt-fix") && !$(".bt-fix").open, txt($(".bt-label-card")));
+    assert("…but the name can still be fixed from a closed Not right? link", /Not right\? Fix the name/.test(txt($(".bt-fix summary"))), txt($(".bt-fix summary")));
     FN["identify-bottle"] = function () { return { error: "Couldn’t make out a label in that photo — try straight on, closer, or type the name." }; };
     click($('[data-bt="again"]'));
     await until(function () { return !!$("[data-bt-form]"); });
@@ -467,6 +531,23 @@ async function runTests() {
     fits("the score card", $(".bt-scorecard"));
     tall("score card actions and review rows", $$(".bt-actions > *").concat($$(".bt-sources .bt-src"), [$(".bt-report")]));
     noSideScroll("score card");
+    await typeLookup("Elijah Craig Small Batch Bourbon");
+    await resultFor("Elijah Craig Small Batch");
+    await delay(200);
+    var addBtn = $('[data-bt="add"]');
+    assert("Add to my bar is basil green with white text", !!addBtn && getComputedStyle(addBtn).backgroundColor === "rgb(62, 107, 58)" && getComputedStyle(addBtn).color === "rgb(255, 255, 255)", addBtn ? getComputedStyle(addBtn).backgroundColor + " / " + getComputedStyle(addBtn).color : "none");
+    tall("the add button", [addBtn]);
+    click(addBtn);
+    await until(function () { return !$("#bt-add-panel").hidden; });
+    await delay(150);
+    var ok = $("#bt-add-form .bt-add-btn"), r = ok.getBoundingClientRect();
+    var topEl = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    assert("the confirm sheet sits over the lookup sheet", !!topEl && !!topEl.closest("#bt-add-panel"), topEl ? (topEl.id || topEl.className) : "none");
+    fits("the confirm sheet", $("#bt-add-panel .grocery-panel-inner"));
+    tall("confirm sheet fields and buttons", [$("#bt-add-name"), $("#bt-add-cat"), $("#bt-add-cancel"), ok]);
+    noSideScroll("confirm sheet");
+    click($("#bt-add-cancel"));
+    await delay(80);
     click($('[data-bt="again"]'));
     await until(function () { return !!$("[data-bt-form]"); });
     fits("the photo target", $(".bt-photo-target"));

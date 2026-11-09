@@ -766,6 +766,26 @@
       <div id="bottle-body" class="bottle-body" aria-live="polite"></div>
     </div>
   </div>
+  <!-- Adding a bottle to the bar: always confirmed here first (and the name or
+       category fixed, if the label was misread). btConfirmAdd() in app.js. -->
+  <div id="bt-add-panel" class="grocery-panel bt-add-panel" role="dialog" aria-modal="true" aria-labelledby="bt-add-title" hidden>
+    <div class="grocery-panel-inner wrap">
+      <div class="grocery-panel-head">
+        <h2 class="panel-title" id="bt-add-title">Add to your bar?</h2>
+      </div>
+      <form id="bt-add-form" class="bt-add-form">
+        <label class="bt-add-field" for="bt-add-name">Bottle</label>
+        <input id="bt-add-name" class="search" type="text" required maxlength="200" autocomplete="off">
+        <label class="bt-add-field" for="bt-add-cat">Category</label>
+        <select id="bt-add-cat" class="search"></select>
+        <p class="bt-note">It goes on your bar in Bar &amp; Pantry, marked in stock.</p>
+        <div class="bt-add-actions">
+          <button type="button" id="bt-add-cancel" class="ghost-btn">Cancel</button>
+          <button type="submit" class="solid-btn bt-add-btn">Add to bar</button>
+        </div>
+      </form>
+    </div>
+  </div>
   <input type="file" id="bt-photo-camera" accept="image/*" capture="environment" hidden>
   <input type="file" id="bt-photo-pick" accept="image/*" hidden>
 

@@ -212,6 +212,10 @@
   const closeBottleBtn = $("#close-bottle");
   const btPhotoCamera = $("#bt-photo-camera");
   const btPhotoPick = $("#bt-photo-pick");
+  const btAddPanel = $("#bt-add-panel");
+  const btAddForm = $("#bt-add-form");
+  const btAddName = $("#bt-add-name");
+  const btAddCat = $("#bt-add-cat");
   const recipesControlsEl = $("#recipes-controls");
   const mealPlanView = $("#meal-plan-view");
   const scopeAllBtn = $("#scope-all");
@@ -2192,6 +2196,7 @@
   }
   function closeBottlePanel() {
     btToken++;
+    if (!btAddPanel.hidden) closeBtAdd(null);   // a pending add is cancelled, never left hanging
     bottlePanel.hidden = true;
   }
   function btSet(name, html, extra) {
@@ -2244,7 +2249,21 @@
       .catch((err) => ({ error: err }));
     if (token !== btToken || bottlePanel.hidden) return;
     if (error || data?.error || !data?.label) { renderBtStart(aiErrorText(data, error)); return; }
+    data.label.misread = labelMisread(data.label);
     btMatch({ text: data.label.full_name, label: data.label, fromPhoto: true }, token);
+  }
+  // The label reader transcribes the printed words and builds a name from them;
+  // a name using words that aren't on the label ("Barbancourt" off a label that
+  // says BANKS) is a misread — the person checks it before anything is spent.
+  // Age wording varies ("12 YEARS" printed, "12 Year Old" named) and a plural
+  // or a clipped word still counts — what's caught is a word that isn't there.
+  const LABEL_FILLER = new Set(["year", "years", "old", "aged", "age", "yo", "no", "brand"]);
+  function labelMisread(label) {
+    if (!label || !label.printed_words) return false;
+    const printed = normName(label.printed_words).split(" ").filter(Boolean);
+    const onLabel = (w) => printed.some((p) => p === w ||
+      (w.length >= 4 && p.length >= 4 && (p.startsWith(w) || w.startsWith(p))));
+    return [...bottleWords(normName(label.full_name))].some((w) => !LABEL_FILLER.has(w) && !onLabel(w));
   }
   function btFromText(text) {
     const q = String(text || "").trim();
@@ -2267,7 +2286,7 @@
     // same distinguishing words ("Elijah Craig Small Batch Bourbon" = "… Small
     // Batch", but "Reposado" ≠ "Plata").
     const sure = ctx.cands.filter((c) => Number(c.score) >= 0.99 || sameBottle(key, normName(c.canonical_name)));
-    if (sure.length === 1) { btShowResult(sure[0].product_id, ctx, false, { verify: true }); return; }
+    if (sure.length === 1 && !(ctx.label && ctx.label.misread)) { btShowResult(sure[0].product_id, ctx, false, { verify: true }); return; }
     if (ctx.cands.length) { renderBtMatch(ctx); return; }
     renderBtLookup(ctx);
   }
@@ -2276,7 +2295,14 @@
     if (!l) return `<div class="bt-label-card"><span class="bt-kicker">You searched</span><span class="bt-label-name">${esc(ctx.text)}</span></div>`;
     const facts = [invCap(l.category && l.category !== "other" ? l.category : ""), l.country, l.age_years ? `${l.age_years} years` : "",
       l.abv ? `${scoreText(l.abv).replace(/\.0$/, "")}% ABV` : "", l.batch ? `batch ${l.batch}` : ""].filter(Boolean).join(" · ");
-    return `<div class="bt-label-card"><span class="bt-kicker">The label reads</span><span class="bt-label-name">${esc(l.full_name)}</span>${facts ? `<span class="bt-label-facts">${esc(facts)}</span>` : ""}</div>`;
+    return `<div class="bt-label-card${l.misread ? " is-misread" : ""}"><span class="bt-kicker">The label reads</span><span class="bt-label-name">${esc(l.full_name)}</span>${facts ? `<span class="bt-label-facts">${esc(facts)}</span>` : ""}
+      ${l.misread ? `<p class="bt-msg" role="alert">The label’s printed words — “${esc(l.printed_words)}” — don’t match that name. Fix it below before looking it up.</p>` : ""}
+      <details class="bt-fix"${l.misread ? " open" : ""}><summary>${l.misread ? "Fix the name" : "Not right? Fix the name"}</summary>
+        <form class="bt-search" data-bt-fix>
+          <input class="search" type="text" name="q" value="${esc(l.full_name)}" aria-label="Bottle name" autocomplete="off" required>
+          <button type="submit" class="solid-btn">Search</button>
+        </form>
+      </details></div>`;
   }
   function renderBtMatch(ctx) {
     bottleTitle.textContent = "Which one is it?";
@@ -2402,7 +2428,7 @@
       ${scoreBlock}
       ${checkLine}
       <div class="bt-actions">
-        ${owned ? `<span class="bt-owned">✓ In your bar</span>` : `<button type="button" class="ghost-btn" data-bt="add">＋ Add to my bar</button>`}
+        ${owned ? `<span class="bt-owned">✓ In your bar</span>` : `<button type="button" class="solid-btn bt-add-btn" data-bt="add">＋ Add to my bar</button>`}
         <button type="button" class="ghost-btn" data-bt="again">Look up another</button>
       </div>
       ${sorted.length ? `<h3 class="bt-sub">Where the score comes from</h3>
@@ -2435,7 +2461,7 @@
         <span class="bt-note bt-center" id="bt-left">Takes about 20–30 seconds</span>
       </div>
       ${message ? `<p class="bt-msg" role="alert">${esc(message)}</p>` : ""}
-      <button type="button" class="ghost-btn bt-wide" data-bt="add-unscored">Add “${esc(name)}” to my bar without a score</button>`, { ctx, productId: productId || null });
+      <button type="button" class="ghost-btn bt-wide bt-add-outline" data-bt="add-unscored">＋ Add “${esc(name)}” to my bar without a score</button>`, { ctx, productId: productId || null });
     const left = await btLookupsLeft();
     const el = $("#bt-left");
     if (el && left != null && btScreen.name === "lookup") {
@@ -2461,7 +2487,7 @@
         <b>No expert scores found for this one</b>
         <span>Nothing turned up that could be linked to a critic’s or competition’s own page. That’s common for new, local or store-only bottles.</span>
       </div>
-      <button type="button" class="ghost-btn bt-wide" data-bt="add-unscored">Add “${esc(name)}” to my bar without a score</button>
+      <button type="button" class="ghost-btn bt-wide bt-add-outline" data-bt="add-unscored">＋ Add “${esc(name)}” to my bar without a score</button>
       <button type="button" class="ghost-btn bt-wide" data-bt="again">Look up another</button>`, { ctx });
   }
   async function btResearch(ctx, productId) {
@@ -2534,12 +2560,43 @@
     setTimeout(tick, 4000);
   }
 
+  // Every add is confirmed in a sheet (name and category editable) — a native
+  // confirm() gets dismissed on reflex, and a misread name is fixable here.
+  let btAddResolve = null;
+  function btConfirmAdd(name, category) {
+    return new Promise((resolve) => {
+      btAddResolve = resolve;
+      btAddName.value = name;
+      btAddCat.innerHTML = BAR_CATEGORIES.map((c) => `<option value="${esc(c)}">${esc(invCap(c))}</option>`).join("");
+      btAddCat.value = BAR_CATEGORIES.includes(category) ? category : "other";
+      btAddPanel.hidden = false;
+      btAddName.focus();
+    });
+  }
+  function closeBtAdd(choice) {
+    btAddPanel.hidden = true;
+    const resolve = btAddResolve;
+    btAddResolve = null;
+    if (resolve) resolve(choice);
+  }
+  btAddForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const name = btAddName.value.replace(/\s+/g, " ").trim();
+    if (!name) { btAddName.focus(); return; }
+    closeBtAdd({ name, category: btAddCat.value });
+  });
+  $("#bt-add-cancel").addEventListener("click", () => closeBtAdd(null));
+  btAddPanel.addEventListener("click", (e) => { if (e.target === btAddPanel) closeBtAdd(null); });
   async function btAddToBar(name, category, productId) {
-    const cat = BAR_CATEGORIES.includes(category) ? category : "other";
-    const added = await addInventoryItem({ section: "bar", category: cat, name, status: "in", product_id: productId || null });
+    const choice = await btConfirmAdd(name, category);
+    if (!choice) return false;
+    // Renamed to a different bottle? Then it isn't this catalog entry any more
+    // (the add's own auto-link will find the right one, if it's in the catalog).
+    const keepLink = productId && sameBottle(normName(choice.name), normName(name));
+    const added = await addInventoryItem({ section: "bar", category: choice.category, name: choice.name, status: "in", product_id: keepLink ? productId : null });
     if (!added) return false;
-    toast(`Added ${name} to your bar`);
-    return true;
+    toast(`Added ${choice.name} to your bar`);
+    return { name: choice.name, linked: !!keepLink };
   }
   async function btReport(prod) {
     const { error } = await supabaseClient.from("spirit_reports").insert({ product_id: prod.id, kind: "wrong_bottle" });
@@ -2567,8 +2624,9 @@
     }
     if (what === "add" && btScreen.prod) {
       act.disabled = true;
-      if (await btAddToBar(btScreen.prod.canonical_name, btScreen.prod.category, btScreen.prod.id)) {
-        act.outerHTML = `<span class="bt-owned">✓ In your bar</span>`;
+      const added = await btAddToBar(btScreen.prod.canonical_name, btScreen.prod.category, btScreen.prod.id);
+      if (added) {
+        act.outerHTML = `<span class="bt-owned">✓ ${added.linked ? "In your bar" : `Added “${esc(added.name)}”`}</span>`;
         loadOwnedScores();
       } else act.disabled = false;
       return;
@@ -2585,6 +2643,16 @@
     if (what === "verify" && btScreen.prod) { btVerify(btScreen.prod, btScreen.ctx); }
   });
   bottleBody.addEventListener("submit", (e) => {
+    const fix = e.target.closest("[data-bt-fix]");
+    if (fix && btScreen.ctx) {
+      e.preventDefault();
+      const name = fix.elements.q.value.trim();
+      if (name.length < 2) return;
+      // A corrected name keeps what else the label said (age, proof, batch).
+      const label = btScreen.ctx.label ? { ...btScreen.ctx.label, full_name: name, misread: false } : null;
+      btMatch({ text: name, label, fromPhoto: !!label }, ++btToken);
+      return;
+    }
     const form = e.target.closest("[data-bt-form]");
     if (!form) return;
     e.preventDefault();
@@ -7487,6 +7555,7 @@
   registerSheet(pairPanel, closePairPanel);
   registerSheet(krogerPanel, closeKrogerPanel);
   registerSheet(bottlePanel, closeBottlePanel);
+  registerSheet(btAddPanel, () => closeBtAdd(null));
 
   const sheetObserver = new MutationObserver((records) => {
     records.forEach((r) => {

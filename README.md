@@ -818,7 +818,9 @@ lands on one of three screens:
 
 - **One clear match** → the score card: the 0–10 score, its confidence, and
   every review behind it with a link to the page it came from. *Add to my bar*
-  (or *In your bar*), and *Wrong bottle?* to report a bad match.
+  (or *In your bar*), and *Wrong bottle?* to report a bad match. Adding always
+  opens a confirm sheet first (*Add to your bar?* — name and category
+  editable); renaming it to a different bottle saves it unlinked from that card.
 - **Several close matches** → *Which one is it?* (the label's age, proof and
   batch already rule out the impossible ones). Picking one teaches the catalog
   that label's wording, so the next scan of it is instant.
@@ -856,8 +858,12 @@ redeploy.
 
 The bottles in **Bar & Pantry** show their score beside them.
 
-Photos go to `identify-bottle` (Claude Haiku reads brand, expression, age, ABV,
-batch from the label — about half a cent; 40 a day). Typed names never touch AI:
+Photos go to `identify-bottle` (Claude Sonnet 4.6 reads brand, expression, age,
+ABV, batch from the label — about a cent; 40 a day). It first transcribes the
+label's printed words (`printed_words`), then names the bottle from them; the app
+flags a name using a word that isn't printed (Haiku 4.5 once read a BANKS 5
+ISLAND BLEND label as "Barbancourt Island Blend 5") — the label card then opens
+a *Fix the name* box and never jumps straight to a score card. Typed names never touch AI:
 the app normalises the name (the same rules as `normalize.py`, ported to JS) and
 calls `spirit_candidates` directly.
 

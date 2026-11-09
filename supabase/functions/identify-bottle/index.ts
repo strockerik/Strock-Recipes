@@ -17,9 +17,10 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-// Reading a label is transcription, not judgment — Haiku does it for well under
-// a cent (a ~1600px photo is ~2.5k input tokens).
-const MODEL = "claude-haiku-4-5-20251001";
+// The same vision model extract-recipe uses for photos. Haiku 4.5 misread a
+// "BANKS 5 ISLAND BLEND" label as "Barbancourt Island Blend 5" (2026-11-09):
+// small or stylised label type needs the stronger eye. About a cent a photo.
+const MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DAILY_SCAN_LIMIT = 40;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -47,6 +48,7 @@ const BAR_CATEGORIES = ["gin", "vodka", "rum", "tequila", "mezcal", "whiskey", "
 const LABEL_SCHEMA = {
   type: "object",
   properties: {
+    printed_words: { type: "string", description: "The large words on the front label exactly as printed, in reading order — brand, expression, age, proof (e.g. 'BANKS 5 ISLAND BLEND RUM'). A transcription, not a name you know." },
     readable: { type: "boolean", description: "False when the photo isn't a bottle label, or the brand can't be read." },
     full_name: { type: "string", description: "Brand plus expression as a shopper would say it — 'Elijah Craig Small Batch', 'Lagavulin 16 Year Old', 'Green Chartreuse'. Empty when unreadable." },
     brand: { type: ["string", "null"] },
@@ -59,10 +61,10 @@ const LABEL_SCHEMA = {
     single_barrel: { type: "boolean" },
     country: { type: ["string", "null"] }
   },
-  required: ["readable", "full_name", "brand", "expression", "category", "age_years", "abv", "proof", "batch", "single_barrel", "country"]
+  required: ["printed_words", "readable", "full_name", "brand", "expression", "category", "age_years", "abv", "proof", "batch", "single_barrel", "country"]
 };
 
-const LABEL_PROMPT = `You read spirits bottle labels for a home-bar app. Report only what is printed on the label in the photo — never fill in an age, proof or batch from memory of the brand. full_name is brand + expression the way a shopper would say it, without filler words like "Kentucky Straight" when the brand is clear. If the label is partly hidden, report what you can read. If the photo isn't a spirits label, or the brand can't be read, set readable to false. Call read_label once.`;
+const LABEL_PROMPT = `You read spirits bottle labels for a home-bar app. Report only what is printed on the label in the photo — never fill in a brand, age, proof or batch from memory. First transcribe the large front-label words exactly as printed (printed_words). Then build full_name ONLY from those words: brand + expression the way a shopper would say it, without filler like "Kentucky Straight" when the brand is clear. Never substitute a brand you know for the one printed — a label reading "BANKS" is Banks, even if another brand makes a similar bottle. If the label is partly hidden, report what you can read. If the photo isn't a spirits label, or the brand can't be read, set readable to false. Call read_label once.`;
 
 // deno-lint-ignore no-explicit-any
 function strictify(node: any): any {
@@ -149,6 +151,7 @@ Deno.serve(async (req) => {
     }
     const label = {
       full_name: String(input.full_name).trim().slice(0, 200),
+      printed_words: String(input.printed_words || "").trim().slice(0, 300),
       brand: input.brand || null,
       expression: input.expression || null,
       category: BAR_CATEGORIES.includes(input.category) ? input.category : "other",

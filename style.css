@@ -2561,3 +2561,17 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
 .bt-check { margin: -4px 0 0; font-size: 0.85rem; color: var(--faint); line-height: 1.5; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .bt-check .spinner { width: 14px; height: 14px; }
 .bt-check .link-inline { min-height: 44px; }
+/* Adding to the bar: the app's "in stock" green, so it never reads as the red
+   search / lookup actions — and it always goes through the confirm sheet. */
+.bt-add-btn { background: #3E6B3A; color: #fff; border: 0; }
+.bt-add-outline { border-color: #3E6B3A; color: #2F5A2C; }
+.bt-add-panel { z-index: 46; }   /* over the lookup sheet it opens from */
+.bt-add-form { display: flex; flex-direction: column; gap: 8px; }
+.bt-add-field { font-size: 0.85rem; font-weight: 600; color: var(--ink); margin-top: 4px; }
+.bt-add-form .search { min-height: 44px; }
+.bt-add-actions { display: flex; gap: 8px; margin-top: 8px; }
+.bt-add-actions > button { flex: 1; min-height: 48px; font-size: 1rem; }
+.bt-label-card.is-misread { border: 1px solid #E3B4A8; }
+.bt-fix { margin-top: 6px; }
+.bt-fix summary { cursor: pointer; color: var(--accent); font-size: 0.88rem; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+.bt-fix .bt-search { margin-top: 4px; }
