@@ -55,12 +55,12 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-// Judging which page is a primary source (a critic's review vs a retailer
-// repeating it) is the hard part, and a bad score lands in everyone's catalog —
-// so this one uses Sonnet, not the Haiku the recipe functions use. About
-// 20-30 cents a lookup: three search stages (up to 7 searches, $10 per 1,000)
-// plus the record call.
-const MODEL = "claude-sonnet-5-5";
+// Haiku 5.5, from the 2026-11-09 comparison (testing-skills/bottle_model_compare.py):
+// it confirmed the known critic scores at 9-17 cents a lookup, where Sonnet 5.5
+// spent 43-60 cents on the searches alone (and can't force a tool call, see the
+// record step). What it may keep is decided by vet() either way, not the model.
+// Cost: up to 7 searches ($10 per 1,000) plus tokens; each lookup logs its own.
+const MODEL = "claude-haiku-5-5";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DAILY_LOOKUP_LIMIT = 20;
 const SITE_DAILY_LOOKUP_LIMIT = 200;
@@ -69,9 +69,21 @@ const NONE_REMEMBER_DAYS = 30;
 const VERIFY_FRESH_DAYS = 7;
 const RUNNING_STALE_MS = 5 * 60_000;
 const CALL_TIMEOUT_MS = 90_000;
-// For the cost line each lookup writes to spirit_lookups.detail (Sonnet 5.5 list
-// prices per million tokens, and web search per search) — update with pricing.
-const PRICE_IN_PER_MTOK = 2, PRICE_OUT_PER_MTOK = 10, PRICE_PER_SEARCH = 0.01;
+// For the cost line each lookup writes to spirit_lookups.detail: list prices per
+// million tokens (Haiku 5.5 charges more for prompts over 100k tokens), and web
+// search per search — update with pricing.
+const PRICES: Record<string, { in: number; out: number; inLong?: number; outLong?: number }> = {
+  "claude-sonnet-5-5": { in: 2, out: 10 },
+  "claude-haiku-5-5": { in: 0.10, out: 0.50, inLong: 0.50, outLong: 2.50 },
+  "claude-haiku-4-5-20251001": { in: 1, out: 5 }
+};
+const PRICE_PER_SEARCH = 0.01;
+// Comparison runs (README "Bottles"): with the ALLOW_MODEL_OVERRIDE secret set to
+// 1, a request may name one of these models and ask for a dry run — research
+// and vetting only, nothing written, the result returned directly. Remove the
+// secret when the comparison is done.
+const ALLOW_MODEL_OVERRIDE = Deno.env.get("ALLOW_MODEL_OVERRIDE") === "1";
+const TEST_MODELS = Object.keys(PRICES);
 
 // Terms that forbid collecting their scores (Distiller, Tastings.com/BTI), and
 // sites whose robots.txt keeps AI agents out (checked 2026-11-08). The big
@@ -242,7 +254,27 @@ function guessCategory(text: unknown): string {
   }
   return cat;
 }
+const GENERIC_BOTTLE_WORDS = ["single malt scotch", "single malt", "single village", "london dry", "blended scotch",
+  "kentucky", "tennessee", "american", "irish", "canadian", "japanese", "scotch", "bourbon",
+  "gin", "rum", "rhum", "tequila", "vodka", "mezcal", "brandy", "cognac", "amaro", "spirits",
+  "distillery", "distilling", "company", "co", "and", "of"];
+const GENERIC_BOTTLE_RE = new RegExp("\\b(" + GENERIC_BOTTLE_WORDS.map((g) => g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")\\b", "g");
+function bottleWords(key: string): Set<string> {
+  return new Set(String(key || "").replace(GENERIC_BOTTLE_RE, " ").split(/\s+/).filter(Boolean));
+}
+function sameBottle(keyA: string, keyB: string): boolean {
+  const a = bottleWords(keyA), b = bottleWords(keyB);
+  return a.size > 0 && a.size === b.size && [...a].every((w) => b.has(w));
+}
 // ==== END NORMALIZE ====
+
+// Does this text name the bottle? Every distinguishing word of its key appears.
+function namesBottle(text: string, bottleKey: string): boolean {
+  const want = bottleWords(bottleKey);
+  if (!want.size) return false;
+  const have = new Set(normName(text).split(" "));
+  return [...want].every((w) => have.has(w));
+}
 
 // The curated search plan: which sites each stage may search, best first.
 // Normally read from rating_sources (search_tier / search_domains /
@@ -310,7 +342,7 @@ const DH_GRADES: Record<string, string> = { "10": "A+", "9.5": "A", "9": "A-", "
 function hostOf(url: string): string {
   try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch { return ""; }
 }
-type SourceRow = { scale: string; default_weight: number; search_domains?: string[] | null };
+type SourceRow = { scale: string; default_weight: number; kind?: string; search_domains?: string[] | null };
 function sourceFor(review: FoundReview, sourceRows: Map<string, SourceRow>): string {
   const host = hostOf(review.url);
   const onDomain = (d: string) => host === d || host.endsWith("." + d);
@@ -357,7 +389,7 @@ const REVIEW_SCHEMA = {
           year: { type: ["integer", "null"], description: "Year of the review or competition, or null if the page doesn't say." },
           scale: { type: "string", enum: ["points_100", "out_of_10", "stars_5", "barrels_5", "medal"] },
           score: { type: ["number", "null"], description: "The score on that scale; null for a medal." },
-          medal: { type: ["string", "null"], description: "The medal exactly as awarded (e.g. 'Double Gold') for scale 'medal'; else null." },
+          medal: { type: ["string", "null"], description: "The medal exactly as awarded (e.g. 'Double Gold'): for scale 'medal' the score itself; with points, the medal that came with them; else null." },
           reviewer: { type: ["string", "null"], description: "The reviewer's name if the page gives one." },
           bottle_as_named: { type: "string", description: "The bottle's name exactly as that page prints it." }
         },
@@ -403,6 +435,9 @@ How to work, in every stage:
 - Search only for what the stage asks. The search tool is limited to that stage's sites.
 - For each score you find, write one short line that quotes where the page states the score or medal, so the page is cited. Say plainly when a stage found nothing.
 - If scores we already have are listed, check them as you go: does a page in your results still show that exact score?
+- On a page that lists many bottles (a competition's results), quote the line that names THIS bottle together with its medal or points.
+- A competition entry with both a medal and points is ONE score: record the points, with the medal in the medal field.
+- Prefer the named critics and competitions; record at most two other independent reviewers, the most recent.
 - Never guess a score. Nothing found is a valid, useful answer.`;
 
 // deno-lint-ignore no-explicit-any
@@ -427,21 +462,30 @@ type Research = {
   checks: FoundCheck[];
   resultUrls: Set<string>;
   cited: Map<string, string[]>;
+  titles: Map<string, string>;
   searches: number;
   tokensIn: number;
   tokensOut: number;
+  cost: number;
+  model: string;
   error?: string;
 };
 type Known = { id: string; ref: string; source_id: string; source: string; scale: string; score_raw: number | null; medal: string | null; review_year: number | null; url: string | null };
 
 // deno-lint-ignore no-explicit-any
 function collect(out: Research, data: any) {
-  out.searches += data.usage?.server_tool_use?.web_search_requests ?? 0;
-  out.tokensIn += (data.usage?.input_tokens ?? 0) + (data.usage?.cache_creation_input_tokens ?? 0) + (data.usage?.cache_read_input_tokens ?? 0);
-  out.tokensOut += data.usage?.output_tokens ?? 0;
+  const searches = data.usage?.server_tool_use?.web_search_requests ?? 0;
+  const tin = (data.usage?.input_tokens ?? 0) + (data.usage?.cache_creation_input_tokens ?? 0) + (data.usage?.cache_read_input_tokens ?? 0);
+  const tout = data.usage?.output_tokens ?? 0;
+  const p = PRICES[out.model] || PRICES[MODEL];
+  const long = tin > 100_000;
+  out.cost += (tin * (long && p.inLong ? p.inLong : p.in) + tout * (long && p.outLong ? p.outLong : p.out)) / 1e6 + searches * PRICE_PER_SEARCH;
+  out.searches += searches;
+  out.tokensIn += tin;
+  out.tokensOut += tout;
   for (const block of data.content ?? []) {
     if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
-      for (const r of block.content) if (r?.url) out.resultUrls.add(r.url);
+      for (const r of block.content) if (r?.url) { out.resultUrls.add(r.url); if (r.title) out.titles.set(r.url, String(r.title)); }
     }
     if (block.type === "text" && Array.isArray(block.citations)) {
       for (const c of block.citations) {
@@ -465,6 +509,9 @@ async function callApi(body: any): Promise<{ status: number; data?: any; text?: 
   if (!res.ok) return { status: res.status, text: await res.text() };
   return { status: res.status, data: await res.json() };
 }
+function apiErrorText(text: unknown): string {
+  try { return String(JSON.parse(String(text)).error?.message || text).slice(0, 160); } catch { return String(text).slice(0, 160); }
+}
 const webSearch = (o: { allowed?: string[]; blocked?: string[]; max: number }) => ({
   type: "web_search_20250305", name: "web_search", max_uses: o.max,
   ...(o.allowed ? { allowed_domains: o.allowed } : { blocked_domains: o.blocked })
@@ -473,8 +520,8 @@ const webSearch = (o: { allowed?: string[]; blocked?: string[]; max: number }) =
 // The research: three search stages (each limited to its own sites), then one
 // forced record_scores call. pause_turn hands a paused turn straight back.
 // deno-lint-ignore no-explicit-any
-async function research(name: string, labelLine: string, plan: { critics: PlanSource[]; competitions: PlanSource[] }, known: Known[]): Promise<Research> {
-  const out: Research = { reviews: [], checks: [], resultUrls: new Set(), cited: new Map(), searches: 0, tokensIn: 0, tokensOut: 0 };
+async function research(name: string, labelLine: string, plan: { critics: PlanSource[]; competitions: PlanSource[] }, known: Known[], model: string = MODEL): Promise<Research> {
+  const out: Research = { reviews: [], checks: [], resultUrls: new Set(), cited: new Map(), titles: new Map(), searches: 0, tokensIn: 0, tokensOut: 0, cost: 0, model };
   const knownText = known.length
     ? `\n\nScores we already have for this bottle — check each is still on its page and still says that:\n` +
       known.map((k) => `- [${k.ref}] ${k.source} · ${knownWhat(k)}${k.review_year ? " · " + k.review_year : ""}${k.url ? " · " + k.url : ""}`).join("\n")
@@ -499,10 +546,10 @@ async function research(name: string, labelLine: string, plan: { critics: PlanSo
     if (last.role === "user") last.content.push({ type: "text", text: st.text });
     else messages.push({ role: "user", content: [{ type: "text", text: st.text }] });
     for (let step = 0; step < 4; step++) {
-      const r = await callApi({ model: MODEL, max_tokens: 2048, system: RESEARCH_PROMPT, tools: [st.tool], tool_choice: { type: "auto" }, messages });
+      const r = await callApi({ model, max_tokens: 2048, system: RESEARCH_PROMPT, tools: [st.tool], tool_choice: { type: "auto" }, messages });
       if (!r.data) {
         console.error("research-bottle: Anthropic error", r.status, String(r.text).slice(0, 500));
-        out.error = r.status === 429 ? "busy" : "api";
+        out.error = `${r.status === 429 ? "busy" : "api"} (HTTP ${r.status}: ${apiErrorText(r.text)})`;
         return out;
       }
       collect(out, r.data);
@@ -514,16 +561,22 @@ async function research(name: string, labelLine: string, plan: { critics: PlanSo
   messages.push({ role: "user", content: [{ type: "text", text: known.length
     ? "Now call record_scores: NEW scores in reviews (not the ones we already have), and one entry in checks for every score we already have."
     : "Now call record_scores with every qualifying score you found (an empty reviews list if nothing qualified)." }] });
-  let strict = true;
-  for (let step = 0; step < 3; step++) {
+  let strict = true, forced = true;
+  for (let step = 0; step < 4; step++) {
     const recordTool = strict
       ? { name: "record_scores", description: "Record the bottle's facts, new scores, and checks of known ones.", input_schema: strictify(REVIEW_SCHEMA), strict: true }
       : { name: "record_scores", description: "Record the bottle's facts, new scores, and checks of known ones.", input_schema: REVIEW_SCHEMA };
     const r = await callApi({
-      model: MODEL, max_tokens: 4096, system: RESEARCH_PROMPT,
+      model, max_tokens: 4096, system: RESEARCH_PROMPT,
       tools: [webSearch({ blocked: BLOCKED_DOMAINS, max: 1 }), recordTool],
-      tool_choice: { type: "tool", name: "record_scores" }, messages
+      tool_choice: forced ? { type: "tool", name: "record_scores" } : { type: "auto" }, messages
     });
+    // Some models (Sonnet 5.5) refuse a forced tool_choice: offer the tool instead.
+    if (r.status === 400 && forced && /tool_choice/i.test(String(r.text))) {
+      console.error("research-bottle: forced tool_choice refused — offering record_scores instead");
+      forced = false;
+      continue;
+    }
     if (r.status === 400 && strict) {
       console.error("research-bottle: strict tool schema rejected — retrying without strict:", String(r.text).slice(0, 300));
       strict = false;
@@ -531,7 +584,7 @@ async function research(name: string, labelLine: string, plan: { critics: PlanSo
     }
     if (!r.data) {
       console.error("research-bottle: Anthropic error", r.status, String(r.text).slice(0, 500));
-      out.error = r.status === 429 ? "busy" : "api";
+      out.error = `${r.status === 429 ? "busy" : "api"} (HTTP ${r.status}: ${apiErrorText(r.text)}${strict ? "" : "; after the non-strict retry"})`;
       return out;
     }
     collect(out, r.data);
@@ -559,7 +612,7 @@ function knownWhat(k: Known): string {
 type Kept = { row: Record<string, unknown>; key: string };
 
 // Every check from the header, applied to the new scores the model recorded.
-function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRow>): { kept: Kept[]; dropped: Record<string, number> } {
+function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRow>, bottleKey = ""): { kept: Kept[]; dropped: Record<string, number> } {
   const kept: Kept[] = [];
   const dropped: Record<string, number> = {};
   const drop = (why: string) => { dropped[why] = (dropped[why] || 0) + 1; };
@@ -585,16 +638,23 @@ function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRo
       raw = Number(r.score);
       const [lo, hi] = SCALE_RANGE[r.scale];
       if (raw < lo || raw > hi) { drop("score out of range"); continue; }
-      const scale = SCALE_FOR[r.scale](source);
-      score10 = to10(scale, raw);
+      // An unnamed reviewer's x/10 reads like a critic's x0/100 (an 8.5/10 blog
+      // score is an 85, not an 8.5); the named 10-point sources keep their own curve.
+      score10 = r.scale === "out_of_10" && source.startsWith("other_") ? to10("critic100", raw * 10) : to10(SCALE_FOR[r.scale](source), raw);
+      if (r.medal && cleanMedal(r.medal)) medal = r.medal;
     }
     if (score10 == null) { drop("no usable score"); continue; }
     const year = Number.isInteger(r.year) && r.year! >= 1990 && r.year! <= thisYear ? r.year : null;
-    // When the model cited this page, the cited text must show the score.
-    const cites = found.cited.get(r.url);
-    if (cites && cites.length) {
-      const toks = scoreTokens(r, source);
-      if (!toks.some((t) => cites.some((c) => c.includes(t)))) { drop("score not in cited text"); continue; }
+    // When the model cited this page, the cited text must show the score. A page
+    // whose title doesn't name the bottle (a results list, a brand's awards page
+    // for its whole range) must also have a cited line that names it.
+    const cites = found.cited.get(r.url) || [];
+    const toks = scoreTokens(r, source);
+    if (cites.length && !toks.some((t) => cites.some((c) => c.includes(t)))) { drop("score not in cited text"); continue; }
+    if (bottleKey && !namesBottle(found.titles.get(r.url) || "", bottleKey) &&
+        !cites.some((c) => namesBottle(c, bottleKey) && toks.some((t) => c.includes(t)))) {
+      drop("listing page without a cited line naming the bottle");
+      continue;
     }
     const dedupe = `${source}|${year ?? ""}|${raw ?? ""}|${(medal || "").toLowerCase()}`;
     if (seen.has(dedupe)) { drop("duplicate"); continue; }
@@ -609,6 +669,20 @@ function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRo
       }
     });
   }
+  // One competition entry recorded twice (its medal, and its points) is one score.
+  const entry = (k: Kept) => `${k.row.source_id}|${k.row.review_year ?? ""}|${k.row.url}`;
+  for (const pts of kept.filter((k) => k.row.score_raw != null)) {
+    const twin = kept.find((k) => k !== pts && k.row.score_raw == null && entry(k) === entry(pts));
+    if (!twin) continue;
+    pts.row.medal = pts.row.medal || twin.row.medal;
+    kept.splice(kept.indexOf(twin), 1);
+    drop("medal merged into its points");
+  }
+  // At most two unnamed independent reviewers, the most recent: a pile of blogs
+  // shouldn't outweigh Whisky Advocate.
+  const blogs = kept.filter((k) => k.row.source_id === "other_critic")
+    .sort((a, b) => Number(b.row.review_year || 0) - Number(a.row.review_year || 0));
+  for (const extra of blogs.slice(2)) { kept.splice(kept.indexOf(extra), 1); drop("more than two independent reviewers"); }
   return { kept, dropped };
 }
 
@@ -625,8 +699,14 @@ function vetChecks(found: Research, known: Known[]): { confirmed: string[]; chan
     const cites = found.cited.get(url) || [];
     if (!cites.length) continue;
     const old = tokensFor(k.medal ? "medal" : "points", k.score_raw, k.medal, k.source_id);
-    const showsOld = old.some((t) => cites.some((x) => x.includes(t)));
-    if (c.status === "confirmed" && showsOld) confirmed.push(k.id);
+    // A score we stored as a band's middle (Wine Enthusiast's old "96-100" -> 98)
+    // still matches when the page prints the band.
+    const inBand = k.score_raw != null && cites.concat([String(c.now_says || "")]).some((x) =>
+      [...x.matchAll(/(\d{2,3})\s*[-–]\s*(\d{2,3})/g)].some((m) => Number(m[1]) <= Number(k.score_raw) && Number(k.score_raw) <= Number(m[2])));
+    const showsOld = inBand || old.some((t) => cites.some((x) => x.includes(t)));
+    // The evidence decides, not the model's label: a cited page still showing our
+    // score is a confirmation even when the model called it "changed".
+    if ((c.status === "confirmed" || c.status === "changed") && showsOld) confirmed.push(k.id);
     else if (c.status === "changed" && c.now_says && !showsOld && cites.some((x) => x.includes(String(c.now_says).toLowerCase()))) {
       changed.push({ id: k.id, now: String(c.now_says).slice(0, 60), url });
     }
@@ -642,10 +722,9 @@ async function finishLookup(admin: Db, lookupId: string, patch: Record<string, u
   if (error) console.error("research-bottle: couldn't close lookup", lookupId, error.message);
 }
 
-// The background half: research, vet, write, close the lookup row. With a known
-// bottle (productId) it's also a check of the scores the catalog already holds.
-async function runLookup(admin: Db, lookupId: string, userId: string, name: string, label: Record<string, unknown>, productId: string | null) {
-  try {
+// Research and vet one bottle — no writes. With a known bottle (productId) the
+// scores the catalog holds are passed in to be checked.
+async function evaluate(admin: Db, name: string, label: Record<string, unknown>, productId: string | null, model: string = MODEL) {
     const labelBits = [
       label.brand && `brand ${label.brand}`, label.expression && `expression ${label.expression}`,
       label.category && `category ${label.category}`, label.age_years && `${label.age_years} years old`,
@@ -657,8 +736,8 @@ async function runLookup(admin: Db, lookupId: string, userId: string, name: stri
     // The plan and the scales: rating_sources (falls back to the built-in plan
     // until the search_* columns exist).
     let { data: srcData, error: srcError } = await admin.from("rating_sources")
-      .select("id,name,scale,default_weight,search_tier,search_domains,search_categories");
-    if (srcError) ({ data: srcData } = await admin.from("rating_sources").select("id,name,scale,default_weight"));
+      .select("id,name,kind,scale,default_weight,search_tier,search_domains,search_categories");
+    if (srcError) ({ data: srcData } = await admin.from("rating_sources").select("id,name,kind,scale,default_weight"));
     const sourceRows = new Map<string, SourceRow & { name?: string }>((srcData || []).map((s: { id: string } & SourceRow) => [s.id, s]));
     const planned = (srcData || []).filter((s: PlanSource) => s.search_tier != null);
     const planSources: PlanSource[] = planned.length ? planned : DEFAULT_SEARCH_PLAN;
@@ -677,23 +756,44 @@ async function runLookup(admin: Db, lookupId: string, userId: string, name: stri
           scale: sourceRows.get(r.source_id)?.scale || "critic100"
         }));
     }
-    const found = await research(name, labelLine, planFor(category, planSources), known);
-    const cost = (found.tokensIn * PRICE_IN_PER_MTOK + found.tokensOut * PRICE_OUT_PER_MTOK) / 1e6 + found.searches * PRICE_PER_SEARCH;
-    const costLine = `≈${(cost * 100).toFixed(1)}¢ (${found.tokensIn} in / ${found.tokensOut} out tokens, ${found.searches} searches)`;
-    if (found.error) {
-      await finishLookup(admin, lookupId, { status: "failed", detail: `research ${found.error}; ${costLine}` });
-      return;
-    }
+    const found = await research(name, labelLine, planFor(category, planSources), known, model);
+    const costLine = `≈${(found.cost * 100).toFixed(1)}¢ ${model === MODEL ? "" : model + " "}(${found.tokensIn} in / ${found.tokensOut} out tokens, ${found.searches} searches)`;
     const want: Attrs = {
       age_years: (label.age_years as number) ?? parseAttrs(name).age_years,
       abv: (label.abv as number) ?? parseAttrs(name).abv,
       batch: (label.batch as string) ?? parseAttrs(name).batch
     };
-    const { kept, dropped } = vet(found, want, sourceRows);
-    const checks = vetChecks(found, known);
-    let detail = `${costLine}; ${found.reviews.length} found, ${kept.length} kept` +
-      (Object.keys(dropped).length ? `; dropped ${Object.entries(dropped).map(([k, v]) => `${v} ${k}`).join(", ")}` : "") +
-      (known.length ? `; checked ${known.length}: ${checks.confirmed.length} confirmed, ${checks.changed.length} changed` : "");
+    const { kept, dropped } = vet(found.error ? { ...found, reviews: [] } : found, want, sourceRows, normName(name));
+    // Independent reviewers (blogs) only fill gaps: once a named critic has scored
+    // the bottle — already in the catalog, or found now — they're left out, so a
+    // casual 5/5 never dilutes Wine Enthusiast. (Comparison run, 2026-11-09.)
+    const namedCritic = (id: string) => sourceRows.get(id)?.kind === "critic" && !id.startsWith("other_");
+    if ([...known.map((k) => k.source_id), ...kept.map((k) => String(k.row.source_id))].some(namedCritic)) {
+      const why = "independent reviewer (a named critic has scored it)";
+      for (const k of kept.filter((x) => x.row.source_id === "other_critic")) {
+        kept.splice(kept.indexOf(k), 1);
+        dropped[why] = (dropped[why] || 0) + 1;
+      }
+    }
+    const checks = found.error ? { confirmed: [], changed: [] } : vetChecks(found, known);
+    const detail = found.error ? `research ${found.error}; ${costLine}`
+      : `${costLine}; ${found.reviews.length} found, ${kept.length} kept` +
+        (Object.keys(dropped).length ? `; dropped ${Object.entries(dropped).map(([k, v]) => `${v} ${k}`).join(", ")}` : "") +
+        (known.length ? `; checked ${known.length}: ${checks.confirmed.length} confirmed, ${checks.changed.length} changed` : "");
+    return { found, kept, dropped, checks, known, want, detail };
+}
+
+// The background half: research, vet, write, close the lookup row. With a known
+// bottle (productId) it's also a check of the scores the catalog already holds.
+async function runLookup(admin: Db, lookupId: string, userId: string, name: string, label: Record<string, unknown>, productId: string | null) {
+  try {
+    const ev = await evaluate(admin, name, label, productId);
+    const { found, kept, checks, want } = ev;
+    let detail = ev.detail;
+    if (found.error) {
+      await finishLookup(admin, lookupId, { status: "failed", detail });
+      return;
+    }
 
     // Known scores the check confirmed: stamp them, and count it as the
     // independent confirmation an unverified find needs (if someone else found it).
@@ -770,17 +870,21 @@ async function runLookup(admin: Db, lookupId: string, userId: string, name: stri
     // Already in the catalog (curated, bulk, or an earlier lookup)? Then this
     // lookup is independent confirmation: mark it verified, don't add a copy.
     const { data: existing } = await admin.from("spirit_reviews")
-      .select("id,source_id,review_year,score_raw,medal,origin,added_by,verified,seen_count").eq("product_id", pid);
+      .select("id,source_id,review_year,score_raw,medal,url,origin,added_by,verified,seen_count").eq("product_id", pid);
     const byKey = new Map<string, { id: string; origin: string; added_by: string | null; verified: boolean; seen_count: number }>();
     for (const e of existing || []) {
       const raw = e.score_raw == null ? "" : String(Number(e.score_raw));
       byKey.set(`${e.source_id}|${e.review_year ?? ""}|${raw}|${(e.medal || "").toLowerCase()}`, e);
+      // The same review read off the same page under another source label (the
+      // brand page's Ultimate Spirits Challenge 93 filed as "other competition").
+      if (e.url) byKey.set(`url:${e.url}|${e.review_year ?? ""}|${raw}`, e);
     }
     const fresh = [];
     let confirmed = 0;
     for (const k of kept) {
       const rawKey = k.row.score_raw == null ? "" : String(Number(k.row.score_raw));
-      const match = byKey.get(`${k.row.source_id}|${k.row.review_year ?? ""}|${rawKey}|${String(k.row.medal || "").toLowerCase()}`);
+      const match = byKey.get(`${k.row.source_id}|${k.row.review_year ?? ""}|${rawKey}|${String(k.row.medal || "").toLowerCase()}`)
+        || byKey.get(`url:${k.row.url}|${k.row.review_year ?? ""}|${rawKey}`);
       if (match) {
         if (checks.confirmed.includes(match.id)) continue;      // already stamped above
         const patch: Record<string, unknown> = { seen_count: (match.seen_count || 1) + 1, last_checked_at: now };
@@ -830,6 +934,20 @@ Deno.serve(async (req) => {
     if (!key) return json({ error: "Which bottle? Type its name or photograph the label." });
     const label = body.label && typeof body.label === "object" ? body.label : {};
     let productId: string | null = typeof body.product_id === "string" ? body.product_id : null;
+
+    // Comparison run: research + vet with the named model, nothing written.
+    if (body.dry_run) {
+      if (!ALLOW_MODEL_OVERRIDE) return json({ error: "Test runs aren't enabled." });
+      const model = TEST_MODELS.includes(body.model) ? body.model : MODEL;
+      const ev = await evaluate(admin, name, label, productId, model);
+      return json({
+        dry_run: true, model, detail: ev.detail, error: ev.found.error || null,
+        cost: ev.found.cost, searches: ev.found.searches, tokens_in: ev.found.tokensIn, tokens_out: ev.found.tokensOut,
+        bottle: ev.found.bottle || null, recorded: ev.found.reviews, kept: ev.kept.map((k) => k.row),
+        dropped: ev.dropped, checks: ev.checks, raw_checks: ev.found.checks,
+        known: ev.known.map((k) => ({ id: k.id, ref: k.ref, source_id: k.source_id, score_raw: k.score_raw, medal: k.medal, review_year: k.review_year, url: k.url }))
+      });
+    }
 
     // 1. A bottle the catalog knows: re-checked unless it was checked within
     //    VERIFY_FRESH_DAYS (by anyone — the result is shared).

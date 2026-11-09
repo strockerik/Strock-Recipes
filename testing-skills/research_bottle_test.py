@@ -44,7 +44,7 @@ def strip_ts(ts):
     ts = re.sub(r"^\s*type \w+ = [^\n]*;\n", "", ts, flags=re.M)             # one-line ones
     ts = re.sub(r"^\s*// deno-lint-ignore[^\n]*\n", "", ts, flags=re.M)
     # function vet(...): { kept: Kept[]; ... } {
-    ts = re.sub(r"function vet\([^\n]*\{\n", "function vet(found, wantAttrs, sourceRows) {\n", ts)
+    ts = re.sub(r"function vet\([^\n]*\{\n", "function vet(found, wantAttrs, sourceRows, bottleKey = \"\") {\n", ts)
     ts = re.sub(r"(const SCALE_FOR)\s*:[^\n]*= \{", r"\1 = {", ts)
     # Signatures this file uses that the generic rules below can't safely reach
     # (an object-type rule would also eat object literals like headers: {...}).
@@ -52,7 +52,8 @@ def strip_ts(ts):
                  (": Promise<{ status: number; data?: any; text?: string }> {", " {"),
                  (": { confirmed: string[]; changed: { id: string; now: string; url: string }[] } {", " {"),
                  ("changed: { id: string; now: string; url: string }[] = []", "changed = []"),
-                 ("(s: { id: string } & SourceRow)", "(s)")]:
+                 ("(s: { id: string } & SourceRow)", "(s)"),
+                 ("model: string = MODEL", "model = MODEL")]:
         ts = ts.replace(a, b)
     ts = re.sub(r"(\w+)\s*:\s*Map<[^>]*>(?=[,)])", r"\1", ts)
     ts = re.sub(r"(\w+)\s*:\s*[A-Z]\w*\[\](?=[,)])", r"\1", ts)
@@ -64,7 +65,7 @@ def strip_ts(ts):
     ts = re.sub(r"\((\w+): \{[^}]*\}\)", r"(\1)", ts)                          # (b: { type: string })
     ts = re.sub(r"\((\w+): \w+\) =>", r"(\1) =>", ts)                          # (why: string) =>
     ts = re.sub(r"(\w+)\??\s*:\s*(?:unknown|string|number|boolean|any|Db|Attrs|Research|FoundReview|string \| null|Record<string, (?:unknown|string|number)>)(?=[,)])", r"\1", ts)
-    ts = re.sub(r"\)\s*:\s*(?:Promise<[^{]*?>|string\[\]|string \| null|number \| null|string|number|boolean|any)\s*\{", ") {", ts)
+    ts = re.sub(r"\)\s*:\s*(?:Promise<[^{]*?>|string\[\]|string \| null|number \| null|string|number|boolean|any|Set<string>)\s*\{", ") {", ts)
     ts = re.sub(r"\s+as (?:number|string)(?: \| null)?\b", "", ts)
     ts = re.sub(r"(\w|\]|\))!(?=[\s,);.])", r"\1", ts)                       # non-null assertions
     ts = ts.replace(" as string)", ")")
@@ -141,7 +142,7 @@ const SOURCES = [
   { id: "whiskey_wash", name: "The Whiskey Wash", scale: "ten", default_weight: 0.8 }, { id: "sfwsc", name: "San Francisco World Spirits Competition", scale: "sfwsc", default_weight: 0.5 },
   { id: "iwsc", name: "IWSC", scale: "iwsc", default_weight: 0.8 }, { id: "other_critic", name: "Other critic", scale: "critic100", default_weight: 0.5 },
   { id: "other_competition", name: "Other competition", scale: "medal", default_weight: 0.5 }, { id: "usc", name: "Ultimate Spirits Challenge", scale: "critic100", default_weight: 0.8 }
-];
+].map((x) => Object.assign({ kind: /^(wine_enthusiast|drinkhacker|whiskey_wash|other_critic)$/.test(x.id) ? "critic" : "competition" }, x));
 const srcMap = new Map(SOURCES.map((s) => [s.id, s]));
 const results = [];
 const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: detail === undefined ? "" : JSON.stringify(detail) });
@@ -173,9 +174,13 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     queue = [END(), END(), END(), { status: 400, body: { error: { message: "strict schema" } } }, RECORD([REC([])])]; sent = [];
     r = await research("Buffalo Trace", "", PLAN, []);
     ok("a strict-schema 400 on the record call retries once without strict", sent.length === 5 && sent[3].tools[1].strict === true && !("strict" in sent[4].tools[1]) && !r.error, sent.map((x) => x.tools[1] && x.tools[1].name));
+    queue = [END(), END(), END(), { status: 400, body: { type: "error", error: { type: "invalid_request_error", message: 'tool_choice: type "tool" and "any" are not supported for this model.' } } }, RECORD([REC([])])]; sent = [];
+    r = await research("Buffalo Trace", "", PLAN, [], "claude-sonnet-5-5");
+    ok("a model that refuses a forced tool gets record_scores offered instead", sent.length === 5 && sent[3].tool_choice.type === "tool" && sent[4].tool_choice.type === "auto" && !r.error && sent[4].model === "claude-sonnet-5-5", sent.map((x) => x.tool_choice && x.tool_choice.type));
+    ok("the run adds up its cost at the model's prices", typeof r.cost === "number", r.cost);
     queue = [{ status: 529, body: { error: { message: "overloaded" } } }]; sent = [];
     r = await research("Buffalo Trace", "", PLAN, []);
-    ok("an API error comes back as an error, not findings", r.error === "api" && r.reviews.length === 0, r);
+    ok("an API error comes back as an error with its HTTP status and message, not findings", /^api \(HTTP 529: overloaded\)/.test(r.error) && r.reviews.length === 0, r);
     const KNOWN = [{ id: "rv1", ref: "r1", source_id: "wine_enthusiast", source: "Wine Enthusiast", scale: "wine_enthusiast", score_raw: 92, medal: null, review_year: 2022, url: __WE__ }];
     queue = [END(), END(), END(), RECORD([REC([])])]; sent = [];
     await research("Buffalo Trace", "", PLAN, KNOWN);
@@ -234,6 +239,44 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     v = one(__R__(__WE__, "Wine Enthusiast", "points_100", 92, null, 2099), [__WE__]);
     ok("a future year is dropped to null, not kept as-is", v.kept.length === 1 && v.kept[0].row.review_year === null, v.kept);
 
+    // ---- the listing-page rule, merged entries, blogs ----
+    const LIST = "https://www.iwsc.net/results/search/2024/184";
+    TITLES[LIST] = "IWSC 2024 results";
+    const bk = normName("Buffalo Trace");
+    const lst = (cites, rev) => vet({ reviews: [rev || __R__(LIST, "IWSC", "medal", null, "Silver", 2024, "Buffalo Trace Bourbon", "competition")], resultUrls: new Set([LIST]), cited: new Map(Object.entries(cites)), titles: new Map([[LIST, TITLES[LIST]]]), searches: 1 }, {}, srcMap, bk);
+    v = lst({});
+    ok("a results list that doesn't name the bottle, uncited → dropped", !v.kept.length && v.dropped["listing page without a cited line naming the bottle"] === 1, v.dropped);
+    v = lst({ [LIST]: ["elijah craig toasted barrel — silver"] });
+    ok("…cited, but the cited line names another bottle → dropped", !v.kept.length, v.dropped);
+    v = lst({ [LIST]: ["buffalo trace kentucky straight bourbon · silver 2024"] });
+    ok("…a cited line naming the bottle with its medal → kept", v.kept.length === 1 && v.kept[0].row.medal === "Silver", v);
+    const BSA = "https://bartenderspiritsawards.com/en/winner-brands/spirits/2026/buffalo-trace";
+    v = vet({ reviews: [__R__(BSA, "Bartender Spirits Awards", "medal", null, "Gold", 2026, "Buffalo Trace", "competition"), __R__(BSA, "Bartender Spirits Awards", "points_100", 94, null, 2026, "Buffalo Trace", "competition")],
+      resultUrls: new Set([BSA]), cited: new Map(), titles: new Map([[BSA, "Buffalo Trace - Bartender Spirits Awards"]]), searches: 1 }, {}, new Map([...srcMap, ["bartender_spirits_awards", { scale: "critic100", default_weight: 0.5 }]]), bk);
+    ok("one competition entry's medal and points become one score", v.kept.length === 1 && v.kept[0].row.score_raw === 94 && v.kept[0].row.medal === "Gold" && v.dropped["medal merged into its points"] === 1, v);
+    const blog = (i, year, score) => __R__("https://blog" + i + ".example/bt", "Blog " + i, "points_100", score, null, year);
+    v = vet({ reviews: [blog(1, 2019, 84), blog(2, 2025, 88), blog(3, 2023, 86)], resultUrls: new Set([1, 2, 3].map((i) => "https://blog" + i + ".example/bt")), cited: new Map(), titles: new Map(), searches: 1 }, {}, srcMap);
+    ok("at most two independent reviewers, the most recent", v.kept.length === 2 && v.kept.map((k) => k.row.review_year).join() === "2025,2023" && v.dropped["more than two independent reviewers"] === 1, v.kept.map((k) => k.row.review_year));
+    v = vet({ reviews: [__R__("https://blog9.example/bt", "Blog 9", "out_of_10", 8.5, null, 2024)], resultUrls: new Set(["https://blog9.example/bt"]), cited: new Map(), titles: new Map(), searches: 1 }, {}, srcMap);
+    ok("a blog's 8.5/10 reads like an 85/100 (6.5), not as 8.5", v.kept.length === 1 && v.kept[0].row.score_10 === 6.5 && v.kept[0].row.score_raw === 8.5, v.kept);
+    const BAND = [{ id: "rb", ref: "r1", source_id: "wine_enthusiast", source: "Wine Enthusiast", scale: "wine_enthusiast", score_raw: 98, medal: null, review_year: 2007, url: __WE__ }];
+    c = vetChecks({ checks: [{ review_ref: "r1", status: "changed", url: __WE__, now_says: "96-100" }], resultUrls: new Set([__WE__]), cited: new Map([[__WE__, ["rating 96-100"]]]) }, BAND);
+    ok("a known band midpoint (98) is confirmed by a page printing 96-100, not flagged", c.confirmed.join() === "rb" && !c.changed.length, c);
+
+    // ---- blogs only fill gaps ----
+    const gapDb = (tables) => makeDb(Object.assign({ rating_sources: SOURCES.slice(), spirit_products: [], spirit_aliases: [], spirit_reviews: [], spirit_lookups: [] }, tables));
+    const BLOG = "https://someblog.example/buffalo-trace";
+    queue = [END([WS(__WE__, BLOG), CITE(__WE__, "rating 92")]), END(), END(),
+      RECORD([REC([__R__(__WE__, "Wine Enthusiast", "points_100", 92), __R__(BLOG, "Some Blog", "points_100", 99)])])];
+    let ev = await evaluate(gapDb({}), "Buffalo Trace", {}, null);
+    ok("a blog is left out when a named critic scored the bottle in the same lookup", ev.kept.length === 1 && ev.kept[0].row.source_id === "wine_enthusiast" && ev.dropped["independent reviewer (a named critic has scored it)"] === 1, ev.dropped);
+    queue = [END([WS(BLOG)]), END(), END(), RECORD([REC([__R__(BLOG, "Some Blog", "points_100", 88)])])];
+    ev = await evaluate(gapDb({}), "Buffalo Trace", {}, null);
+    ok("…but fills the gap when no named critic has", ev.kept.length === 1 && ev.kept[0].row.source_id === "other_critic", ev.kept);
+    queue = [END([WS(BLOG)]), END(), END(), RECORD([REC([__R__(BLOG, "Some Blog", "points_100", 88)])])];
+    ev = await evaluate(gapDb({ spirit_products: [{ id: "pk", category: "bourbon" }], spirit_reviews: [{ id: "x1", product_id: "pk", source_id: "drinkhacker", score_raw: 9, medal: null, review_year: 2020, url: __DH__, match_status: "auto" }] }), "Buffalo Trace", {}, "pk");
+    ok("…and is left out when the catalog already has a named critic's score", !ev.kept.length, ev.dropped);
+
     // ---- runLookup(): the writes ----
     const db = makeDb({ rating_sources: SOURCES.slice(), spirit_products: [], spirit_aliases: [], spirit_reviews: [],
       spirit_lookups: [{ id: "L1", status: "running", name_norm: "buffalo trace" }] });
@@ -271,6 +314,16 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     await runLookup(db, "L4", "user-1", "Obscure Rye", {}, null);
     const L4 = T.spirit_lookups.find((l) => l.id === "L4");
     ok("nothing kept → the lookup closes as none, no bottle created", L4.status === "none" && T.spirit_products.length === 1, { L4, n: T.spirit_products.length });
+
+    // A known score re-found under another source label confirms it, no copy.
+    T.spirit_reviews.push({ id: "usc1", product_id: prod.id, source_id: "usc", score_raw: 93, medal: null, review_year: 2020, url: __BR__, origin: "curated", verified: true, seen_count: 1, match_status: "auto" });
+    T.spirit_lookups.push({ id: "L5b", status: "running", name_norm: "buffalo trace bourbon" });
+    const nBefore = T.spirit_reviews.length;
+    queue = [END([WS(__BR__)]), END(), END(), RECORD([REC([__R__(__BR__, "Tried & True Award", "points_100", 93, null, 2020, "Buffalo Trace Bourbon", "competition")])])];
+    await runLookup(db, "L5b", "user-4", "Buffalo Trace Kentucky Straight Bourbon", {}, prod.id);
+    const usc1 = T.spirit_reviews.find((x) => x.id === "usc1");
+    ok("a known score read off the same page under another label is a confirmation, not a copy", T.spirit_reviews.length === nBefore && usc1.seen_count === 2 && !!usc1.last_checked_at, { n: T.spirit_reviews.length - nBefore, usc1 });
+    T.spirit_reviews.splice(T.spirit_reviews.indexOf(usc1), 1);
 
     // Checking a KNOWN bottle: confirm one score, flag one changed, find nothing new.
     T.spirit_reviews.find((x) => x.source_id === "sfwsc").verified = false;
@@ -319,7 +372,8 @@ def main():
             .replace("__R__", "R"))
     # R(), WS(), CITE(), REC() exist in Python only for building SCRIPTS — give the page JS versions.
     helpers = """
-const WS = (...urls) => ({ type: "web_search_tool_result", tool_use_id: "s1", content: urls.map((u) => ({ type: "web_search_result", url: u, title: "t", encrypted_content: "x" })) });
+const WS = (...urls) => ({ type: "web_search_tool_result", tool_use_id: "s1", content: urls.map((u) => ({ type: "web_search_result", url: u, title: TITLES[u] || "Buffalo Trace Kentucky Straight Bourbon review", encrypted_content: "x" })) });
+const TITLES = {};
 const CITE = (url, cited, text) => ({ type: "text", text: text || "x", citations: [{ type: "web_search_result_location", url, cited_text: cited }] });
 const REC = (reviews, name) => ({ type: "tool_use", id: "t1", name: "record_scores", input: { bottle: { canonical_name: name || "Buffalo Trace Kentucky Straight Bourbon", category: "bourbon", producer: "Buffalo Trace", country: "USA", age_years: null, abv: 45 }, reviews } });
 const R = (url, source, scale, score, medal, year, named, kind) => ({ source_name: source, kind: kind || "critic", url, year: year === undefined ? 2022 : year, scale, score: score === undefined ? null : score, medal: medal || null, reviewer: null, bottle_as_named: named || "Buffalo Trace Kentucky Straight Bourbon" });

@@ -2782,11 +2782,11 @@
           <button class="serv-btn" data-step="1" aria-label="Increase servings">+</button>
           <span class="serv-label">${esc(it.servingsLabel)}</span>
         </span>` : ""}
-        <label class="plan-pick-wrap" title="${inTray ? "Staged for the meal plan \u2014 open Meal plan to put it on a day" : "Stage for the meal plan"}">
+        ${it.section === "kitchen" ? `<label class="plan-pick-wrap" title="${inTray ? "Staged for the meal plan \u2014 open Meal plan to put it on a day" : "Stage for the meal plan"}">
           <input type="checkbox" class="plan-pick" ${inTray ? "checked" : ""}
                  aria-label="Stage ${esc(it.name)} for the meal plan">
           <span class="plan-pick-ico" aria-hidden="true">\uD83D\uDCC5</span>
-        </label>
+        </label>` : ""}
         ${mine ? `<button class="star-btn${it.isFavorite ? " is-on" : ""}" aria-label="${it.isFavorite ? "Remove from favorites" : "Add to favorites"}" aria-pressed="${it.isFavorite}">${it.isFavorite ? "\u2605" : "\u2606"}</button>` : ""}
         <span class="chevron" aria-hidden="true">\u25B6</span>
       </div>
@@ -2934,7 +2934,7 @@
       </div>
       <div class="detail-actions-row">
         ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
-        <button class="ghost-btn small add-to-plan-btn${mealPlanTray.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${mealPlanTray.has(it.id) ? "✓ Staged for plan" : "📅 Stage for plan"}</button>
+        ${it.section === "kitchen" ? `<button class="ghost-btn small add-to-plan-btn${mealPlanTray.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${mealPlanTray.has(it.id) ? "✓ Staged for plan" : "📅 Stage for plan"}</button>` : ""}
         <button class="ghost-btn small detail-grocery-btn${basket.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${basket.has(it.id) ? "✓ In grocery list" : "🛒 Add to grocery list"}</button>
         ${it.section === "kitchen" ? `<button class="ghost-btn small pair-btn" data-id="${esc(it.id)}">🍷 Pair a drink</button>` : ""}
         <button class="ghost-btn small coach-btn" data-id="${esc(it.id)}">✨ Ask AI</button>
@@ -3525,7 +3525,7 @@
     const el = $("#staged-count");
     if (!el) return;
     const n = mealPlanTray.size;
-    el.hidden = !n;
+    el.hidden = !n || section === "cocktails";   // meal planning lives on the Kitchen tab
     el.textContent = n === 1 ? "1 recipe staged — plan it →" : `${n} recipes staged — plan them →`;
   }
 
@@ -4109,18 +4109,19 @@
   // something in it. Staging a recipe (\ud83d\udcc5 on any row, or "Stage for plan" in
   // the open detail) brings it straight back, and the "N recipes staged" pill
   // under the list is the other way in.
-  // On the Bar tab the row is always there, for Bottles; Meal plan within it
-  // still only shows once something is planned.
+  // Meal planning is Kitchen-only; Bottles is Bar-only. On the Bar tab the row
+  // is always there (for Bottles); on Kitchen it shows once something is planned.
   function syncModeTabs(hasPlan) {
     if (!modeTabsEl) return;
     const bar = section === "cocktails";
     modeBottlesBtn.hidden = !bar;
-    modeMealplanBtn.hidden = !hasPlan && viewMode !== "mealplan";
+    modeMealplanBtn.hidden = bar || (!hasPlan && viewMode !== "mealplan");
     modeTabsEl.hidden = !bar && !hasPlan && viewMode === "recipes";
   }
 
   function setViewMode(mode) {
     if (mode === "bottles" && section !== "cocktails") mode = "recipes";
+    if (mode === "mealplan" && section === "cocktails") mode = "recipes";
     viewMode = mode;
     const recipes = mode === "recipes";
     [[modeRecipesBtn, "recipes"], [modeMealplanBtn, "mealplan"], [modeBottlesBtn, "bottles"]].forEach(([btn, m]) => {
@@ -5948,7 +5949,7 @@
     const it = byId[id];
     if (!it) return;
     section = it.section === "bar" ? "cocktails" : "recipes";
-    if (viewMode === "bottles") setViewMode("recipes");
+    if (viewMode === "bottles" || (viewMode === "mealplan" && section === "cocktails")) setViewMode("recipes");
     document.querySelectorAll(".tab").forEach((b) => {
       const on = b.dataset.section === section;
       b.classList.toggle("is-active", on);
@@ -6056,7 +6057,7 @@
       });
       document.body.classList.toggle("section-cocktails", section === "cocktails");
       activeTags.clear();
-      if (viewMode === "bottles" && section !== "cocktails") setViewMode("recipes");
+      if ((viewMode === "bottles" && section !== "cocktails") || (viewMode === "mealplan" && section === "cocktails")) setViewMode("recipes");
       refreshViews();
     });
   });

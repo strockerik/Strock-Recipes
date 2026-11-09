@@ -34,7 +34,7 @@ def strip_ts(ts):
     ts = re.sub(r"^\s*type \w+ = [^\n]*;\n", "", ts, flags=re.M)
     ts = re.sub(r"(const \w+)\s*:\s*[^=\n]+=", r"\1 =", ts)
     ts = re.sub(r"(\w+)\s*:\s*(?:unknown|string|number|boolean|Attrs)(?=[,)])", r"\1", ts)
-    ts = re.sub(r"\)\s*:\s*(?:string \| null|number \| null|string|number|boolean)\s*\{", ") {", ts)
+    ts = re.sub(r"\)\s*:\s*(?:string \| null|number \| null|string|number|boolean|Set<string>)\s*\{", ") {", ts)
     ts = re.sub(r"\s+as (?:number|string) \| null", "", ts)
     if re.search(r":\s*(?:unknown|string|number|boolean|Record<|Attrs)\b|\bas (?:number|string)\b", ts):
         sys.exit("FAIL  TS type-strip left annotations — extend strip_ts()")
@@ -86,6 +86,7 @@ function runApp() {{ {js}
   return {{ norm: NAMES.map(normName), attrs: NAMES.map(parseAttrs), same: PAIRS.map(([a, b]) => sameBottle(normName(a), normName(b))) }}; }}
 function runFn() {{ {ts}
   return {{ norm: NAMES.map(normName), attrs: NAMES.map(parseAttrs), cat: NAMES.map(guessCategory),
+    same: PAIRS.map(([a, b]) => sameBottle(normName(a), normName(b))),
     to10: Object.entries(GRID).map(([s, xs]) => xs.map((x) => to10(s, x))),
     medal: MEDALS.map(([s, m]) => medalTo10(s, m)) }}; }}
 let out;
@@ -118,6 +119,7 @@ document.getElementById("out").textContent = JSON.stringify(out);
         check(f"research-bottle guessCategory({name!r})", res["fn"]["cat"][i], N.guess_category(name))
     for i, (a, b) in enumerate(PAIRS):
         check(f"app.js sameBottle({a!r}, {b!r})", res["app"]["same"][i], N.same_bottle(N.norm_name(a), N.norm_name(b)))
+        check(f"research-bottle sameBottle({a!r}, {b!r})", res["fn"]["same"][i], N.same_bottle(N.norm_name(a), N.norm_name(b)))
     for (scale, xs), got in zip(GRID.items(), res["fn"]["to10"]):
         for x, g in zip(xs, got):
             check(f"research-bottle to10({scale}, {x})", round(g, 6), round(N.to_10(scale, x), 6))

@@ -419,9 +419,11 @@ writable row from a recipe shared with them.
 
 ## Weekly meal planning
 
-Plan what to cook across the week and shop for it in one pass:
+Plan what to cook across the week and shop for it in one pass. Meal planning
+lives on the **Kitchen** tab only — the Bar tab has no Meal plan tab, staged
+pill or 📅 controls (its second view is 🥃 Bottles).
 
-- On any recipe, tap **📅 Stage for plan** (next to ▶ Cook) — or the 📅 box on
+- On any kitchen recipe, tap **📅 Stage for plan** (next to ▶ Cook) — or the 📅 box on
   the row itself — to stage it. It reads "✓ Staged for plan" once it's in the
   tray; staging is *not* scheduling, and the wording is deliberate (it used to
   say "✓ In meal plan", which it wasn't).
@@ -872,12 +874,26 @@ only keeps a score when:
   score or medal;
 - the site isn't one whose terms forbid this or whose robots.txt keeps AI
   agents out (Distiller, Tastings.com, Tequila Matchmaker, Forbes, …);
-- it's for this exact bottle (age, proof and batch agree).
+- it's for this exact bottle (age, proof and batch agree), and on a page whose
+  title doesn't name the bottle (a competition's results list, a brand's awards
+  page) the cited line has to name it beside the medal;
+- a medal and the points from one competition entry are one score, a known
+  score re-read off the same page under another label is a confirmation, and
+  independent reviewers (blogs) only count when no named critic has scored the
+  bottle — at most two, the most recent.
+
+**Which model** came from a paid comparison (`testing-skills/bottle_model_compare.py`,
+2026-11-09): on bottles with hand-checked scores, Haiku 5.5 and Sonnet 5.5
+confirmed the same known scores, at 9–15¢ vs 55–89¢ a lookup. To compare again,
+set the `ALLOW_MODEL_OVERRIDE` secret to `1` on research-bottle (it enables a
+dry-run mode that writes nothing), run the script with `--yes`, then delete the
+secret.
 
 A bottle's research is shared: a lookup that finds nothing is remembered for 30
 days, a bottle checked in the last 7 days isn't checked again, and two people
 scanning the same bottle at once share one search. Per-user cap: 20
-lookups or checks a day (≈20–30¢ each, Sonnet 5.5 + web search); a site-wide cap of 200 a
+lookups or checks a day (≈9–15¢ each, Haiku 5.5 + web search; each lookup logs its
+real cost in `spirit_lookups.detail`); a site-wide cap of 200 a
 day protects the bill. *Wrong bottle?* reports land in `ratings.py reports`.
 
 **One-time setup (SQL editor)** — after the catalog SQL above:

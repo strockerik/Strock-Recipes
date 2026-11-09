@@ -225,7 +225,8 @@ async function runTests() {
     assert("Kitchen: no Bottles tab (and no view row with nothing planned)", $("#mode-bottles").hidden && $(".mode-tabs").hidden, "");
     await toBar();
     assert("Bar: the view row shows with Bottles", !$(".mode-tabs").hidden && !$("#mode-bottles").hidden, "");
-    assert("Bar: Meal plan stays hidden until something is planned", $("#mode-mealplan").hidden, "");
+    assert("Bar: no Meal plan tab (meal planning is Kitchen-only)", $("#mode-mealplan").hidden, "");
+    assert("Bar: no 📅 stage controls on cocktails", !document.querySelector('.item[data-id="r1"] .plan-pick'), "");
     click($("#mode-bottles"));
     await until(function () { return $$("#bt-best .bt-row").length > 0; });
     assert("Bottles view shows; the recipe list hides", !$("#bottles-view").hidden && $("#recipe-list") ? $("#recipe-list").hidden : true, "");
@@ -408,6 +409,22 @@ async function runTests() {
     click($(".tab-kitchen"));
     await delay(120);
     assert("switching to Kitchen leaves Bottles for the recipe list", $("#bottles-view").hidden && $("#mode-bottles").hidden, "");
+
+    // ---- meal planning is Kitchen-only, even with something staged ----
+    var pick = document.querySelector('.item[data-id="k1"] .plan-pick');
+    assert("Kitchen rows keep their 📅 stage box", !!pick, "");
+    click(pick);
+    await delay(150);
+    assert("staging a kitchen recipe shows the Meal plan tab and the staged pill", !$("#mode-mealplan").hidden && !$("#staged-count").hidden, "");
+    click($("#mode-mealplan"));
+    await delay(200);
+    click($(".tab-bar"));
+    await delay(150);
+    assert("switching to Bar from Meal plan lands on Recipes", !$("#meal-plan-view").hidden === false && $("#mode-recipes").getAttribute("aria-selected") === "true", "");
+    assert("Bar: Meal plan tab and staged pill stay hidden with a plan", $("#mode-mealplan").hidden && $("#staged-count").hidden, "");
+    click($(".tab-kitchen"));
+    await delay(150);
+    assert("back on Kitchen, the plan is still there", !$("#mode-mealplan").hidden && !$("#staged-count").hidden, "");
   } catch (e) { assert("no exception", false, String(e && e.stack || e)); }
   assert("no uncaught JS errors", JS_ERRORS.length === 0, JS_ERRORS.join(" | ").slice(0, 400));
   finish();
