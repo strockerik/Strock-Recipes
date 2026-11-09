@@ -510,6 +510,12 @@ function tall(name, els) {
   var short = els.filter(function (e) { return e.getBoundingClientRect().height < 44; });
   assert(name + " are 44px touch targets", els.length > 0 && !short.length, els.length + " found, " + short.length + " short: " + short.slice(0, 3).map(function (e) { return (e.className || e.tagName) + "@" + e.getBoundingClientRect().height.toFixed(0); }).join(", "));
 }
+// Text running past its own button's border (a nowrap label wider than the
+// button) doesn't move the button's box, so noSideScroll can't see it.
+function noSpill(name, els) {
+  var bad = els.filter(function (e) { return e && e.scrollWidth > e.clientWidth + 1; });
+  assert(name + ": text stays inside its box", els.length > 0 && els.every(Boolean) && !bad.length, bad.slice(0, 3).map(function (e) { return txt(e).slice(0, 40) + " " + e.scrollWidth + ">" + e.clientWidth; }).join(" | "));
+}
 function noSideScroll(name) {
   var W = document.documentElement.clientWidth, bad = [];
   $$("body *").forEach(function (el) {
@@ -531,6 +537,14 @@ async function runTests() {
     fits("the score card", $(".bt-scorecard"));
     tall("score card actions and review rows", $$(".bt-actions > *").concat($$(".bt-sources .bt-src"), [$(".bt-report")]));
     noSideScroll("score card");
+    noSpill("score card actions", $$(".bt-actions > *"));
+    // A long name on Not in the catalog yet: the add button names the bottle.
+    await typeLookup("Banks 5 Island Blend Golden Rum");
+    await until(function () { return screen() === "Not in the catalog yet"; });
+    await delay(150);
+    noSpill("Not-in-catalog buttons", $$(".bottle-body button"));
+    tall("Not-in-catalog buttons", $$(".bottle-body button"));
+    noSideScroll("Not-in-catalog screen");
     await typeLookup("Elijah Craig Small Batch Bourbon");
     await resultFor("Elijah Craig Small Batch");
     await delay(200);
@@ -545,6 +559,7 @@ async function runTests() {
     assert("the confirm sheet sits over the lookup sheet", !!topEl && !!topEl.closest("#bt-add-panel"), topEl ? (topEl.id || topEl.className) : "none");
     fits("the confirm sheet", $("#bt-add-panel .grocery-panel-inner"));
     tall("confirm sheet fields and buttons", [$("#bt-add-name"), $("#bt-add-cat"), $("#bt-add-cancel"), ok]);
+    noSpill("confirm sheet buttons", [$("#bt-add-cancel"), ok]);
     noSideScroll("confirm sheet");
     click($("#bt-add-cancel"));
     await delay(80);
