@@ -376,6 +376,16 @@ eq("Lone Caner: an indie or vintage bottling is a limited release", [bool(R.RUM_
    [True, True, False, False])
 eq("cocktails: a canned mule is skipped, Old Fashioned bitters are not", (R.is_cocktail("Jalapeno Mule"), R.is_cocktail("Old Fashioned Aromatic Bitters")), (True, False))
 
+# the 2026-11-12 import failure: an exact name filed under another category
+CL = [{"id": "p-clem", "canonical_name": "Rhum Clément Bana Canne", "name_norm": "rhum clement bana canne", "category": "rum", "age_years": None, "abv": 40, "batch": None}]
+PC = R.plan_batch({"source_id": "bartender_spirits_awards", "scale": "competition100", "rows": [
+    {"name": "Rhum Clement Bana Canne", "category": "liqueur", "year": 2025, "score_raw": 88},
+    {"name": "Rhum Clement Bana Canne", "abv": 55, "category": "liqueur", "year": 2024, "score_raw": 88}]}, CL, [], set())
+eq("plan: the same printed name joins despite another category (no duplicate bottle)", ([pid for _, pid, _ in PC["joined"]], len(PC["new"])), (["p-clem"], 0))
+eq("plan: the same name at another strength is left out, not duplicated", PC["skipped"].get("same name as a catalog bottle of another age or strength"), 1)
+eq("plan: never proposes a new bottle under a name the catalog already has",
+   all(k not in {p["name_norm"] for p in PRODS + CL} for k in R.plan_batch(B, PRODS + CL, ALIASES, set())["new"]), True)
+
 # a hand-checked batch from several sources
 MB = {"source_id": "*", "ref": "url", "origin": "curated", "rows": [
     {"name": "Knob Creek 9 Year Old Small Batch Bourbon", "category": "bourbon", "source_id": "drinkhacker", "scale": "drinkhacker", "score_raw": 9.0, "year": 2020, "url": "https://dh/kc", "weight": 1.0},

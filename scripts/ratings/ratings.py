@@ -992,8 +992,14 @@ def plan_batch(b, products, aliases, have, join_only=False):
             return N.attrs_compatible(attrs, _prod_attrs(p)) and \
                 categories_agree(cat, other, key, p.get("name_norm") or "")
         pid, how = by_key.get(key), "exact name"
-        if pid and not fits(by_id.get(pid) or new.get(pid[4:] if pid.startswith("new:") else "", {})):
-            pid = None
+        if pid:
+            # The very same printed name is the same bottle even when two sources
+            # file it differently (BSA: "Rhum Clement Bana Canne" under liqueurs);
+            # only a stated age/ABV conflict keeps it out — never as a second
+            # bottle of that name, which the catalog's identity index refuses.
+            target = by_id.get(pid) or new.get(pid[4:] if pid.startswith("new:") else "", {})
+            if not N.attrs_compatible(attrs, _prod_attrs(target)):
+                skip("same name as a catalog bottle of another age or strength"); continue
         if not pid:
             if not words:
                 skip("only generic words (a bare 'Gin')"); continue
@@ -1006,6 +1012,8 @@ def plan_batch(b, products, aliases, have, join_only=False):
         if not pid:
             nk = next((k for k in new_words.get(words, []) if fits(new[k]) and N.same_bottle(key, new[k]["name_norm"])), None)
             if nk is None:
+                if key in by_key:              # (belt and braces) a taken name never becomes a new bottle
+                    skip("same name as a catalog bottle of another age or strength"); continue
                 nk = key
                 abv = row.get("abv") if row.get("abv") is not None else attrs["abv"]
                 new[nk] = {"canonical_name": match_name(name)[:200] or name[:200], "name_norm": key, "category": cat,
