@@ -981,6 +981,11 @@
       .from("inventory_items").select("*").order("section").order("category");
     inventory = error ? [] : (data || []).map(mapInventoryRow);
     loadOwnedScores();
+    // A bottle that wasn't in the catalog when it was added (a lookup that found
+    // nothing, a typed name) gets linked once the catalog has it — tried once
+    // per bottle per session; a free catalog search each, no AI.
+    inventory.filter((i) => i.section === "bar" && i.name && !i.product_id && i.category !== "mixer" && !bottles.linkTried.has(i.id))
+      .slice(0, 20).forEach((i) => { bottles.linkTried.add(i.id); linkInventoryToCatalog(i); });
   }
   // Returns the new item (or null). A bar bottle from the score card arrives
   // already linked to its catalog entry; one typed in by hand is linked when
@@ -1829,6 +1834,7 @@
     invNameInput.placeholder = invSection === "bar" ? "Brand (optional)" : "Item (e.g. olive oil)";
   }
   function renderInventoryPanel() {
+    renderBottlesMine();
     invTabBar.classList.toggle("is-on", invSection === "bar");
     invTabBar.setAttribute("aria-selected", String(invSection === "bar"));
     invTabPantry.classList.toggle("is-on", invSection === "pantry");
@@ -2062,7 +2068,7 @@
     ["rum", "Rum", ["rum"]], ["agave", "Agave", ["tequila", "mezcal"]], ["gin", "Gin", ["gin"]],
     ["liqueur", "Liqueur", ["liqueur"]], ["amaro", "Amaro", ["amaro"]]
   ];
-  const bottles = { filter: "all", best: new Map(), total: null, owned: new Map(), sources: null };
+  const bottles = { filter: "all", list: null, best: new Map(), total: null, owned: new Map(), sources: null, linkTried: new Set() };
   const pendingLookups = new Map();          // lookup id -> what was being looked up
   let btToken = 0;                           // bumped on close / new action: stale replies are ignored
   let btScreen = { name: "start", lookupId: null };
@@ -2095,9 +2101,10 @@
   // Bar bottles linked to the catalog get their score beside them in Bar & Pantry.
   async function loadOwnedScores() {
     const ids = inventory.filter((i) => i.section === "bar" && i.product_id).map((i) => i.product_id);
-    if (!ids.length) { bottles.owned = new Map(); return; }
+    if (!ids.length) { bottles.owned = new Map(); renderBottlesMine(); return; }
     bottles.owned = await btScoresFor(ids);
     if (!inventoryPanel.hidden) renderInventoryPanel();
+    renderBottlesMine();
   }
   const ownedProduct = (pid) => inventory.some((i) => i.section === "bar" && i.product_id === pid);
 
@@ -2129,19 +2136,65 @@
             <button type="submit" class="ghost-btn">Search</button>
           </form>
         </div>
-        <div class="bt-best-head">
-          <h2 class="bt-best-title">Best rated</h2>
-          <span id="bt-total" class="bt-total"></span>
+        <div class="bt-lists" role="group" aria-label="Which bottles">
+          <button type="button" class="bt-list-tab" data-bt-list="mine" aria-pressed="false">Your bottles</button>
+          <button type="button" class="bt-list-tab" data-bt-list="best" aria-pressed="false">Best rated</button>
         </div>
         <div class="bt-filter" role="group" aria-label="Category">
           ${BT_FILTERS.map(([id, label]) => `<button type="button" class="bt-chip" data-bt-filter="${id}" aria-pressed="false">${label}</button>`).join("")}
         </div>
+        <div class="bt-best-head">
+          <h2 class="bt-best-title" id="bt-list-title">Best rated</h2>
+          <span id="bt-total" class="bt-total"></span>
+        </div>
+        <ul id="bt-mine" class="bt-list" aria-live="polite" hidden></ul>
+        <p class="bt-foot" id="bt-mine-foot" hidden>Your in-stock bar bottles from Bar &amp; Pantry, best score first. Tap one for its reviews; one with no score yet can be looked up.</p>
         <ul id="bt-best" class="bt-list" aria-live="polite"></ul>
-        <p class="bt-foot">Ranked by score and by how many reviews back it up. Listed: bottles with at least two reviews or a critic's score — any bottle's score shows when you look it up.</p>`;
+        <p class="bt-foot" id="bt-best-foot">Ranked by score and by how many reviews back it up. Listed: bottles with at least two reviews or a critic's score — any bottle's score shows when you look it up.</p>`;
       bottlesView.dataset.built = "1";
     }
+    if (!bottles.list) bottles.list = loadLocal("bottleList", "mine") === "best" ? "best" : "mine";
+    const mine = bottles.list === "mine";
     bottlesView.querySelectorAll("[data-bt-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.btFilter === bottles.filter)));
-    renderBottlesBest();
+    bottlesView.querySelectorAll("[data-bt-list]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.btList === bottles.list)));
+    $("#bt-list-title").textContent = mine ? "Your bottles" : "Best rated";
+    $("#bt-mine").hidden = !mine; $("#bt-mine-foot").hidden = !mine;
+    $("#bt-best").hidden = mine; $("#bt-best-foot").hidden = mine;
+    if (mine) renderBottlesMine(); else renderBottlesBest();
+  }
+  // Your bottles: the bar's in-stock bottles (not mixers), scored ones first.
+  // All local — the scores come from loadOwnedScores; nothing is fetched here.
+  function renderBottlesMine() {
+    const listEl3 = $("#bt-mine");
+    if (!listEl3 || bottlesView.hidden || bottles.list !== "mine") return;
+    const cats = (BT_FILTERS.find((f) => f[0] === bottles.filter) || [])[2];
+    const bar = inventory.filter((i) => i.section === "bar" && i.status !== "out" && i.name && i.category !== "mixer");
+    const rows = bar.filter((i) => !cats || cats.includes(i.category))
+      .map((i) => ({ item: i, s: (i.product_id && bottles.owned.get(i.product_id)) || null }))
+      .sort((a, b) => ((b.s ? Number(b.s.score_10) : -1) - (a.s ? Number(a.s.score_10) : -1)) || a.item.name.localeCompare(b.item.name));
+    const scored = rows.filter((r) => r.s).length;
+    $("#bt-total").textContent = rows.length ? `${rows.length} bottle${rows.length === 1 ? "" : "s"} · ${scored} scored` : "";
+    listEl3.innerHTML = rows.length ? rows.map(btMineRowHtml).join("")
+      : `<li class="bt-empty">${bar.length ? "None of your bottles in this category." : "No bottles on your bar yet — add one from a score card, or in Bar &amp; Pantry."}</li>`;
+  }
+  function btMineRowHtml({ item, s }) {
+    const cat = invCap(item.category || "other");
+    if (s) {
+      const meta = [cat, `${s.n_reviews} review${s.n_reviews === 1 ? "" : "s"}`, `${s.confidence} confidence`].join(" · ");
+      return `<li><button type="button" class="bt-row" data-bt-product="${esc(item.product_id)}">
+        <span class="bt-score" aria-hidden="true">${scoreText(s.score_10)}</span>
+        <span class="bt-row-main"><span class="bt-row-name">${esc(item.name)}</span><span class="bt-row-meta">${esc(meta)}</span></span>
+        <span class="sr-only">Score ${scoreText(s.score_10)} out of 10</span>
+      </button></li>`;
+    }
+    // In the catalog with no reviews yet → its card (which offers a lookup);
+    // not in the catalog → a free catalog search for the name.
+    const attr = item.product_id ? `data-bt-product="${esc(item.product_id)}"` : `data-bt-find="${esc(item.name)}"`;
+    const meta = item.product_id ? `${cat} · No scores yet` : `${cat} · Not in the catalog yet — tap to look it up`;
+    return `<li><button type="button" class="bt-row" ${attr}>
+      <span class="bt-score is-none" aria-hidden="true">–</span>
+      <span class="bt-row-main"><span class="bt-row-name">${esc(item.name)}</span><span class="bt-row-meta">${esc(meta)}</span></span>
+    </button></li>`;
   }
   async function renderBottlesBest() {
     const listEl2 = $("#bt-best");
@@ -2172,7 +2225,7 @@
       const { count } = await supabaseClient.from("spirit_consensus").select("product_id", { count: "exact", head: true });
       bottles.total = count ?? null;
     }
-    if (filter !== bottles.filter) return;    // the filter changed while loading
+    if (filter !== bottles.filter || bottles.list !== "best") return;    // the filter or list changed while loading
     if (totalEl) totalEl.textContent = bottles.total != null ? `${bottles.total.toLocaleString()} bottles scored` : "";
     const rows = bottles.best.get(filter);
     listEl2.innerHTML = rows.length ? rows.map(btRowHtml).join("")
@@ -2666,6 +2719,10 @@
     if (e.target.closest("#bt-open")) { if (openBottlePanel()) { btToken++; renderBtStart(); } return; }
     const f = e.target.closest("[data-bt-filter]");
     if (f) { bottles.filter = f.dataset.btFilter; renderBottlesView(); return; }
+    const tab = e.target.closest("[data-bt-list]");
+    if (tab) { bottles.list = tab.dataset.btList; saveLocal("bottleList", bottles.list); renderBottlesView(); return; }
+    const find = e.target.closest("[data-bt-find]");
+    if (find) { btFromText(find.dataset.btFind); return; }
     const row = e.target.closest("[data-bt-product]");
     if (row && openBottlePanel()) { btToken++; btShowResult(row.dataset.btProduct, null, false); }
   });

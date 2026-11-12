@@ -337,7 +337,15 @@ const SCALE_FOR: Record<string, (src: string) => string> = {
   barrels_5: () => "barrels5"
 };
 const SCALE_RANGE: Record<string, [number, number]> = { points_100: [50, 100], out_of_10: [0, 10], stars_5: [0, 5], barrels_5: [0, 5] };
-const DH_GRADES: Record<string, string> = { "10": "A+", "9.5": "A", "9": "A-", "8.5": "B+", "8": "B", "7.5": "B-", "7": "C+", "6": "C+" };
+// Letter grades as Drinkhacker prints them (its own rating box shows B+ as
+// 8.5/10). The model reports the letter; the number is decided here. Tiki Lovers
+// White's "A-" was dropped as "no usable score" before (2026-11-11): a letter had
+// nowhere to go in a numeric score field.
+const LETTER_GRADES: Record<string, number> = {
+  "A+": 10, "A": 9.5, "A-": 9, "B+": 8.5, "B": 8, "B-": 7.5, "C+": 7, "C": 6.5, "C-": 6, "D+": 5.5, "D": 5, "D-": 4.5, "F": 4
+};
+const DH_GRADES: Record<string, string> = Object.fromEntries(Object.entries(LETTER_GRADES).map(([g, n]) => [String(n), g]));
+const gradeKey = (g: unknown) => String(g ?? "").trim().toUpperCase().replace(/\s+/g, "").replace(/[–—−]/g, "-");
 
 function hostOf(url: string): string {
   try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch { return ""; }
@@ -352,15 +360,16 @@ function sourceFor(review: FoundReview, sourceRows: Map<string, SourceRow>): str
   return review.kind === "competition" || review.scale === "medal" ? "other_competition" : "other_critic";
 }
 // The strings a page has to show for a score to count as "cited".
-function tokensFor(scale: string, score: number | null, medal: string | null, source: string): string[] {
+function tokensFor(scale: string, score: number | null, medal: string | null, source: string, grade: string | null = null): string[] {
   if (scale === "medal") return medal ? [String(medal).toLowerCase()] : [];
+  if (scale === "letter_grade") return LETTER_GRADES[gradeKey(grade)] != null ? [gradeKey(grade).toLowerCase()] : [];
   if (score == null) return [];
   const n = Number(score);
   const toks = new Set([String(n), n.toFixed(1)]);
   if (source === "drinkhacker" && DH_GRADES[String(n)]) toks.add(DH_GRADES[String(n)].toLowerCase());
   return [...toks];
 }
-const scoreTokens = (r: FoundReview, source: string) => tokensFor(r.scale, r.score, r.medal, source);
+const scoreTokens = (r: FoundReview, source: string) => tokensFor(r.scale, r.score, r.medal, source, r.grade ?? null);
 
 const REVIEW_SCHEMA = {
   type: "object",
@@ -387,13 +396,14 @@ const REVIEW_SCHEMA = {
           kind: { type: "string", enum: ["critic", "competition"] },
           url: { type: "string", description: "The page that states this score, copied exactly from your search results." },
           year: { type: ["integer", "null"], description: "Year of the review or competition, or null if the page doesn't say." },
-          scale: { type: "string", enum: ["points_100", "out_of_10", "stars_5", "barrels_5", "medal"] },
-          score: { type: ["number", "null"], description: "The score on that scale; null for a medal." },
+          scale: { type: "string", enum: ["points_100", "out_of_10", "stars_5", "barrels_5", "letter_grade", "medal"] },
+          score: { type: ["number", "null"], description: "The score on that scale; null for a medal or a letter grade." },
+          grade: { type: ["string", "null"], description: "For scale 'letter_grade': the letter exactly as printed for THIS bottle (e.g. 'A-', 'B+'); else null." },
           medal: { type: ["string", "null"], description: "The medal exactly as awarded (e.g. 'Double Gold'): for scale 'medal' the score itself; with points, the medal that came with them; else null." },
           reviewer: { type: ["string", "null"], description: "The reviewer's name if the page gives one." },
           bottle_as_named: { type: "string", description: "The bottle's name exactly as that page prints it." }
         },
-        required: ["source_name", "kind", "url", "year", "scale", "score", "medal", "reviewer", "bottle_as_named"]
+        required: ["source_name", "kind", "url", "year", "scale", "score", "grade", "medal", "reviewer", "bottle_as_named"]
       }
     },
     checks: {
@@ -415,7 +425,7 @@ const REVIEW_SCHEMA = {
 };
 type FoundReview = {
   source_name: string; kind: string; url: string; year: number | null; scale: string;
-  score: number | null; medal: string | null; reviewer: string | null; bottle_as_named: string;
+  score: number | null; grade?: string | null; medal: string | null; reviewer: string | null; bottle_as_named: string;
 };
 type FoundCheck = { review_ref: string; status: string; url: string | null; now_says: string | null };
 
@@ -437,6 +447,8 @@ How to work, in every stage:
 - If scores we already have are listed, check them as you go: does a page in your results still show that exact score?
 - On a page that lists many bottles (a competition's results), quote the line that names THIS bottle together with its medal or points.
 - A competition entry with both a medal and points is ONE score: record the points, with the medal in the medal field.
+- A letter grade (Drinkhacker grades A+ to F) is scale letter_grade, with the letter in grade — never converted to a number yourself.
+- A page reviewing several expressions (White, Dark, Pineapple) gives each its own grade in its own section: take THIS bottle's, and quote that line. A rating box on the page may belong to just one of them.
 - Prefer the named critics and competitions; record at most two other independent reviewers, the most recent.
 - Never guess a score. Nothing found is a valid, useful answer.`;
 
@@ -612,13 +624,19 @@ function knownWhat(k: Known): string {
 type Kept = { row: Record<string, unknown>; key: string };
 
 // Every check from the header, applied to the new scores the model recorded.
-function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRow>, bottleKey = ""): { kept: Kept[]; dropped: Record<string, number> } {
+function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRow>, bottleKey = ""): { kept: Kept[]; dropped: Record<string, number>; droppedAt: Record<string, string[]> } {
   const kept: Kept[] = [];
   const dropped: Record<string, number> = {};
-  const drop = (why: string) => { dropped[why] = (dropped[why] || 0) + 1; };
+  const droppedAt: Record<string, string[]> = {};   // why -> the sites, for the lookup's log
+  let at = "";
+  const drop = (why: string) => {
+    dropped[why] = (dropped[why] || 0) + 1;
+    if (at && !(droppedAt[why] ||= []).includes(at)) droppedAt[why].push(at);
+  };
   const thisYear = new Date().getUTCFullYear();
   const seen = new Set<string>();
   for (const r of found.reviews.slice(0, 20)) {
+    at = r && typeof r.url === "string" ? hostOf(r.url) : "";
     if (!r || typeof r.url !== "string") { drop("malformed"); continue; }
     if (!found.resultUrls.has(r.url)) { drop("url not in search results"); continue; }
     const host = hostOf(r.url);
@@ -634,6 +652,13 @@ function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRo
       score10 = medalTo10(src.scale, r.medal);
       medal = r.medal;
       weight = 0.5;
+    } else if (r.scale === "letter_grade") {
+      // Stored as its x/10 (A- = 9.0), the way first_scores.sh enters Drinkhacker.
+      const n = LETTER_GRADES[gradeKey(r.grade)];
+      if (n != null) {
+        raw = n;
+        score10 = source.startsWith("other_") ? to10("critic100", n * 10) : to10(SCALE_FOR.out_of_10(source), n);
+      }
     } else if (SCALE_FOR[r.scale] && r.score != null && Number.isFinite(Number(r.score))) {
       raw = Number(r.score);
       const [lo, hi] = SCALE_RANGE[r.scale];
@@ -669,6 +694,7 @@ function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRo
       }
     });
   }
+  at = "";
   // One competition entry recorded twice (its medal, and its points) is one score.
   const entry = (k: Kept) => `${k.row.source_id}|${k.row.review_year ?? ""}|${k.row.url}`;
   for (const pts of kept.filter((k) => k.row.score_raw != null)) {
@@ -683,7 +709,7 @@ function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRo
   const blogs = kept.filter((k) => k.row.source_id === "other_critic")
     .sort((a, b) => Number(b.row.review_year || 0) - Number(a.row.review_year || 0));
   for (const extra of blogs.slice(2)) { kept.splice(kept.indexOf(extra), 1); drop("more than two independent reviewers"); }
-  return { kept, dropped };
+  return { kept, dropped, droppedAt };
 }
 
 // The model's checks of scores we already have, held to the same evidence rule:
@@ -763,7 +789,7 @@ async function evaluate(admin: Db, name: string, label: Record<string, unknown>,
       abv: (label.abv as number) ?? parseAttrs(name).abv,
       batch: (label.batch as string) ?? parseAttrs(name).batch
     };
-    const { kept, dropped } = vet(found.error ? { ...found, reviews: [] } : found, want, sourceRows, normName(name));
+    const { kept, dropped, droppedAt } = vet(found.error ? { ...found, reviews: [] } : found, want, sourceRows, normName(name));
     // Independent reviewers (blogs) only fill gaps: once a named critic has scored
     // the bottle — already in the catalog, or found now — they're left out, so a
     // casual 5/5 never dilutes Wine Enthusiast. (Comparison run, 2026-11-09.)
@@ -778,7 +804,7 @@ async function evaluate(admin: Db, name: string, label: Record<string, unknown>,
     const checks = found.error ? { confirmed: [], changed: [] } : vetChecks(found, known);
     const detail = found.error ? `research ${found.error}; ${costLine}`
       : `${costLine}; ${found.reviews.length} found, ${kept.length} kept` +
-        (Object.keys(dropped).length ? `; dropped ${Object.entries(dropped).map(([k, v]) => `${v} ${k}`).join(", ")}` : "") +
+        (Object.keys(dropped).length ? `; dropped ${Object.entries(dropped).map(([k, v]) => `${v} ${k}${droppedAt[k]?.length ? ` (${droppedAt[k].join(", ")})` : ""}`).join(", ")}` : "") +
         (known.length ? `; checked ${known.length}: ${checks.confirmed.length} confirmed, ${checks.changed.length} changed` : "");
     return { found, kept, dropped, checks, known, want, detail };
 }

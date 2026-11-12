@@ -2579,3 +2579,11 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
 .bt-fix { margin-top: 6px; }
 .bt-fix summary { cursor: pointer; color: var(--accent); font-size: 0.88rem; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
 .bt-fix .bt-search { margin-top: 4px; }
+/* Your bottles | Best rated: a two-way switch — a white segment on a grey track
+   (the desktop scope look), so it never reads as one more row of red chips. */
+.bt-lists { display: flex; background: var(--chip); border-radius: 999px; padding: 4px; gap: 4px; }
+.bt-list-tab {
+  flex: 1 1 0; min-width: 0; min-height: 44px; border: 0; border-radius: 999px; background: transparent;
+  font-family: var(--font-body); font-size: 0.9rem; font-weight: 600; color: var(--faint); cursor: pointer;
+}
+.bt-list-tab[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }

@@ -52,7 +52,11 @@ var T = {
   inventory_items: [
     { id:"i1", section:"bar", category:"liqueur", name:"Green Chartreuse", status:"in", product_id:"p-green" },
     { id:"i2", section:"bar", category:"rye", name:"Laws San Luis Valley Rye", status:"in", product_id:"p-laws" },
-    { id:"i3", section:"pantry", category:"Dry Goods & Baking", name:"rice", status:"in", product_id:null }],
+    { id:"i3", section:"pantry", category:"Dry Goods & Baking", name:"rice", status:"in", product_id:null },
+    { id:"i4", section:"bar", category:"rum", name:"Tiki Lovers White Rum", status:"in", product_id:null },  // in the catalog now: linked on load
+    { id:"i5", section:"bar", category:"rum", name:"Plantation 3 Stars", status:"in", product_id:null },     // not in the catalog
+    { id:"i6", section:"bar", category:"gin", name:"Old Tom Gin", status:"out", product_id:null },
+    { id:"i7", section:"bar", category:"mixer", name:"Tonic Water", status:"in", product_id:null }],
   spirit_consensus: [
     { product_id:"p-green", canonical_name:"Green Chartreuse", category:"liqueur", n_reviews:3, n_sources:3, score_10:8.5, confidence:"medium", rank_score:8.1 },
     { product_id:"p-sc", canonical_name:"Smith & Cross", category:"rum", n_reviews:2, n_sources:2, score_10:8.5, confidence:"medium", rank_score:7.9 },
@@ -65,7 +69,8 @@ var T = {
     { id:"p-sc", canonical_name:"Smith & Cross", category:"rum", producer:null, country:null, age_years:null, abv:57 },
     { id:"p-ec", canonical_name:"Elijah Craig Small Batch", category:"bourbon", producer:"Heaven Hill", country:"USA", age_years:null, abv:47 },
     { id:"p-hen", canonical_name:"Hendrick's Gin", category:"gin", producer:null, country:null, age_years:null, abv:44 },
-    { id:"p-laws", canonical_name:"Laws San Luis Valley Rye", category:"rye", producer:null, country:null, age_years:null, abv:null }],
+    { id:"p-laws", canonical_name:"Laws San Luis Valley Rye", category:"rye", producer:null, country:null, age_years:null, abv:null },
+    { id:"p-tiki", canonical_name:"Tiki Lovers White Rum", category:"rum", producer:"The Bitter Truth", country:null, age_years:null, abv:50 }],
   spirit_reviews: [
     { id:"v1", product_id:"p-green", source_id:"wine_enthusiast", score_raw:93, score_10:8.25, medal:null, review_year:2016, url:"https://www.wineenthusiast.com/buying-guide/chartreuse-green/", reviewer:null, origin:"curated", verified:true },
     { id:"v2", product_id:"p-green", source_id:"drinkhacker", score_raw:9.5, score_10:8.75, medal:null, review_year:2019, url:"https://www.drinkhacker.com/2019/05/20/review-yellow-chartreuse-and-green-chartreuse/", reviewer:null, origin:"curated", verified:true },
@@ -133,7 +138,8 @@ function candidatesFor(q) {
     "elijah craig small batch bourbon": [["p-ec", 0.81]],
     "hendricks": [["p-hen", 1.0]],
     "buffalo trace": T.spirit_products.some(function (p) { return p.id === "p-bt"; }) ? [["p-bt", 1.0]] : [],
-    "banks 5 island blend rum": [["p-banks", 0.81]]
+    "banks 5 island blend rum": [["p-banks", 0.81]],
+    "tiki lovers white rum": [["p-tiki", 1.0]]
   }[q] || [];
   return C.map(function (c) { var p = T.spirit_products.filter(function (x) { return x.id === c[0]; })[0];
     return { product_id: p.id, canonical_name: p.canonical_name, category: p.category, age_years: p.age_years, abv: p.abv, batch: null, score: c[1] }; });
@@ -194,7 +200,14 @@ function $$(s) { return Array.prototype.slice.call(document.querySelectorAll(s))
 function txt(el) { return el ? el.textContent.replace(/\s+/g, " ").trim() : ""; }
 async function until(fn, ms) { var w = 0; while (!fn() && w < (ms || 4000)) { await delay(50); w += 50; } return fn(); }
 async function toBar() { click($(".tab-bar")); await delay(120); }
-async function toBottles() { await toBar(); click($("#mode-bottles")); await until(function () { return $$("#bt-best .bt-row").length > 0; }); }
+// Picks the list explicitly: the last choice is remembered per browser.
+async function toBottles(list) {
+  list = list || "best";
+  await toBar(); click($("#mode-bottles"));
+  await until(function () { return !!$('[data-bt-list="best"]'); });
+  click($('[data-bt-list="' + list + '"]'));
+  await until(function () { return $$("#bt-" + list + " .bt-row").length > 0; });
+}
 async function typeLookup(q) {
   var input = $("#bt-view-q"); input.value = q;
   $("#bt-view-search").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -230,7 +243,39 @@ async function runTests() {
     assert("Bar: no Meal plan tab (meal planning is Kitchen-only)", $("#mode-mealplan").hidden, "");
     assert("Bar: no 📅 stage controls on cocktails", !document.querySelector('.item[data-id="r1"] .plan-pick'), "");
     click($("#mode-bottles"));
+    await until(function () { return /8\.5/.test(txt($("#bt-mine .bt-row"))) && !!$('#bt-mine [data-bt-product="p-tiki"]'); });
+
+    // ---- Your bottles: the default list ----
+    var mine = $$("#bt-mine .bt-row");
+    assert("Bottles opens on Your bottles", $('[data-bt-list="mine"]').getAttribute("aria-pressed") === "true" && !$("#bt-mine").hidden && $("#bt-best").hidden && txt($("#bt-list-title")) === "Your bottles", txt($("#bt-list-title")));
+    assert("…the bar's in-stock bottles (not pantry, mixers or ones marked out), scored first",
+      mine.map(function (r) { return txt(r.querySelector(".bt-row-name")); }).join("|") === "Green Chartreuse|Laws San Luis Valley Rye|Plantation 3 Stars|Tiki Lovers White Rum",
+      mine.map(function (r) { return txt(r.querySelector(".bt-row-name")); }).join("|"));
+    assert("a scored bottle reads its score, reviews and confidence", /8\.5/.test(txt(mine[0])) && /Liqueur · 3 reviews · medium confidence/.test(txt(mine[0])) && mine[0].dataset.btProduct === "p-green", txt(mine[0]));
+    assert("a catalog bottle with no reviews says No scores yet, and opens its card", /Rye · No scores yet/.test(txt(mine[1])) && mine[1].dataset.btProduct === "p-laws", txt(mine[1]));
+    assert("a bottle not in the catalog says so, and offers a lookup", /Rum · Not in the catalog yet — tap to look it up/.test(txt(mine[2])) && mine[2].dataset.btFind === "Plantation 3 Stars", txt(mine[2]));
+    var tlink = UPDATES.filter(function (u) { return u.table === "inventory_items" && u.patch.product_id === "p-tiki"; })[0];
+    assert("a bar bottle added before the catalog had it is linked on load", !!tlink && /Rum · No scores yet/.test(txt(mine[3])), JSON.stringify(UPDATES));
+    assert("the count says how many are scored", txt($("#bt-total")) === "4 bottles · 1 scored", txt($("#bt-total")));
+    click($('[data-bt-filter="rum"]'));
+    await delay(60);
+    assert("the category chips filter Your bottles too", $$("#bt-mine .bt-row-name").map(txt).join("|") === "Plantation 3 Stars|Tiki Lovers White Rum" && txt($("#bt-total")) === "2 bottles · 0 scored", $$("#bt-mine .bt-row-name").map(txt).join("|") + " / " + txt($("#bt-total")));
+    click($('[data-bt-filter="amaro"]'));
+    await delay(60);
+    assert("…saying so when none match", /None of your bottles in this category/.test(txt($("#bt-mine"))), txt($("#bt-mine")));
+    click($('[data-bt-filter="all"]'));
+    await delay(60);
+    INVOKES = [];
+    click($('#bt-mine [data-bt-find="Plantation 3 Stars"]'));
+    await until(function () { return screen() === "Not in the catalog yet"; });
+    assert("tapping a bottle not in the catalog searches for it (free), offering Look it up", !$("#bottle-panel").hidden && /Plantation 3 Stars/.test(txt($(".bt-label-card"))) && !!$('[data-bt="research"]') && !INVOKES.length, JSON.stringify(INVOKES));
+    click($("#close-bottle"));
+    await delay(60);
+    QUERIES = [];
+    click($('[data-bt-list="best"]'));
     await until(function () { return $$("#bt-best .bt-row").length > 0; });
+    var savedList = Object.keys(localStorage).filter(function (k) { return /:bottleList$/.test(k); }).map(function (k) { return localStorage.getItem(k); });
+    assert("Best rated swaps in, and the choice is remembered", $("#bt-mine").hidden && !$("#bt-best").hidden && txt($("#bt-list-title")) === "Best rated" && savedList.join() === '"best"', savedList.join());
     assert("Bottles view shows; the recipe list hides", !$("#bottles-view").hidden && $("#recipe-list") ? $("#recipe-list").hidden : true, "");
     assert("Bottles tab is the selected one", $("#mode-bottles").getAttribute("aria-selected") === "true" && $("#mode-recipes").getAttribute("aria-selected") === "false", "");
 
@@ -531,6 +576,15 @@ async function runTests() {
     fits("Look up a bottle", $("#bt-open"));
     tall("the lookup button, search, chips and rows", [$("#bt-open"), $("#bt-view-q"), $("#bt-view-search button")].concat($$(".bt-chip"), $$("#bt-best .bt-row")));
     noSideScroll("Bottles view");
+    click($('[data-bt-list="mine"]'));
+    await until(function () { return $$("#bt-mine .bt-row").length >= 4; });
+    await delay(100);
+    fits("Your bottles", $("#bt-mine"));
+    tall("the list switch and Your bottles rows", $$(".bt-list-tab").concat($$("#bt-mine .bt-row")));
+    noSpill("the list switch", $$(".bt-list-tab"));
+    noSideScroll("Your bottles");
+    click($('[data-bt-list="best"]'));
+    await delay(60);
     await typeLookup("Green Chartreuse");
     await resultFor("Green Chartreuse");
     await delay(200);

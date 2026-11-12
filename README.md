@@ -812,8 +812,14 @@ robots rules, all offline.
 ### Bottles: looking a bottle up in the app
 
 On the **Bar** tab, **Bottles** sits next to Recipes. It has a **Look up a
-bottle** button (photograph the label, or type a name) and a **Best rated**
-list of every scored bottle in the catalog, filterable by category. A lookup
+bottle** button (photograph the label, or type a name) and two lists, switched
+at the top and both filterable by category: **Your bottles** — the bar's
+in-stock bottles from Bar & Pantry (not mixers), best score first, with the
+unscored ones after (tap one in the catalog for its card, or one that isn't for
+a free catalog search) — and **Best rated**, every well-reviewed bottle in the
+catalog. The app remembers which list you last used. A bar bottle added before
+the catalog had it is linked on the next load once the name is a sure match
+(one free catalog search per unlinked bottle per session). A lookup
 lands on one of three screens:
 
 - **One clear match** → the score card: the 0–10 score, its confidence, and
@@ -883,6 +889,10 @@ only keeps a score when:
 - it's for this exact bottle (age, proof and batch agree), and on a page whose
   title doesn't name the bottle (a competition's results list, a brand's awards
   page) the cited line has to name it beside the medal;
+- a letter grade (Drinkhacker's A+ … F) is reported as the letter and turned
+  into its x/10 in code (A- = 9.0, as `first_scores.sh` enters it) — the cited
+  line has to show that letter; on a page reviewing several expressions, each
+  bottle takes the grade from its own section;
 - a medal and the points from one competition entry are one score, a known
   score re-read off the same page under another label is a confirmation, and
   independent reviewers (blogs) only count when no named critic has scored the

@@ -224,6 +224,21 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     ok("kept: in the results but uncited (counts ¾ as unverified)", v.kept.length === 1, v.dropped);
     v = one(__R__(__DH__, "Drinkhacker", "out_of_10", 9.0), [__DH__], { [__DH__]: ["a- / $30"] });
     ok("kept: Drinkhacker 9.0 cited as its letter grade A- → 8.0", v.kept.length === 1 && v.kept[0].row.score_10 === 8 && v.kept[0].row.source_id === "drinkhacker", v);
+    // A letter grade arrives as a letter (Tiki Lovers White's "A-" was dropped as "no usable score", 2026-11-11).
+    const G = (grade, named) => Object.assign(__R__(__DH__, "Drinkhacker", "letter_grade", null, null, 2018, named || "Tiki Lovers White Rum"), { grade });
+    v = one(G("A-"), [__DH__], { [__DH__]: ["100 proof. a- / $30"] });
+    ok("kept: a Drinkhacker letter grade A- → stored as 9.0, scored 8.0", v.kept.length === 1 && v.kept[0].row.source_id === "drinkhacker" && v.kept[0].row.score_raw === 9 && v.kept[0].row.score_10 === 8, v);
+    v = one(G(" b+ "), [__DH__], {});
+    ok("a grade's case and spaces don't matter (b+ → 8.5 → 7.25)", v.kept.length === 1 && v.kept[0].row.score_raw === 8.5 && v.kept[0].row.score_10 === 7.25, v);
+    v = one(G("A-"), [__DH__], { [__DH__]: ["114 proof. b+ / $30"] });
+    ok("dropped: the cited line shows another expression's grade, not A-", !v.kept.length && v.dropped["score not in cited text"] === 1, v.dropped);
+    v = one(G("Excellent"), [__DH__]);
+    ok("dropped: a 'grade' that isn't a letter grade", !v.kept.length && v.dropped["no usable score"] === 1, v.dropped);
+    ok("…and the drop names the site, for the lookup's log", (v.droppedAt["no usable score"] || []).join() === "drinkhacker.com", v.droppedAt);
+    v = one(Object.assign(__R__("https://smallblog.example/tl", "Some Rum Blog", "letter_grade", null), { grade: "B" }), ["https://smallblog.example/tl"]);
+    ok("an unnamed blog's B reads like an 80/100 (5.5), as its x/10 does", v.kept.length === 1 && v.kept[0].row.source_id === "other_critic" && v.kept[0].row.score_10 === 5.5, v);
+    ok("the record schema takes a letter grade", REVIEW_SCHEMA.properties.reviews.items.properties.scale.enum.includes("letter_grade") && REVIEW_SCHEMA.properties.reviews.items.required.includes("grade"), "");
+    ok("a held Drinkhacker 6.0 is checked as C- (the old reverse table said C+)", tokensFor("out_of_10", 6, null, "drinkhacker").includes("c-") && !tokensFor("out_of_10", 6, null, "drinkhacker").includes("c+"), tokensFor("out_of_10", 6, null, "drinkhacker"));
     v = one(__R__(__BR__, "San Francisco World Spirits Competition", "medal", null, "Double Gold", 2024, "Buffalo Trace Bourbon", "competition"), [__BR__], { [__BR__]: ["2024 double gold, san francisco"] });
     ok("kept: SFWSC Double Gold from the brand's page → sfwsc 8.5 at half weight", v.kept.length === 1 && v.kept[0].row.source_id === "sfwsc" && v.kept[0].row.score_10 === 8.5 && v.kept[0].row.weight === 0.5, v);
     v = one(__R__("https://thewhiskeywash.com/reviews/bt/", "The Whiskey Wash", "points_100", 86), ["https://thewhiskeywash.com/reviews/bt/"]);
