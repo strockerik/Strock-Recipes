@@ -167,7 +167,7 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     ok("searches counted", r.searches === 2, r.searches);
     ok("record_scores input returned", r.reviews.length === 1 && r.bottle.canonical_name === "Buffalo Trace Kentucky Straight Bourbon" && Array.isArray(r.checks), r.reviews);
     const RUM = planFor("rum", DEFAULT_SEARCH_PLAN);
-    ok("a rum's critic stage skips the whiskey-only critics", RUM.critics.map((x) => x.id).join() === "wine_enthusiast,drinkhacker", RUM.critics.map((x) => x.id));
+    ok("a rum's critic stage skips the whiskey-only critics, keeping the rum ones", RUM.critics.map((x) => x.id).join() === "wine_enthusiast,drinkhacker,lone_caner,rum_howler,whiskyfun" && !RUM.critics.some((x) => x.id === "whisky_advocate" || x.id === "gin_is_in"), RUM.critics.map((x) => x.id));
     queue = [{ status: 200, body: { stop_reason: "pause_turn", content: [WS(__WE__)] } }, END([CITE(__WE__, "rating 92")]), END(), END(), RECORD([REC([])])]; sent = [];
     r = await research("Buffalo Trace", "", PLAN, []);
     ok("a paused stage is resumed with its content sent back, then the next stage runs", sent.length === 5 && sent[1].messages[sent[1].messages.length - 1].role === "assistant" && /Stage 2 of 3/.test(JSON.stringify(sent[2].messages.slice(-1))), sent.map((x) => x.messages.length));
@@ -238,6 +238,21 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     v = one(Object.assign(__R__("https://smallblog.example/tl", "Some Rum Blog", "letter_grade", null), { grade: "B" }), ["https://smallblog.example/tl"]);
     ok("an unnamed blog's B reads like an 80/100 (5.5), as its x/10 does", v.kept.length === 1 && v.kept[0].row.source_id === "other_critic" && v.kept[0].row.score_10 === 5.5, v);
     ok("the record schema takes a letter grade", REVIEW_SCHEMA.properties.reviews.items.properties.scale.enum.includes("letter_grade") && REVIEW_SCHEMA.properties.reviews.items.required.includes("grade"), "");
+    // Sources added 2026-11-12: each reads on its own row's scale / medal ladder.
+    const SRC2 = new Map([...srcMap, ["lone_caner", { scale: "critic100_harsh", default_weight: 1, kind: "critic" }],
+      ["gin_is_in", { scale: "stars5", default_weight: 1, kind: "critic" }],
+      ["denver_isc", { scale: "competition100", default_weight: 0.6, kind: "competition" }],
+      ["cmb", { scale: "medal", default_weight: 0.6, kind: "competition" }]]);
+    const LC = "https://thelonecaner.com/r1154/", GI = "https://theginisin.com/gin-reviews/plymouth/", DC = "https://denverspiritscomp.com/wp-content/uploads/2026/05/2026-DISC_Win_.2xls.pdf", SS = "https://results.spiritsselection.com/en/results/2025/1-x";
+    const two = (rev, url) => vet(base([rev], [url]), {}, SRC2);
+    v = two(__R__(LC, "The Lone Caner", "points_100", 86, null, 2025, "Buffalo Trace"), LC);
+    ok("The Lone Caner's 86 reads on the hard-grader curve (7.0, not a critic's 6.67)", v.kept.length === 1 && v.kept[0].row.source_id === "lone_caner" && v.kept[0].row.score_10 === 7, v);
+    v = two(__R__(GI, "The GIN is IN", "stars_5", 4.5, null, 2024, "Buffalo Trace"), GI);
+    ok("The GIN is IN's 4.5 stars → 8.25", v.kept.length === 1 && v.kept[0].row.source_id === "gin_is_in" && v.kept[0].row.score_10 === 8.25, v);
+    v = two(__R__(DC, "Denver International Spirits Competition", "points_100", 95, "Double Gold", 2026, "Buffalo Trace", "competition"), DC);
+    ok("Denver's 95 points read on the competition curve (8.0)", v.kept.length === 1 && v.kept[0].row.source_id === "denver_isc" && v.kept[0].row.score_10 === 8, v);
+    v = two(__R__(SS, "Spirits Selection by Concours Mondial", "medal", null, "Grand Gold", 2025, "Buffalo Trace", "competition"), SS);
+    ok("a Spirits Selection Grand Gold reads on its own ladder (8.0)", v.kept.length === 1 && v.kept[0].row.source_id === "cmb" && v.kept[0].row.score_10 === 8, v);
     ok("a held Drinkhacker 6.0 is checked as C- (the old reverse table said C+)", tokensFor("out_of_10", 6, null, "drinkhacker").includes("c-") && !tokensFor("out_of_10", 6, null, "drinkhacker").includes("c+"), tokensFor("out_of_10", 6, null, "drinkhacker"));
     v = one(__R__(__BR__, "San Francisco World Spirits Competition", "medal", null, "Double Gold", 2024, "Buffalo Trace Bourbon", "competition"), [__BR__], { [__BR__]: ["2024 double gold, san francisco"] });
     ok("kept: SFWSC Double Gold from the brand's page → sfwsc 8.5 at half weight", v.kept.length === 1 && v.kept[0].row.source_id === "sfwsc" && v.kept[0].row.score_10 === 8.5 && v.kept[0].row.weight === 0.5, v);

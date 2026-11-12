@@ -66,12 +66,19 @@ PAIRS = [
     ("Hendrick's Gin Oasium", "Hendrick's Gin"), ("Montenegro", "Amaro Montenegro"), ("Hendricks", "Hendrick's Gin"),
     ("Del Maguey Vida Single Village Mezcal", "Del Maguey Vida"), ("Plantation White", "Plantation 3 Stars"),
     ("Lagavulin 16 Year Old Single Malt Scotch", "Lagavulin 16"), ("Elijah Craig 18 Year", "Elijah Craig Small Batch"),
+    # a stated spirit type has to agree (2026-11-12)
+    ("Cutwater Gin", "Cutwater Vodka"), ("Cutwater Mezcal Añejo", "Cutwater Tequila Añejo"),
+    ("Old Dominick Straight Bourbon", "Old Dominick Tennessee Whiskey"), ("Rhum J.M Blanc", "J.M Blanc Rum"),
+    ("Pierre Ferrand 1840 Cognac", "Pierre Ferrand 1840 Brandy"), ("Hendrick's", "Hendrick's Gin"),
+    ("Bourbon Barrel Aged Gin", "Barrel Aged Gin"), ("Hidden Ships Rum", "Hidden Ships"),
 ]
 GRID = {"critic100": [60, 70, 85, 87.5, 92, 95, 100, 104], "wine_enthusiast": [79, 87, 93, 98], "iwsc": [80, 92, 95, 98],
         "murray": [94.5, 97.5], "tequila_matchmaker": [89], "drinkhacker": [3, 6, 8, 8.5, 9, 9.5, 10],
-        "ten": [7, 8.5], "barrels5": [2.5, 4], "stars5": [4, 5]}
+        "ten": [7, 8.5], "barrels5": [2.5, 4], "stars5": [4, 5, 4.5],
+        "competition100": [78, 87, 95, 99.5], "critic100_harsh": [66, 86, 91, 97, 99]}
 MEDALS = [("sfwsc", "Double Gold"), ("iwsc", "Spirit Gold Outstanding"), ("iwsc", "Silver Outstanding"),
-          ("default", "Gold"), ("cmb", "Grand Gold"), ("sfwsc", "Packaging Gold"), ("iwsc", "Whisky Highball Bronze"), ("other_competition", "Bronze")]
+          ("default", "Gold"), ("cmb", "Grand Gold"), ("sfwsc", "Packaging Gold"), ("iwsc", "Whisky Highball Bronze"), ("other_competition", "Bronze"),
+          ("spirits_selection", "Grand Gold"), ("denver", "Double Gold"), ("tag", "Platinum"), ("acsa", "Silver"), ("denver", "Best of Show")]
 ATTR_KEYS = ["age_years", "abv", "proof", "batch", "single_barrel", "store_pick"]
 
 def safe(o):

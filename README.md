@@ -569,7 +569,8 @@ rave doesn't top a list. It used to be the displayed score, but with mostly one
 or two older reviews per bottle it squeezed every bottle into 7.0–8.0 (changed
 2026-11-08).
 
-`confidence` is **high** with total weight ≥ 2.5 from at least two sources,
+`confidence` is **high** with total weight ≥ 2.5 from at least two sources
+including a critic or panel (setup SQL step 10 — medals alone never get there),
 **medium** at ≥ 1, otherwise **low**. What's stored per review is facts — score,
 medal, year, reviewer, link — never review prose (`excerpt` is capped at 120
 characters and only for a short attributed phrase). Distiller's and
@@ -1083,6 +1084,64 @@ select p.id as product_id,
        round((sum(w.w * w.score_10) + 7.0) / (sum(w.w) + 1), 2) as rank_score
 from w join public.spirit_products p on p.id = w.product_id
 group by p.id, p.canonical_name, p.category;
+
+-- 9. More sources (2026-11-12): critics and competitions whose robots.txt lets
+--    Claude's agents in. Weights follow the research; harsh graders get their own curve.
+insert into public.rating_sources (id, name, kind, scale, default_weight, scrape_ok, homepage, tos_notes) values
+ ('lone_caner','The Lone Caner','critic','critic100_harsh',1.0,true,'https://thelonecaner.com','Rum, 100-point, hard grader. robots allows; harvested through its WordPress feed.'),
+ ('gin_is_in','The GIN is IN','critic','stars5',1.0,true,'https://theginisin.com','Gin, 0.5-5 stars: the site''s own rating, never reader votes. Crawl-delay 30.'),
+ ('rum_howler','The Rum Howler Blog','critic','critic100',1.0,false,'https://therumhowlerblog.com','100-point. WordPress.com answers scripts with a browser challenge: lookups and manual entry only.'),
+ ('whiskyfun','Whiskyfun','critic','critic100_harsh',1.0,true,'https://www.whiskyfun.com','Serge Valentin / Angus MacRaild, 100-point, hard graders. Not bulk-harvested yet.'),
+ ('denver_isc','Denver International Spirits Competition','competition','competition100',0.6,true,'https://denverspiritscomp.com','Winners PDFs: points from 2025, medals only before.'),
+ ('tag','TAG Global Spirits Awards','competition','competition100',0.6,true,'https://tagspiritsawards.com','Medal per product page; Platinum is common. Crawl-delay 10.'),
+ ('acsa','ACSA Craft Spirits Competition','competition','medal',0.5,true,'https://americancraftspirits.org','US craft distillers (members); medals only.'),
+ ('whisky_competition','International Whisky Competition','competition','competition100',0.8,true,'https://whiskycompetition.com','Scores to two decimals, top three per category.')
+on conflict (id) do nothing;
+-- BSA and NYISC publish a competition's points, not a critic's; Spirits Selection
+-- caps medals at 30% of entries, so its medals carry a bit more.
+update public.rating_sources set scale = 'competition100' where id in ('bartender_spirits_awards', 'nyisc');
+update public.rating_sources set default_weight = 0.6, name = 'Spirits Selection by Concours Mondial' where id = 'cmb';
+update public.rating_sources r set search_tier = p.tier, search_domains = p.domains, search_categories = p.cats
+from (values
+  ('lone_caner',         1, array['thelonecaner.com'],                                    array['rum']),
+  ('rum_howler',         1, array['therumhowlerblog.com'],                                array['rum','vodka','gin','tequila','brandy','whiskey','bourbon','rye','scotch']),
+  ('gin_is_in',          1, array['theginisin.com'],                                      array['gin']),
+  ('whiskyfun',          1, array['whiskyfun.com'],                                       array['scotch','whiskey','rum','brandy']),
+  ('cmb',                2, array['results.spiritsselection.com','concoursmondial.com'],  null::text[]),
+  ('denver_isc',         2, array['denverspiritscomp.com'],                               null),
+  ('tag',                2, array['tagspiritsawards.com'],                                null),
+  ('acsa',               2, array['americancraftspirits.org'],                            null),
+  ('whisky_competition', 2, array['whiskycompetition.com'],                               array['whiskey','bourbon','rye','scotch'])
+) as p(id, tier, domains, cats)
+where r.id = p.id;
+
+-- 10. "High" confidence needs a critic or panel among the reviews: a pile of
+--     competition medals alone stays "medium" (BSA and SFWSC agree only r = 0.13
+--     on the bottles both judged, 2026-11-11).
+create or replace view public.spirit_consensus with (security_invoker = true) as
+with w as (
+  select r.product_id, r.source_id, r.score_10, s.kind,
+         r.weight * (case when r.verified then 1 else 0.75 end)
+                   * power(0.5, greatest(0, extract(year from now())::int
+                                            - coalesce(r.review_year, extract(year from now())::int)) / 10.0) as w
+  from public.spirit_reviews r
+  join public.rating_sources s on s.id = r.source_id
+  where r.product_id is not null and r.score_10 is not null
+    and r.match_status in ('auto','confirmed')
+)
+select p.id as product_id,
+       p.canonical_name,
+       p.category,
+       count(*) as n_reviews,
+       count(distinct w.source_id) as n_sources,
+       round(sum(w.w * w.score_10) / sum(w.w), 2) as score_exact,
+       floor((sum(w.w * w.score_10) / sum(w.w)) * 2 + 0.5) / 2 as score_10,
+       case when sum(w.w) >= 2.5 and count(distinct w.source_id) >= 2
+                 and bool_or(w.kind in ('critic','panel')) then 'high'
+            when sum(w.w) >= 1 then 'medium' else 'low' end as confidence,
+       round((sum(w.w * w.score_10) + 7.0) / (sum(w.w) + 1), 2) as rank_score
+from w join public.spirit_products p on p.id = w.product_id
+group by p.id, p.canonical_name, p.category;
 ```
 
 Then deploy two Edge Functions (dashboard paste, as for the others; both use the
@@ -1098,6 +1157,55 @@ python3 ratings.py sfwsc-import --year 2025 --apply      # add them (new bottles
 python3 ratings.py field                                 # walk unverified lookup finds: verify / reject
 python3 ratings.py reports                               # "Wrong bottle?" reports from the app
 ```
+
+**Bulk sources: harvest, read, then import.** `harvest SOURCE` fetches a whole
+source politely (robots.txt and its crawl-delay honoured, one request every 4 s
+at most, cached 30 days) into `scripts/ratings/batches/SOURCE.json` — no
+database involved, so the file can be read and diffed first. `import-batch`
+then matches every row the way sfwsc-import does and, with `--apply`, adds the
+new bottles, every printed spelling as an alias, and the scores.
+
+```bash
+python3 ratings.py harvest bsa                        # → batches/bsa.json
+python3 ratings.py import-batch batches/bsa.json      # preview: joins, new bottles, skips
+python3 ratings.py import-batch batches/bsa.json --apply
+python3 ratings.py import-batch batches/ssel.json --join-only   # only deepen bottles we have
+bash build_catalog.sh            # every batch, in order (preview); --apply to write
+python3 ratings.py dupes         # bottles one word apart → batches/dupes.csv
+python3 ratings.py merge KEEP_ID DROP_ID --apply                # fold a duplicate into its twin
+```
+
+`batches/` is gitignored like `cache/`: the site is published from this repo,
+and harvested scores shouldn't be republished as files.
+
+| Batch | Source (rating_sources id) | What it holds | Scale, weight |
+| --- | --- | --- | --- |
+| `bsa` | Bartender Spirits Awards (`bartender_spirits_awards`) | every medal 2019– with its points; blind, bartender-judged (mixability, taste, packaging, value) | competition100, 0.5 |
+| `disc` | Denver International Spirits Competition (`denver_isc`) | winners PDFs 2017–; points from 2025, medals before | competition100 / Denver medals, 0.6 |
+| `ssel` | Spirits Selection by Concours Mondial (`cmb`) | medals 2013–, capped at 30% of entries; mostly European — import `--join-only` | Spirits Selection medals, 0.6 |
+| `lonecaner` | The Lone Caner (`lone_caner`) | scored rum reviews via the site's WordPress feed | critic100_harsh, 1.0 |
+| `ginisin` | The GIN is IN (`gin_is_in`) | the site's own star ratings, never reader votes | stars5, 1.0 |
+| `whiskyfun` | Whiskyfun (`whiskyfun`) | scored notes on official bottlings only | critic100_harsh, 1.0 (0.8 non-whisky) |
+
+Matching rules a batch follows, on top of `same_bottle()`: categories must
+agree (amaro ≈ liqueur; a plain "whiskey" joins a bourbon only when its name
+states no other style, and "Bar Boss Whiskey" isn't "Bar Boss Bourbon"); a
+stated ABV must agree; limited releases (a vintage, a cask, an indie bottler —
+Lone Caner and Whiskyfun rows) only join bottles already in the catalog;
+canned and bottled cocktails, mixers and non-alcoholic spirits are skipped; a
+brandless name ("Rye Whiskey") gets its producer in front. `same_bottle()`
+itself (all three copies) now also refuses two names stating different spirit
+types — "Cutwater Gin" is not "Cutwater Vodka", the mezcal añejo not the tequila
+añejo (rum/rhum and brandy/cognac count as one).
+
+Not harvested, and why: The Rum Howler Blog (WordPress.com answers scripts
+with a browser challenge), TAG Global Spirits Awards (medals only on ~1,100
+product pages, some without the brand), Drinkhacker, Breaking Bourbon, Whiskey
+Wash and Difford's Guide (terms forbid automated collection — lookups and
+`score` only), Wine Enthusiast and NYISC (scripts get 403), ADI, the Tasting
+Alliance's SFWSC pages, Robb Report and RumRatings (robots.txt keeps Claude
+out), USA Spirits Ratings and the London Spirits Competition (half of each score
+is value and packaging).
 
 `sfwsc-import` reads SevenFifty Daily's published SFWSC results PDF (the
 competition's own site keeps AI agents out; SevenFifty's allows scripts). macOS

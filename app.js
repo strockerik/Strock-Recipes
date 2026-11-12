@@ -2056,9 +2056,18 @@
   function bottleWords(key) {
     return new Set(String(key || "").replace(GENERIC_BOTTLE_RE, " ").split(/\s+/).filter(Boolean));
   }
+  // A spirit type both names state has to agree ("Cutwater Gin" ≠ "Cutwater
+  // Vodka"); rum/rhum and brandy/cognac are one type each.
+  const TYPE_GROUPS = { gin: "gin", vodka: "vodka", rum: "rum", rhum: "rum", tequila: "tequila", mezcal: "mezcal",
+    brandy: "brandy", cognac: "brandy", bourbon: "bourbon", scotch: "scotch", tennessee: "tennessee" };
+  function spiritTypes(key) {
+    return new Set(String(key || "").split(/\s+/).filter((w) => TYPE_GROUPS[w]).map((w) => TYPE_GROUPS[w]));
+  }
   function sameBottle(keyA, keyB) {
     const a = bottleWords(keyA), b = bottleWords(keyB);
-    return a.size > 0 && a.size === b.size && [...a].every((w) => b.has(w));
+    if (!(a.size > 0 && a.size === b.size && [...a].every((w) => b.has(w)))) return false;
+    const ta = spiritTypes(keyA), tb = spiritTypes(keyB);
+    return !(ta.size && tb.size && ![...ta].some((t) => tb.has(t)));
   }
   // ==== END NORMALIZE ====
 
@@ -2150,7 +2159,7 @@
         <ul id="bt-mine" class="bt-list" aria-live="polite" hidden></ul>
         <p class="bt-foot" id="bt-mine-foot" hidden>Your in-stock bar bottles from Bar &amp; Pantry, best score first. Tap one for its reviews; one with no score yet can be looked up.</p>
         <ul id="bt-best" class="bt-list" aria-live="polite"></ul>
-        <p class="bt-foot" id="bt-best-foot">Ranked by score and by how many reviews back it up. Listed: bottles with at least two reviews or a critic's score — any bottle's score shows when you look it up.</p>`;
+        <p class="bt-foot" id="bt-best-foot">Ranked by score and by how many reviews back it up. Listed: bottles backed by a critic's score or three or more competition results — any bottle's score shows when you look it up.</p>`;
       bottlesView.dataset.built = "1";
     }
     if (!bottles.list) bottles.list = loadLocal("bottleList", "mine") === "best" ? "best" : "mine";

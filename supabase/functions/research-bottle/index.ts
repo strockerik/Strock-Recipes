@@ -194,9 +194,18 @@ const SCORE_ANCHORS: Record<string, [number, number][]> = {
   drinkhacker: [[4.0, 4.0], [6.0, 5.0], [7.0, 6.0], [8.0, 6.75], [8.5, 7.25], [9.0, 8.0], [9.5, 8.75], [10.0, 9.5]],
   ten: [[0, 0.0], [10, 10.0]],
   barrels5: [[0, 0.0], [5, 10.0]],
-  stars5: [[1, 3.0], [2, 4.5], [3, 6.0], [4, 7.5], [5, 9.0]]
+  stars5: [[1, 3.0], [2, 4.5], [3, 6.0], [4, 7.5], [5, 9.0]],
+  // A competition's own points (BSA, Denver, TAG): 70-90% of entries medal.
+  competition100: [[80, 5.0], [85, 6.0], [90, 7.0], [95, 8.0], [98, 9.0], [100, 9.5]],
+  // Hard-grading single palates (Whiskyfun, The Lone Caner): the critic curve 2 points lower.
+  critic100_harsh: [[68, 4.0], [78, 5.5], [83, 6.5], [86, 7.0], [88, 7.5], [90, 8.0], [92, 8.5], [94, 9.0], [96, 9.5], [98, 10.0]]
 };
+// KEEP IN SYNC with normalize.py MEDALS (bottle_normalize_parity_test.py checks).
 const MEDAL_SCORES: Record<string, Record<string, number>> = {
+  spirits_selection: { "silver": 6.0, "gold": 7.0, "grand gold": 8.0 },
+  denver: { "bronze": 5.5, "silver": 6.5, "gold": 7.0, "double gold": 8.0, "platinum": 8.5 },
+  acsa: { "bronze": 5.0, "silver": 6.0, "gold": 7.0 },
+  tag: { "bronze": 5.5, "silver": 6.0, "gold": 7.0, "double gold": 7.5, "platinum": 8.0 },
   sfwsc: { "bronze": 5.5, "silver": 6.5, "gold": 7.5, "double gold": 8.5, "platinum": 8.5, "best in show": 9.0 },
   iwsc: { "bronze": 6.0, "silver": 7.0, "silver outstanding": 7.5, "gold": 8.0, "gold outstanding": 9.0, "trophy": 9.0 },
   default: { "bronze": 6.0, "silver": 7.0, "gold": 8.0, "double gold": 8.5, "grand gold": 8.5, "platinum": 9.0 }
@@ -262,9 +271,18 @@ const GENERIC_BOTTLE_RE = new RegExp("\\b(" + GENERIC_BOTTLE_WORDS.map((g) => g.
 function bottleWords(key: string): Set<string> {
   return new Set(String(key || "").replace(GENERIC_BOTTLE_RE, " ").split(/\s+/).filter(Boolean));
 }
+// A spirit type both names state has to agree ("Cutwater Gin" ≠ "Cutwater
+// Vodka"); rum/rhum and brandy/cognac are one type each.
+const TYPE_GROUPS: Record<string, string> = { gin: "gin", vodka: "vodka", rum: "rum", rhum: "rum", tequila: "tequila", mezcal: "mezcal",
+  brandy: "brandy", cognac: "brandy", bourbon: "bourbon", scotch: "scotch", tennessee: "tennessee" };
+function spiritTypes(key: string): Set<string> {
+  return new Set(String(key || "").split(/\s+/).filter((w) => TYPE_GROUPS[w]).map((w) => TYPE_GROUPS[w]));
+}
 function sameBottle(keyA: string, keyB: string): boolean {
   const a = bottleWords(keyA), b = bottleWords(keyB);
-  return a.size > 0 && a.size === b.size && [...a].every((w) => b.has(w));
+  if (!(a.size > 0 && a.size === b.size && [...a].every((w) => b.has(w)))) return false;
+  const ta = spiritTypes(keyA), tb = spiritTypes(keyB);
+  return !(ta.size && tb.size && ![...ta].some((t) => tb.has(t)));
 }
 // ==== END NORMALIZE ====
 
@@ -295,8 +313,17 @@ const DEFAULT_SEARCH_PLAN: PlanSource[] = [
   { id: "spirits_masters", name: "The Spirits Business Masters", search_tier: 2, search_domains: ["thespiritsbusiness.com"], search_categories: null },
   { id: "bartender_spirits_awards", name: "Bartender Spirits Awards", search_tier: 2, search_domains: ["bartenderspiritsawards.com"], search_categories: null },
   { id: "isc", name: "International Spirits Challenge", search_tier: 2, search_domains: ["internationalspiritschallenge.com"], search_categories: null },
-  { id: "cmb", name: "Concours Mondial de Bruxelles", search_tier: 2, search_domains: ["concoursmondial.com"], search_categories: null },
-  { id: "nyisc", name: "New York International Spirits Competition", search_tier: 2, search_domains: ["nyispiritscompetition.com"], search_categories: null }
+  { id: "cmb", name: "Concours Mondial de Bruxelles", search_tier: 2, search_domains: ["results.spiritsselection.com", "concoursmondial.com"], search_categories: null },
+  { id: "nyisc", name: "New York International Spirits Competition", search_tier: 2, search_domains: ["nyispiritscompetition.com"], search_categories: null },
+  // added 2026-11-12 (README "Bottles" SQL step 9 is the live copy)
+  { id: "lone_caner", name: "The Lone Caner", search_tier: 1, search_domains: ["thelonecaner.com"], search_categories: ["rum"] },
+  { id: "rum_howler", name: "The Rum Howler Blog", search_tier: 1, search_domains: ["therumhowlerblog.com"], search_categories: ["rum", "vodka", "gin", "tequila", "brandy", ...WHISKEY_CATS] },
+  { id: "gin_is_in", name: "The GIN is IN", search_tier: 1, search_domains: ["theginisin.com"], search_categories: ["gin"] },
+  { id: "whiskyfun", name: "Whiskyfun", search_tier: 1, search_domains: ["whiskyfun.com"], search_categories: ["scotch", "whiskey", "rum", "brandy"] },
+  { id: "denver_isc", name: "Denver International Spirits Competition", search_tier: 2, search_domains: ["denverspiritscomp.com"], search_categories: null },
+  { id: "tag", name: "TAG Global Spirits Awards", search_tier: 2, search_domains: ["tagspiritsawards.com"], search_categories: null },
+  { id: "acsa", name: "ACSA Craft Spirits Competition", search_tier: 2, search_domains: ["americancraftspirits.org"], search_categories: null },
+  { id: "whisky_competition", name: "International Whisky Competition", search_tier: 2, search_domains: ["whiskycompetition.com"], search_categories: WHISKEY_CATS }
 ];
 function planFor(category: string, sources: PlanSource[]) {
   const fits = (s: PlanSource) => !s.search_categories || !s.search_categories.length || s.search_categories.includes(category);
@@ -314,8 +341,16 @@ const DOMAIN_SOURCES: Record<string, string> = {
   "breakingbourbon.com": "breaking_bourbon", "thewhiskeywash.com": "whiskey_wash",
   "bartenderspiritsawards.com": "bartender_spirits_awards", "thespiritsbusiness.com": "spirits_masters",
   "iwsc.net": "iwsc", "daily.sevenfifty.com": "sfwsc", "internationalspiritschallenge.com": "isc",
-  "concoursmondial.com": "cmb", "nyispiritscompetition.com": "nyisc"
+  "concoursmondial.com": "cmb", "nyispiritscompetition.com": "nyisc",
+  // added 2026-11-12 (robots.txt checked for Claude's agents)
+  "thelonecaner.com": "lone_caner", "theginisin.com": "gin_is_in", "therumhowlerblog.com": "rum_howler",
+  "whiskyfun.com": "whiskyfun", "spiritsselection.com": "cmb", "denverspiritscomp.com": "denver_isc",
+  "tagspiritsawards.com": "tag", "americancraftspirits.org": "acsa", "whiskycompetition.com": "whisky_competition"
 };
+// The medal ladder each competition's medals are read on (else its scale's, else default).
+const SOURCE_MEDALS: Record<string, string> = { cmb: "spirits_selection", denver_isc: "denver", acsa: "acsa", tag: "tag" };
+// 100-point scales a source row may name; any other points source reads as a critic.
+const POINT_SCALES = new Set(["critic100", "critic100_harsh", "competition100", "wine_enthusiast", "iwsc", "murray", "tequila_matchmaker"]);
 const NAME_SOURCES: [RegExp, string][] = [
   [/san francisco world spirits|\bsfwsc\b/i, "sfwsc"],
   [/\biwsc\b|international wine (?:&|and) spirits? competition/i, "iwsc"],
@@ -328,7 +363,10 @@ const NAME_SOURCES: [RegExp, string][] = [
   [/breaking bourbon/i, "breaking_bourbon"], [/whiskey wash/i, "whiskey_wash"],
   [/bartender spirits awards/i, "bartender_spirits_awards"],
   [/spirits business|(?:gin|rum|whisk(?:e)?y|tequila|vodka|liqueur|brandy|cognac)[^,]*masters/i, "spirits_masters"],
-  [/jim murray|whisk(?:e)?y bible/i, "murray"], [/spirit journal|pacult/i, "spirit_journal"]
+  [/jim murray|whisk(?:e)?y bible/i, "murray"], [/spirit journal|pacult/i, "spirit_journal"],
+  [/lone caner/i, "lone_caner"], [/gin is in/i, "gin_is_in"], [/rum howler/i, "rum_howler"], [/whiskyfun|serge valentin/i, "whiskyfun"],
+  [/spirits selection/i, "cmb"], [/denver international spirits/i, "denver_isc"], [/\btag global|tag spirits awards/i, "tag"],
+  [/american craft spirits|\bacsa\b/i, "acsa"], [/international whisky competition/i, "whisky_competition"]
 ];
 const SCALE_FOR: Record<string, (src: string) => string> = {
   points_100: (src) => ["wine_enthusiast", "iwsc", "murray", "tequila_matchmaker"].includes(src) ? src : "critic100",
@@ -649,7 +687,7 @@ function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRo
     let score10: number | null = null, weight = Number(src.default_weight) || 0.5;
     let raw: number | null = null, medal: string | null = null;
     if (r.scale === "medal") {
-      score10 = medalTo10(src.scale, r.medal);
+      score10 = medalTo10(SOURCE_MEDALS[source] || src.scale, r.medal);
       medal = r.medal;
       weight = 0.5;
     } else if (r.scale === "letter_grade") {
@@ -665,7 +703,9 @@ function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRo
       if (raw < lo || raw > hi) { drop("score out of range"); continue; }
       // An unnamed reviewer's x/10 reads like a critic's x0/100 (an 8.5/10 blog
       // score is an 85, not an 8.5); the named 10-point sources keep their own curve.
-      score10 = r.scale === "out_of_10" && source.startsWith("other_") ? to10("critic100", raw * 10) : to10(SCALE_FOR[r.scale](source), raw);
+      score10 = r.scale === "out_of_10" && source.startsWith("other_") ? to10("critic100", raw * 10)
+        : r.scale === "points_100" && POINT_SCALES.has(src.scale) ? to10(src.scale, raw)
+        : to10(SCALE_FOR[r.scale](source), raw);
       if (r.medal && cleanMedal(r.medal)) medal = r.medal;
     }
     if (score10 == null) { drop("no usable score"); continue; }

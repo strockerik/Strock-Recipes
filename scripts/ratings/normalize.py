@@ -46,8 +46,17 @@ ANCHORS = {
     "ten": [(0, 0.0), (10, 10.0)],
     # Breaking Bourbon barrels, 0.5-5
     "barrels5": [(0, 0.0), (5, 10.0)],
-    # Generic 5 stars (Whiskey Wash 2017-era, misc.)
+    # Generic 5 stars (Whiskey Wash 2017-era, The GIN is IN's half stars, misc.)
     "stars5": [(1, 3.0), (2, 4.5), (3, 6.0), (4, 7.5), (5, 9.0)],
+    # A competition's own points (Bartender Spirits Awards, TAG, International
+    # Whisky Competition): 70-90% of entries medal, so its 90 is a critic's 85.
+    # Same anchors as IWSC.
+    "competition100": [(80, 5.0), (85, 6.0), (90, 7.0), (95, 8.0), (98, 9.0), (100, 9.5)],
+    # Single palates who grade hard — Whiskyfun (80-89 "high quality", 90+
+    # exceptional) and The Lone Caner (an 86 is "among the most startling, original
+    # rums"): the critic curve two points lower. 2026-11-12 research, uncalibrated.
+    "critic100_harsh": [(68, 4.0), (78, 5.5), (83, 6.5), (86, 7.0), (88, 7.5), (90, 8.0),
+                        (92, 8.5), (94, 9.0), (96, 9.5), (98, 10.0)],
 }
 
 # Medal-only results (no points published). Values are on the 0-10 scale.
@@ -60,6 +69,15 @@ MEDALS = {
     # Also Concours Mondial de Bruxelles' Grand Gold, its top tier.
     "default": {"bronze": 6.0, "silver": 7.0, "gold": 8.0, "double gold": 8.5,
                 "grand gold": 8.5, "platinum": 9.0},
+    # Spirits Selection by Concours Mondial: medals capped at 30% of entries, on
+    # its own point bands (Silver 82-84.9, Gold 85-91.9, Grand Gold 92+).
+    "spirits_selection": {"silver": 6.0, "gold": 7.0, "grand gold": 8.0},
+    # Denver International Spirits Competition (72% of 2021 entries medalled).
+    "denver": {"bronze": 5.5, "silver": 6.5, "gold": 7.0, "double gold": 8.0, "platinum": 8.5},
+    # ACSA Craft Spirits: Bronze 70-79, Silver 80-89, Gold 90-100, members only.
+    "acsa": {"bronze": 5.0, "silver": 6.0, "gold": 7.0},
+    # TAG Global Spirits Awards: Platinum is common (46 of ~250 medals in 2025).
+    "tag": {"bronze": 5.5, "silver": 6.0, "gold": 7.0, "double gold": 7.5, "platinum": 8.0},
 }
 
 
@@ -206,10 +224,27 @@ def bottle_words(key):
     return frozenset(_GENERIC_RE.sub(" ", key or "").split())
 
 
+# A spirit type both names state has to agree: "Cutwater Gin" and "Cutwater
+# Vodka" share every other word but are two bottles, as are "Cutwater Mezcal
+# Anejo" and "... Tequila Anejo" (2026-11-12). Rum/rhum and brandy/cognac are one
+# type each; a name with no type word ("Hendrick's") still matches "Hendrick's Gin".
+_TYPE_GROUPS = {"gin": "gin", "vodka": "vodka", "rum": "rum", "rhum": "rum", "tequila": "tequila",
+                "mezcal": "mezcal", "brandy": "brandy", "cognac": "brandy", "bourbon": "bourbon",
+                "scotch": "scotch", "tennessee": "tennessee"}
+
+
+def spirit_types(key):
+    return frozenset(_TYPE_GROUPS[w] for w in (key or "").split() if w in _TYPE_GROUPS)
+
+
 def same_bottle(key_a, key_b):
-    """Strict: two keys name one bottle only when their distinguishing words are identical."""
+    """Strict: two keys name one bottle only when their distinguishing words are
+    identical and the spirit types they state (if both state one) overlap."""
     a, b = bottle_words(key_a), bottle_words(key_b)
-    return bool(a) and a == b
+    if not a or a != b:
+        return False
+    ta, tb = spirit_types(key_a), spirit_types(key_b)
+    return not (ta and tb and not ta & tb)
 
 
 # Whole words only — "ginger" is not gin — except "whisk" (whiskey, whisky).
