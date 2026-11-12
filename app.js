@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "1.1";
+  const APP_VERSION = "1.2";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -112,6 +112,13 @@
   function maybeShowHomeTip() {
     homeTipEl.hidden = seenHomeTip || !seenIntro || !canInstallToHomeScreen();
   }
+  // One tip at a time: the intro, then (iPhone Safari only) the home-screen tip,
+  // then this one. First launch used to stack the intro and this hint together.
+  function syncPickHint(itemCount) {
+    const homeTipDone = seenHomeTip || !canInstallToHomeScreen();
+    const n = itemCount ?? (viewMode === "recipes" ? currentItems().length : 0);
+    pickHintEl.hidden = seenPickHint || !seenIntro || !homeTipDone || viewMode !== "recipes" || n === 0;
+  }
 
   const DATA = { recipes: [], cocktails: [], sharedRecipes: [], sharedCocktails: [] };
   const POOL_KEY = { recipes: "recipes", cocktails: "cocktails" };
@@ -146,8 +153,7 @@
   const activeFiltersEl = $("#active-filters");
   const resultCountEl = $("#result-count");
   const emptyEl = $("#empty-state");
-  const groceryBar = $("#grocery-bar");
-  const grocerySummary = $("#grocery-summary");
+  const groceryHeadCountEl = $("#grocery-head-count");
   const groceryPanel = $("#grocery-panel");
   const groceryContent = $("#grocery-content");
   const groceryProgressEl = $("#grocery-progress");
@@ -157,6 +163,7 @@
   const placeSheet = $("#place-sheet");
   const placeSheetTitle = $("#place-sheet-title");
   const placeSheetBody = $("#place-sheet-body");
+  const tonightEl = $("#tonight-card");
   const authGate = $("#auth-gate");
   const authForm = $("#auth-form");
   const authEmailEl = $("#auth-email");
@@ -1050,11 +1057,14 @@
     if (!it) return;
     const prev = basket.has(id) ? { ...basket.get(id) } : null;
     if (on) basket.set(id, { servings: defaultAddServings(it) }); else basket.delete(id);
-    // This row changes shape (it gains/loses the servings stepper); the other
-    // forty don't need to lose their focus and open state over it.
+    // Only this row's button (and its open detail) changes; the other forty
+    // don't need to lose their focus and open state over it.
     rerenderRow(id);
-    renderGroceryBar();
+    renderGroceryCount();
     if (!groceryPanel.hidden) renderGroceryPanel();
+    // The bottom bar used to be the proof it worked; now it's a moment's toast
+    // with the way in, and the header badge keeps the count.
+    else if (on) toastAction("Added to your grocery list", "View", openGroceryPanel);
     if (!session) return;
     const { error } = on
       ? await supabaseClient.from("grocery_basket_items")
@@ -1063,7 +1073,7 @@
     if (error) {
       if (prev) basket.set(id, prev); else basket.delete(id);
       rerenderRow(id);
-      renderGroceryBar();
+      renderGroceryCount();
       if (!groceryPanel.hidden) renderGroceryPanel();
       toastError("Couldn\u2019t update your grocery list", error);
     }
@@ -1079,7 +1089,7 @@
     if (error) { toastError("Couldn\u2019t add that", error); return null; }
     const item = { key: data.id, name: data.name, sourceInventoryId: data.source_inventory_id };
     manualGroceryItems.push(item);
-    renderGroceryBar();
+    renderGroceryCount();
     if (!groceryPanel.hidden) renderGroceryPanel();
     return item;
   }
@@ -1091,7 +1101,7 @@
     if (error) { toastError("Couldn\u2019t remove that", error); return; }
     manualGroceryItems = manualGroceryItems.filter((m) => m.key !== key);
     checkedGroceryItems.delete(key);
-    renderGroceryBar();
+    renderGroceryCount();
     if (!groceryPanel.hidden) renderGroceryPanel();
   }
 
@@ -1173,8 +1183,9 @@
     renderTagFilters();
     renderActiveFilters();
     renderList();
-    renderGroceryBar();
+    renderGroceryCount();
     updateMealplanBadge();
+    renderTonight();
   }
 
   // Drop basket / open-row / active-tag references to recipes or tags that no
@@ -1705,11 +1716,13 @@
     saveLocal("seenIntro", true);
     introCardEl.hidden = true;
     maybeShowHomeTip(); // the install tip follows the intro rather than stacking with it
+    syncPickHint();
   });
   $("#home-tip-dismiss").addEventListener("click", () => {
     seenHomeTip = true;
     saveLocal("seenHomeTip", true);
     homeTipEl.hidden = true;
+    syncPickHint();
   });
   accountPanel.addEventListener("click", (e) => {
     if (e.target === accountPanel) accountPanel.hidden = true;
@@ -1828,10 +1841,29 @@
   const invCategoriesFor = (sec) => (sec === "bar" ? BAR_CATEGORIES : PANTRY_CATEGORIES.slice());
   const INV_STATUSES = ["in", "out"];
   const INV_STATUS_LABEL = { in: "In", out: "Out" };
+  // Pantry asks for the item first and guesses its shelf the way the grocery
+  // list guesses an aisle; the guess stays editable. (The bar keeps the spirit
+  // first: there, the type is the thing and the brand is optional.)
+  const PANTRY_FROM_AISLE = {
+    "Frozen": "Frozen", "Meat & Seafood": "Frozen", "Canned & Jarred": "Canned & Jarred",
+    "Dry Goods & Baking": "Dry Goods & Baking", "Condiments, Sauces & Spices": "Condiments, Sauces & Spices",
+    "Beverages": "Beverages", "Alcohol": "Beverages"
+  };
+  function guessPantryCategory(name) {
+    const n = normalizeItemName(name || "");
+    if (!n) return null;
+    return /\bfrozen\b/i.test(name) ? "Frozen" : PANTRY_FROM_AISLE[categorizeGrocery(n)] || OTHER_CATEGORY;
+  }
+  let invCatTouched = false; // a category picked by hand outranks the guess
   function renderInvAddForm() {
-    invCategorySelect.innerHTML = invCategoriesFor(invSection)
+    const prev = invCategorySelect.value;
+    const cats = invCategoriesFor(invSection);
+    invCategorySelect.innerHTML = cats
       .map((c) => `<option value="${esc(c)}">${invSection === "bar" ? invCap(c) : esc(c)}</option>`).join("");
+    if (cats.includes(prev)) invCategorySelect.value = prev;
     invNameInput.placeholder = invSection === "bar" ? "Brand (optional)" : "Item (e.g. olive oil)";
+    invCategorySelect.setAttribute("aria-label", invSection === "bar" ? "Spirit" : "Shelf (guessed from the item)");
+    invAddForm.classList.toggle("is-pantry", invSection === "pantry");
   }
   function renderInventoryPanel() {
     renderBottlesMine();
@@ -1949,8 +1981,15 @@
     if (invSection === "pantry" && !name) { toast("Type an item name."); return; }
     addInventoryItem({ section: invSection, category, name });
     invNameInput.value = "";
+    invCatTouched = false;
     invNameInput.focus();
   });
+  invNameInput.addEventListener("input", () => {
+    if (invSection !== "pantry" || invCatTouched) return;
+    const guess = guessPantryCategory(invNameInput.value);
+    if (guess) invCategorySelect.value = guess;
+  });
+  invCategorySelect.addEventListener("change", () => { invCatTouched = true; });
   inventoryContent.addEventListener("click", (e) => {
     const scoreBtn = e.target.closest("[data-inv-score]");
     if (scoreBtn) { if (openBottlePanel()) { btToken++; btShowResult(scoreBtn.dataset.invScore, null, false); } return; }
@@ -2137,29 +2176,32 @@
   // ---- The Bottles view ----
   function renderBottlesView() {
     if (!bottlesView.dataset.built) {
+      // In a store aisle the list used to start 500px down, under a button, a
+      // second search field, a switch and two rows of chips. Now: one field
+      // (type, or tap the camera inside it), one scrolling row of chips, and the
+      // list's own heading is the Your bottles | Best rated switch.
       bottlesView.innerHTML = `
-        <div class="bt-lookup">
-          <button type="button" id="bt-open" class="solid-btn bt-lookup-btn">📷 Look up a bottle</button>
-          <form id="bt-view-search" class="bt-search" role="search">
-            <input id="bt-view-q" class="search" type="search" placeholder="Or type a name — Weller, Lagavulin 16…" aria-label="Bottle name" autocomplete="off">
-            <button type="submit" class="ghost-btn">Search</button>
-          </form>
-        </div>
-        <div class="bt-lists" role="group" aria-label="Which bottles">
-          <button type="button" class="bt-list-tab" data-bt-list="mine" aria-pressed="false">Your bottles</button>
-          <button type="button" class="bt-list-tab" data-bt-list="best" aria-pressed="false">Best rated</button>
-        </div>
+        <form id="bt-view-search" class="bt-one-search" role="search">
+          <input id="bt-view-q" class="bt-one-q" type="search" placeholder="Search or scan a bottle" aria-label="Search for a bottle by name" autocomplete="off" enterkeyhint="search">
+          <button type="button" id="bt-open" class="bt-cam" aria-label="Scan a label with the camera">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"></path><circle cx="12" cy="13" r="3.5"></circle></svg>
+          </button>
+        </form>
         <div class="bt-filter" role="group" aria-label="Category">
           ${BT_FILTERS.map(([id, label]) => `<button type="button" class="bt-chip" data-bt-filter="${id}" aria-pressed="false">${label}</button>`).join("")}
         </div>
         <div class="bt-best-head">
-          <h2 class="bt-best-title" id="bt-list-title">Best rated</h2>
+          <h2 class="sr-only" id="bt-list-title">Best rated</h2>
+          <div class="bt-lists" role="group" aria-label="Which bottles">
+            <button type="button" class="bt-list-tab" data-bt-list="mine" aria-pressed="false">Your bottles</button>
+            <button type="button" class="bt-list-tab" data-bt-list="best" aria-pressed="false">Best rated</button>
+          </div>
           <span id="bt-total" class="bt-total"></span>
         </div>
         <ul id="bt-mine" class="bt-list" aria-live="polite" hidden></ul>
-        <p class="bt-foot" id="bt-mine-foot" hidden>Your in-stock bar bottles from Bar &amp; Pantry, best score first. Tap one for its reviews; one with no score yet can be looked up.</p>
+        <p class="bt-foot" id="bt-mine-foot" hidden>Your bar bottles from Bar &amp; Pantry, best score first; the ones you’re out of are last, a tap from the grocery list. Tap a bottle for its reviews.</p>
         <ul id="bt-best" class="bt-list" aria-live="polite"></ul>
-        <p class="bt-foot" id="bt-best-foot">Ranked by score and by how many reviews back it up. Listed: bottles backed by a critic's score or three or more competition results — any bottle's score shows when you look it up.</p>`;
+        <p class="bt-foot" id="bt-best-foot">Ranked by score and by how many reviews back it up. Listed: bottles with a critic’s review or three or more competition results. Any bottle’s score shows when you look it up.</p>`;
       bottlesView.dataset.built = "1";
     }
     if (!bottles.list) bottles.list = loadLocal("bottleList", "mine") === "best" ? "best" : "mine";
@@ -2171,39 +2213,52 @@
     $("#bt-best").hidden = mine; $("#bt-best-foot").hidden = mine;
     if (mine) renderBottlesMine(); else renderBottlesBest();
   }
-  // Your bottles: the bar's in-stock bottles (not mixers), scored ones first.
+  // Your bottles: the bar's bottles (not mixers), scored ones first and the
+  // ones you're out of last, each with "+ List" so the restock is one tap.
   // All local — the scores come from loadOwnedScores; nothing is fetched here.
   function renderBottlesMine() {
     const listEl3 = $("#bt-mine");
     if (!listEl3 || bottlesView.hidden || bottles.list !== "mine") return;
     const cats = (BT_FILTERS.find((f) => f[0] === bottles.filter) || [])[2];
-    const bar = inventory.filter((i) => i.section === "bar" && i.status !== "out" && i.name && i.category !== "mixer");
+    const bar = inventory.filter((i) => i.section === "bar" && i.name && i.category !== "mixer");
     const rows = bar.filter((i) => !cats || cats.includes(i.category))
       .map((i) => ({ item: i, s: (i.product_id && bottles.owned.get(i.product_id)) || null }))
-      .sort((a, b) => ((b.s ? Number(b.s.score_10) : -1) - (a.s ? Number(a.s.score_10) : -1)) || a.item.name.localeCompare(b.item.name));
+      .sort((a, b) => ((a.item.status === "out") - (b.item.status === "out")) ||
+        ((b.s ? Number(b.s.score_10) : -1) - (a.s ? Number(a.s.score_10) : -1)) || a.item.name.localeCompare(b.item.name));
     const scored = rows.filter((r) => r.s).length;
     $("#bt-total").textContent = rows.length ? `${rows.length} bottle${rows.length === 1 ? "" : "s"} · ${scored} scored` : "";
     listEl3.innerHTML = rows.length ? rows.map(btMineRowHtml).join("")
       : `<li class="bt-empty">${bar.length ? "None of your bottles in this category." : "No bottles on your bar yet — add one from a score card, or in Bar &amp; Pantry."}</li>`;
   }
+  const reviewsWord = (n) => `based on ${n} review${n === 1 ? "" : "s"}`;
+  // Already on the grocery list as this bottle's restock?
+  const restockListed = (item) => manualGroceryItems.some((m) => m.sourceInventoryId === item.id);
+  function btRestockBtnHtml(item) {
+    const on = restockListed(item);
+    return `<button type="button" class="list-btn bt-restock${on ? " is-on" : ""}" data-bt-restock="${esc(item.id)}" aria-pressed="${on}"${on ? " disabled" : ""}>` +
+      `${on ? "\u2713 On list" : "+ List"}<span class="sr-only">: ${esc(item.name)}</span></button>`;
+  }
   function btMineRowHtml({ item, s }) {
     const cat = invCap(item.category || "other");
+    const out = item.status === "out";
+    const restock = out ? btRestockBtnHtml(item) : "";
     if (s) {
-      const meta = [cat, `${s.n_reviews} review${s.n_reviews === 1 ? "" : "s"}`, `${s.confidence} confidence`].join(" · ");
-      return `<li><button type="button" class="bt-row" data-bt-product="${esc(item.product_id)}">
+      const meta = [cat, out ? "out" : reviewsWord(s.n_reviews)].join(" · ");
+      return `<li class="bt-mine-li${out ? " is-out" : ""}"><button type="button" class="bt-row" data-bt-product="${esc(item.product_id)}">
         <span class="bt-score" aria-hidden="true">${scoreText(s.score_10)}</span>
         <span class="bt-row-main"><span class="bt-row-name">${esc(item.name)}</span><span class="bt-row-meta">${esc(meta)}</span></span>
         <span class="sr-only">Score ${scoreText(s.score_10)} out of 10</span>
-      </button></li>`;
+      </button>${restock}</li>`;
     }
     // In the catalog with no reviews yet → its card (which offers a lookup);
     // not in the catalog → a free catalog search for the name.
     const attr = item.product_id ? `data-bt-product="${esc(item.product_id)}"` : `data-bt-find="${esc(item.name)}"`;
-    const meta = item.product_id ? `${cat} · No scores yet` : `${cat} · Not in the catalog yet — tap to look it up`;
-    return `<li><button type="button" class="bt-row" ${attr}>
+    const meta = out ? `${cat} · out`
+      : item.product_id ? `${cat} · No scores yet` : `${cat} · Not in the catalog yet — tap to look it up`;
+    return `<li class="bt-mine-li${out ? " is-out" : ""}"><button type="button" class="bt-row" ${attr}>
       <span class="bt-score is-none" aria-hidden="true">–</span>
       <span class="bt-row-main"><span class="bt-row-name">${esc(item.name)}</span><span class="bt-row-meta">${esc(meta)}</span></span>
-    </button></li>`;
+    </button>${restock}</li>`;
   }
   async function renderBottlesBest() {
     const listEl2 = $("#bt-best");
@@ -2241,7 +2296,7 @@
       : `<li class="bt-empty">No well-reviewed bottles here yet — look one up to add its reviews.</li>`;
   }
   function btRowHtml(r) {
-    const meta = [invCap(r.category || "other"), `${r.n_reviews} review${r.n_reviews === 1 ? "" : "s"}`, `${r.confidence} confidence`].join(" · ");
+    const meta = [invCap(r.category || "other"), reviewsWord(r.n_reviews)].join(" · ");
     return `<li><button type="button" class="bt-row" data-bt-product="${esc(r.product_id)}">
       <span class="bt-score" aria-hidden="true">${scoreText(r.score_10)}</span>
       <span class="bt-row-main"><span class="bt-row-name">${esc(r.canonical_name)}</span><span class="bt-row-meta">${esc(meta)}</span></span>
@@ -2285,7 +2340,7 @@
         <input class="search" type="search" name="q" placeholder="e.g. Buffalo Trace" aria-label="Bottle name" autocomplete="off" required>
         <button type="submit" class="solid-btn">Search</button>
       </form>
-      <p class="bt-note">A photo is read by AI; a typed name is matched for free. Either way, a bottle not checked this week gets a fresh look at its reviews.</p>
+      <p class="bt-note">Snap the label or type the name. A bottle whose reviews haven’t been checked this week gets a fresh look.</p>
       ${recent.length ? `<h3 class="bt-sub">Recent</h3><ul class="bt-list">${recent.map((r) =>
         `<li><button type="button" class="bt-row bt-row-compact" data-bt-product="${esc(r.id)}"><span class="bt-row-main"><span class="bt-row-name">${esc(r.name)}</span></span></button></li>`).join("")}</ul>` : ""}`);
   }
@@ -2463,11 +2518,13 @@
     const checkLine = !cons ? (opts.status ? `<p class="bt-check" id="bt-check">${esc(opts.status)}</p>` : "")
       : opts.status ? `<p class="bt-check" id="bt-check" role="status">${esc(opts.status)}</p>`
       : opts.verify ? `<p class="bt-check" id="bt-check" role="status"><span class="spinner" aria-hidden="true"></span> Checking for newer reviews…</p>`
-      : `<p class="bt-check" id="bt-check">${prod.researched_at ? `Reviews last checked ${esc(btAgo(prod.researched_at))}.` : "Reviews not checked by a lookup yet."}
+      : `<p class="bt-check" id="bt-check">Last checked: ${prod.researched_at ? esc(btAgo(prod.researched_at)) : "never"}.
           <button type="button" class="link-inline" data-bt="verify">Check for newer reviews</button></p>`;
     const facts = [invCap(prod.category && prod.category !== "other" ? prod.category : ""), prod.producer,
       prod.age_years ? `${prod.age_years} years` : "", prod.abv ? `${Number(prod.abv).toString()}% ABV` : ""].filter(Boolean).join(" · ");
     const owned = ownedProduct(prod.id);
+    const outItem = owned ? inventory.find((i) => i.section === "bar" && i.product_id === prod.id && i.status === "out") : null;
+    const makes = barRecipesFor(prod);
     const sorted = reviews.slice().sort((a, b) => (b.review_year || 0) - (a.review_year || 0) || Number(b.score_10) - Number(a.score_10));
     const anyField = reviews.some((r) => r.origin === "field" && !r.verified);
     const scoreBlock = cons
@@ -2475,7 +2532,7 @@
           <span class="bt-big"><span class="bt-big-num">${scoreText(cons.score_10)}</span><span class="bt-big-of">/10</span></span>
           <span class="bt-score-side">
             <span class="bt-conf is-${esc(cons.confidence)}">${CONF_LABEL[cons.confidence] || ""}</span>
-            <span class="bt-score-why">${cons.n_reviews} review${cons.n_reviews === 1 ? "" : "s"} from ${cons.n_sources} source${cons.n_sources === 1 ? "" : "s"}.</span>
+            <span class="bt-score-why">Based on ${cons.n_reviews} review${cons.n_reviews === 1 ? "" : "s"} from ${cons.n_sources} source${cons.n_sources === 1 ? "" : "s"}.</span>
           </span>
         </div>`
       : `<div class="bt-scorecard is-empty">
@@ -2490,9 +2547,13 @@
       ${scoreBlock}
       ${checkLine}
       <div class="bt-actions">
-        ${owned ? `<span class="bt-owned">✓ In your bar</span>` : `<button type="button" class="solid-btn bt-add-btn" data-bt="add">＋ Add to my bar</button>`}
+        ${outItem ? (restockListed(outItem) ? `<span class="bt-owned">Out \u00B7 \u2713 on your grocery list</span>`
+            : `<button type="button" class="solid-btn" data-bt="restock">Out? Add to grocery list</button>`)
+          : owned ? `<span class="bt-owned">✓ In your bar</span>` : `<button type="button" class="solid-btn bt-add-btn" data-bt="add">＋ Add to my bar</button>`}
         <button type="button" class="ghost-btn" data-bt="again">Look up another</button>
       </div>
+      ${makes.length ? `<div class="bt-makes"><span class="bt-makes-label">Make with it:</span>${makes.map((r) =>
+        `<button type="button" class="bt-make-chip" data-bt-make="${esc(r.id)}">${esc(r.name)}</button>`).join("")}</div>` : ""}
       ${sorted.length ? `<h3 class="bt-sub">Where the score comes from</h3>
       <ul class="bt-sources">${sorted.map((r) => {
         const src = sources.get(r.source_id);
@@ -2502,8 +2563,33 @@
           <span class="bt-src-ten">${scoreText(r.score_10)}</span>`;
         return `<li>${r.url ? `<a class="bt-src" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${inner}<span class="bt-src-go" aria-hidden="true">↗</span></a>` : `<span class="bt-src">${inner}</span>`}</li>`;
       }).join("")}</ul>
-      <p class="bt-note">Each review is converted to a 10-point scale. Medals count half, and older reviews count less.${anyField ? " AI-found scores count ¾ until they're confirmed." : ""}</p>` : ""}
+      <p class="bt-note">Every review is put on the same 10-point scale. A competition medal counts for less than a critic’s review, and older reviews count less.${anyField ? " Scores an in-app lookup found count a little less until they’re confirmed." : ""}</p>` : ""}
       <button type="button" class="link-inline bt-report" data-bt="report">Wrong bottle?</button>`, { prod, ctx });
+  }
+
+  // "Make with it": your cocktails that call for this bottle — by its name
+  // ("Green Chartreuse" → Last Word) or, for a base spirit, by its type
+  // ("white rum" → Daiquiri). A generic liqueur or amaro only matches by name,
+  // or every "orange liqueur" drink would claim every liqueur.
+  const BT_MAKE_TERMS = {
+    gin: ["gin"], vodka: ["vodka"], rum: ["rum"], tequila: ["tequila"], mezcal: ["mezcal"],
+    whiskey: ["whiskey", "whisky", "bourbon", "rye"], bourbon: ["bourbon", "whiskey", "whisky"],
+    rye: ["rye", "whiskey", "whisky"], scotch: ["scotch"], brandy: ["brandy", "cognac", "armagnac"]
+  };
+  function barRecipesFor(prod) {
+    const name = normName(prod.canonical_name || "");
+    const words = name.split(" ").filter(Boolean);
+    const short = words.length > 2 ? words.slice(0, 2).join(" ") : "";
+    const terms = BT_MAKE_TERMS[prod.category] || [];
+    const typeRe = terms.length ? new RegExp(`\\b(?:${terms.join("|")})\\b`, "i") : null;
+    const hits = [];
+    [...DATA.cocktails, ...DATA.sharedCocktails].forEach((it) => {
+      const items = (it.ingredients || []).map((i) => normName(i.item || ""));
+      const byName = name && items.some((x) => x.includes(name) || (short && x.includes(short)));
+      const byType = !byName && typeRe && items.some((x) => typeRe.test(x));
+      if (byName || byType) hits.push({ id: it.id, name: it.name, rank: byName ? 0 : 1 });
+    });
+    return hits.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name)).slice(0, 4);
   }
 
   async function btLookupsLeft() {
@@ -2702,6 +2788,14 @@
       return;
     }
     if (what === "report" && btScreen.prod) { act.disabled = true; btReport(btScreen.prod); return; }
+    if (what === "restock" && btScreen.prod) {
+      const item = inventory.find((i) => i.section === "bar" && i.product_id === btScreen.prod.id && i.status === "out");
+      if (!item) return;
+      act.disabled = true;
+      await restockToGrocery(item.id);
+      act.outerHTML = `<span class="bt-owned">Out \u00B7 \u2713 on your grocery list</span>`;
+      return;
+    }
     if (what === "verify" && btScreen.prod) { btVerify(btScreen.prod, btScreen.ctx); }
   });
   bottleBody.addEventListener("submit", (e) => {
@@ -2722,10 +2816,26 @@
   });
   btPhotoCamera.addEventListener("change", () => btFromPhoto(btPhotoCamera.files[0]));
   btPhotoPick.addEventListener("change", () => btFromPhoto(btPhotoPick.files[0]));
+  bottleBody.addEventListener("click", (e) => {
+    const make = e.target.closest("[data-bt-make]");
+    if (!make) return;
+    closeBottlePanel();
+    openExistingRecipe(make.dataset.btMake);
+  });
   closeBottleBtn.addEventListener("click", closeBottlePanel);
   bottlePanel.addEventListener("click", (e) => { if (e.target === bottlePanel) closeBottlePanel(); });
   bottlesView.addEventListener("click", (e) => {
-    if (e.target.closest("#bt-open")) { if (openBottlePanel()) { btToken++; renderBtStart(); } return; }
+    // The camera in the search field goes straight to the camera.
+    if (e.target.closest("#bt-open")) {
+      if (!session) { toast("Sign in to look up bottles."); return; }
+      btPhotoCamera.value = ""; btPhotoCamera.click(); return;
+    }
+    const restock = e.target.closest("[data-bt-restock]");
+    if (restock) {
+      restock.disabled = true;
+      restockToGrocery(restock.dataset.btRestock).then(renderBottlesMine);
+      return;
+    }
     const f = e.target.closest("[data-bt-filter]");
     if (f) { bottles.filter = f.dataset.btFilter; renderBottlesView(); return; }
     const tab = e.target.closest("[data-bt-list]");
@@ -2863,15 +2973,13 @@
     // repaint instead of one per tap.
     const li = document.querySelector(`.item[data-id="${CSS.escape(id)}"]`);
     if (li) {
-      const rowNum = li.querySelector(".serv-control .serv-num");
-      if (rowNum) rowNum.textContent = String(v);
       const detailNum = li.querySelector(".detail-serv-num");
       if (detailNum) detailNum.textContent = `${v} ${byId[id]?.servingsLabel ?? ""}`.trim();
     }
     clearTimeout(servingsRenderTimer);
     servingsRenderTimer = setTimeout(() => {
       renderList();
-      renderGroceryBar();
+      renderGroceryCount();
       if (!groceryPanel.hidden) renderGroceryPanel();
     }, 140);
     if (!session || !basket.has(id)) return;
@@ -2886,64 +2994,55 @@
   }
 
   // One row's markup, lifted out of renderList so a single row can be redrawn on
-  // its own (see rerenderRow). Toggling a star or a grocery checkbox used to
+  // its own (see rerenderRow). Toggling a star or the list button used to
   // rebuild every row in the list, which dropped keyboard focus to <body> each
-  // time — ticking five recipes meant five trips back through the Tab order.
+  // time — adding five recipes meant five trips back through the Tab order.
+  // A row is for scanning: name, subtitle and tags, the star, and one "+ List".
+  // It used to carry six controls (a checkbox and a cart glyph for the same
+  // thing, a servings stepper, a calendar box, the star and a chevron); the
+  // servings and the plan live in the open recipe now.
   function itemHtml(it) {
     const picked = basket.has(it.id);
     const servings = chosenServings(it);
     const open = openItems.has(it.id);
     const mine = it.userId === session?.user?.id;
-    const inTray = mealPlanTray.has(it.id);
     return `
-    <li class="item${open ? " is-open" : ""}${picked ? " has-serv" : ""}" data-id="${esc(it.id)}">
+    <li class="item${open ? " is-open" : ""}" data-id="${esc(it.id)}">
       <div class="item-row">
-        <label class="pick-wrap" title="${picked ? "On your grocery list" : "Add to grocery list"}">
-          <input type="checkbox" class="pick" ${picked ? "checked" : ""}
-                 aria-label="Add ${esc(it.name)} to grocery list">
-          <span class="pick-ico" aria-hidden="true">🛒</span>
-        </label>
         <button class="item-head" aria-expanded="${open}">
           <span class="item-name">${esc(it.name)}</span>
           ${it.subtitle ? `<span class="item-sub">${esc(it.subtitle)}</span>` : ""}
           ${!mine ? `<span class="item-owner">Shared by ${esc(profileNames[it.userId] || "someone")}</span>` : ""}
           <span class="item-tags">${it.tags.map((t) => `<span class="mini-tag">${esc(t)}</span>`).join("")}</span>
         </button>
-        ${picked ? `
-        <span class="serv-control" aria-label="Servings for grocery list">
-          <button class="serv-btn" data-step="-1" aria-label="Decrease servings">\u2212</button>
-          <span class="serv-num">${servings}</span>
-          <button class="serv-btn" data-step="1" aria-label="Increase servings">+</button>
-          <span class="serv-label">${esc(it.servingsLabel)}</span>
-        </span>` : ""}
-        ${it.section === "kitchen" ? `<label class="plan-pick-wrap" title="${inTray ? "Staged for the meal plan \u2014 open Meal plan to put it on a day" : "Stage for the meal plan"}">
-          <input type="checkbox" class="plan-pick" ${inTray ? "checked" : ""}
-                 aria-label="Stage ${esc(it.name)} for the meal plan">
-          <span class="plan-pick-ico" aria-hidden="true">\uD83D\uDCC5</span>
-        </label>` : ""}
         ${mine ? `<button class="star-btn${it.isFavorite ? " is-on" : ""}" aria-label="${it.isFavorite ? "Remove from favorites" : "Add to favorites"}" aria-pressed="${it.isFavorite}">${it.isFavorite ? "\u2605" : "\u2606"}</button>` : ""}
-        <span class="chevron" aria-hidden="true">\u25B6</span>
+        ${listBtnHtml(it.name, picked)}
       </div>
       ${open ? renderDetail(it, servings) : ""}
     </li>`;
   }
 
+  // "+ List" / "✓ On list" — the row's one action. The recipe's name rides along
+  // for screen readers, since "List" alone doesn't say which recipe.
+  function listBtnHtml(name, on) {
+    return `<button type="button" class="list-btn${on ? " is-on" : ""}" aria-pressed="${on}">` +
+      `${on ? "\u2713 On list" : "+ List"}<span class="sr-only">: ${esc(name)}</span></button>`;
+  }
+
   // Redraw ONE row and put focus back where it was. For the toggles that
-  // restructure a row (the grocery checkbox adds a servings stepper; the unit
-  // toggle rewrites the open detail) this is both cheaper than renderList and,
-  // more to the point, it doesn't throw away the other forty rows' focus.
+  // restructure a row (the list button rewrites the open detail's grocery
+  // button; the unit toggle rewrites the open detail) this is both cheaper than
+  // renderList and, more to the point, it doesn't throw away the other forty
+  // rows' focus.
   const ROW_FOCUS_SELECTORS = [
-    ".pick", ".plan-pick", ".star-btn", ".item-head", ".detail-grocery-btn",
-    ".add-to-plan-btn", ".coach-btn", ".pair-btn", ".cook-btn", ".detail-more-btn"
+    ".list-btn", ".star-btn", ".item-head", ".detail-grocery-btn",
+    ".plan-night-btn", ".coach-btn", ".pair-btn", ".cook-btn", ".detail-more-btn"
   ];
   function rowFocusSelector(el) {
     const direct = ROW_FOCUS_SELECTORS.find((s) => el.matches(s));
     if (direct) return direct;
     // Siblings that only differ by a data attribute need it to be told apart.
-    if (el.matches(".serv-btn, .detail-serv-btn")) {
-      const cls = el.matches(".detail-serv-btn") ? ".detail-serv-btn" : ".serv-btn";
-      return `${cls}[data-step="${el.dataset.step}"]`;
-    }
+    if (el.matches(".detail-serv-btn")) return `.detail-serv-btn[data-step="${el.dataset.step}"]`;
     if (el.matches(".unit-toggle-btn")) return `.unit-toggle-btn[data-unit="${el.dataset.unit}"]`;
     return null;
   }
@@ -2994,7 +3093,7 @@
     resultCountEl.textContent =
       `${items.length} ${section === "recipes" ? "recipe" : "cocktail"}${items.length === 1 ? "" : "s"}`;
     emptyEl.hidden = items.length > 0;
-    pickHintEl.hidden = seenPickHint || items.length === 0;
+    syncPickHint(items.length);
     if (items.length === 0) {
       const noun = section === "recipes" ? "recipes" : "cocktails";
       const hasFilter = !!(searchTerm.trim() || activeTags.size);
@@ -3038,10 +3137,33 @@
     const sourceLine = it.source || ownerNote
       ? `<p class="detail-meta">${it.source ? `Source: ${sourceDisplayHtml(it.source)}` : ""}${ownerNote}</p>`
       : "";
+    // Three tiers, so the everyday jobs don't look like the occasional ones:
+    // cook it (primary), shop for it / plan it (the pair), and a quiet line for
+    // Ask AI, Pair a drink and the rest. They used to be six equal buttons
+    // under the method, a long scroll down on a phone.
+    const kitchen = it.section === "kitchen";
+    const onList = basket.has(it.id);
+    const actions = `
+      <div class="detail-actions">
+        ${it.method && it.method.length ? `<button class="solid-btn cook-btn" data-id="${esc(it.id)}">\u25B6 Start cooking</button>` : ""}
+        <div class="detail-actions-pair">
+          <button class="ghost-btn detail-grocery-btn${onList ? " is-on" : ""}" data-id="${esc(it.id)}">${onList ? "\u2713 On grocery list" : "Add to grocery list"}</button>
+          ${kitchen ? `<button class="ghost-btn plan-night-btn${plannedEntry(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}" aria-haspopup="dialog">${esc(planBtnLabel(it.id))}</button>` : ""}
+        </div>
+        <p class="detail-quiet">
+          <span>Need a hand?</span>
+          <button class="link-btn coach-btn" data-id="${esc(it.id)}">Ask AI</button>
+          ${kitchen ? `<span aria-hidden="true">\u00B7</span><button class="link-btn pair-btn" data-id="${esc(it.id)}">Pair a drink</button>` : ""}
+          <span aria-hidden="true">\u00B7</span>
+          <button class="link-btn detail-more-btn" data-id="${esc(it.id)}" aria-haspopup="true" aria-expanded="false">More</button>
+        </p>
+      </div>`;
     return `
     <div class="item-detail">
       ${sourceLine}
-      ${basket.has(it.id) ? "" : servControl}
+      ${actions}
+      ${mine && openShareIds.has(it.id) ? renderSharePanel(it) : ""}
+      ${servControl}
       <div class="detail-grid">
         <div>
           <div class="detail-h-row">
@@ -3066,15 +3188,6 @@
           ${it.notes ? `<p class="detail-notes">${esc(it.notes)}</p>` : ""}
         </div>
       </div>
-      <div class="detail-actions-row">
-        ${it.method && it.method.length ? `<button class="solid-btn small cook-btn" data-id="${esc(it.id)}">▶ Cook</button>` : ""}
-        ${it.section === "kitchen" ? `<button class="ghost-btn small add-to-plan-btn${mealPlanTray.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${mealPlanTray.has(it.id) ? "✓ Staged for plan" : "📅 Stage for plan"}</button>` : ""}
-        <button class="ghost-btn small detail-grocery-btn${basket.has(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}">${basket.has(it.id) ? "✓ In grocery list" : "🛒 Add to grocery list"}</button>
-        ${it.section === "kitchen" ? `<button class="ghost-btn small pair-btn" data-id="${esc(it.id)}">🍷 Pair a drink</button>` : ""}
-        <button class="ghost-btn small coach-btn" data-id="${esc(it.id)}">✨ Ask AI</button>
-        <button class="ghost-btn small detail-more-btn" data-id="${esc(it.id)}" aria-haspopup="true" aria-expanded="false">⋯ More</button>
-      </div>
-      ${mine && openShareIds.has(it.id) ? renderSharePanel(it) : ""}
     </div>`;
   }
 
@@ -3271,37 +3384,27 @@
   }
 
   // ---------- Grocery list ----------
-  function renderGroceryBar() {
-    // The list has content when recipes are checked OR when manual/inventory items
-    // have been added, so the bar shows (and the panel stays open) for either.
-    const recipes = basket.size;
-    const total = recipes + manualGroceryItems.length;
-    groceryBar.hidden = total === 0;
-    if (total === 0) closeGroceryPanel();
-    grocerySummary.textContent = recipes > 0
-      ? `${recipes} recipe${recipes === 1 ? "" : "s"} in your grocery list`
-      : `${manualGroceryItems.length} item${manualGroceryItems.length === 1 ? "" : "s"} in your grocery list`;
-
-    // The mobile ＋ button used to sit on top of this bar, covering "Clear".
-    // Measure it — it wraps to two rows on a narrow phone — and let CSS lift
-    // the button clear of whatever height it actually came out at.
-    document.body.classList.toggle("has-grocery-bar", total > 0);
-    if (total > 0) {
-      document.documentElement.style.setProperty("--grocery-bar-h", `${groceryBar.offsetHeight}px`);
-    }
-
-    // Count on the header cart, so the grocery list has a visible state even
-    // when the bottom bar isn't showing — a list built only out of pantry
-    // restocks had no at-a-glance indicator at all. Deliberately the count of
-    // things *added* rather than lines to buy: that second number means
-    // re-scaling every basket recipe, which is too much for every render.
+  // One number with one meaning everywhere: the lines on the list to buy. The
+  // header badge used to count recipes + added items while a bottom bar said
+  // "2 recipes in your grocery list" — two counts on one screen, and neither
+  // was what you'd be shopping for. The bar itself is gone too: it sat over the
+  // end of every list. Adding a recipe toasts with a View button instead.
+  // Counting lines means re-scaling the basket recipes, which is a few hundred
+  // ingredient rows at most; this runs on list changes, not on every render.
+  const itemsWord = (n) => `${n} item${n === 1 ? "" : "s"}`;
+  // An emptied list no longer slams the panel shut (Clear lives inside it now);
+  // it says the list is empty and how to fill it.
+  function renderGroceryCount(toBuy) {
+    const added = basket.size + manualGroceryItems.length;
+    const n = !added ? 0 : (toBuy || partitionPantry(allGroceryItems()).toBuy).length;
     if (groceryTopCountEl) {
-      groceryTopCountEl.hidden = total === 0;
-      groceryTopCountEl.textContent = total > 99 ? "99+" : String(total);
-      groceryTopBtn.setAttribute("aria-label", total === 0
+      groceryTopCountEl.hidden = n === 0;
+      groceryTopCountEl.textContent = n > 99 ? "99+" : String(n);
+      groceryTopBtn.setAttribute("aria-label", n === 0
         ? "Open grocery list"
-        : `Open grocery list, ${total} added`);
+        : `Open grocery list, ${itemsWord(n)}`);
     }
+    if (groceryHeadCountEl) groceryHeadCountEl.textContent = n ? itemsWord(n) : "";
   }
 
   function groceryGroups() {
@@ -3453,11 +3556,17 @@
   function groceryQtyStr(it) {
     return it.amount == null ? "" : purchaseQtyStr([{ amount: it.amount, unit: it.unit }], it.item);
   }
-  // "\u00b7 3 recipes" \u2014 a quiet note of how many recipes a line covers. Manual items
-  // (typed, not from a recipe) have none, so they show nothing.
+  // "for Fajitas and Tacos" \u2014 credit only on a line two recipes share, which is
+  // the one time it tells you something (it explains a big amount). Every line
+  // used to say "\u00b7 1 recipe", which repeated itself down the whole list.
+  function recipeCredit(it) {
+    const r = it.recipes || [];
+    if (r.length < 2) return "";
+    return r.length === 2 ? `for ${r[0]} and ${r[1]}` : `for ${r.length} recipes`;
+  }
   function recipeCountLabel(it) {
-    const n = (it.recipes || []).length;
-    return n ? ` \u00b7 ${n} recipe${n === 1 ? "" : "s"}` : "";
+    const c = recipeCredit(it);
+    return c ? ` \u00b7 ${c}` : "";
   }
 
   function renderGroceryPanel() {
@@ -3472,17 +3581,20 @@
           ${sec.items.map((it) => {
             const checked = checkedGroceryItems.has(it.key);
             const amtStr = groceryQtyStr(it);
+            const credit = recipeCredit(it);
             return `<li class="${checked ? "is-checked" : ""}">
               <label class="g-item">
                 <input type="checkbox" class="g-item-check" data-key="${esc(it.key)}" ${checked ? "checked" : ""}>
-                <span class="ing-amt">${esc(amtStr)}</span><span>${esc(it.item)}<span class="g-item-recipes">${esc(recipeCountLabel(it))}</span></span>
+                <span class="ing-amt">${esc(amtStr)}</span><span class="g-item-name">${esc(it.item)}${credit ? `<span class="g-item-recipes">${esc(credit)}</span>` : ""}</span>
               </label>
               ${it.manual ? `<button type="button" class="g-manual-remove" data-key="${esc(it.key)}" aria-label="Remove ${esc(it.item)}">\u00d7</button>` : ""}
             </li>`;
           }).join("")}`).join("")
       : `<p class="g-empty">${heldInPantry.length
             ? "Nothing to buy \u2014 your pantry already covers this list."
-            : "Nothing to buy \u2014 try turning off \u201cSkip pantry staples\u201d."}</p>`;
+            : basket.size || manualGroceryItems.length
+              ? "Nothing to buy \u2014 try turning off \u201cSkip salt, oil and other staples\u201d."
+              : "Your list is empty. Tap <b>+ List</b> on a recipe, or add an item above."}</p>`;
 
     // "By recipe" is a reference view \u2014 the same shopping list regrouped under the
     // recipe each line came from, so you can see what an ingredient is *for*.
@@ -3502,9 +3614,9 @@
         <input type="text" id="grocery-manual-input" placeholder="Add an item\u2026" autocomplete="off">
         <button type="submit" class="ghost-btn small">Add</button>
       </form>
-      <label class="g-staples-toggle">
+      <label class="g-staples-toggle" title="Salt, pepper, oil, water, sugar, butter and flour">
         <input type="checkbox" id="grocery-skip-staples" ${skipPantryStaples ? "checked" : ""}>
-        Skip pantry staples (salt, pepper, oil, water, sugar, butter, flour)
+        Skip salt, oil and other staples
       </label>
       <nav class="scope g-view" role="group" aria-label="Group the list by">
         <button type="button" class="scope-btn${groceryView === "aisle" ? " is-on" : ""}" data-g-view="aisle" aria-pressed="${groceryView === "aisle"}">\ud83d\uded2 By aisle</button>
@@ -3526,6 +3638,7 @@
       </details>` : ""}
       ${groceryView === "aisle" ? renderAisleReorder() : ""}`;
     renderGroceryProgress(toBuy);
+    renderGroceryCount(toBuy);
   }
 
   // `items` is optional — renderGroceryPanel passes its already-partitioned
@@ -3547,7 +3660,7 @@
     if (snapped) { groceryView = "aisle"; saveLocal("groceryView", groceryView); }
     groceryPanel.classList.toggle("shopping", on);
     shoppingModeToggle.setAttribute("aria-pressed", String(on));
-    shoppingModeToggle.textContent = on ? "✓ Shopping mode" : "🛒 Shopping mode";
+    shoppingModeToggle.textContent = on ? "\u2713 Done shopping" : "Start shopping";
     // renderGroceryPanel re-runs the progress counter itself.
     if (snapped && !groceryPanel.hidden) renderGroceryPanel(); else renderGroceryProgress();
     if (on) requestWakeLock(); else releaseWakeLock();
@@ -3620,36 +3733,42 @@
     }));
   }
 
-  // Same idea as paintStar: the row's calendar checkbox and the open detail's
-  // button are the only things that change, so touch only those.
-  function paintTrayState(id) {
-    const li = listEl.querySelector(`.item[data-id="${CSS.escape(id)}"]`);
-    if (!li) return;
-    const on = mealPlanTray.has(id);
-    const box = li.querySelector(".plan-pick");
-    if (box) box.checked = on;
-    const wrap = li.querySelector(".plan-pick-wrap");
-    if (wrap) {
-      wrap.title = on
-        ? "Staged for the meal plan \u2014 open Meal plan to put it on a day"
-        : "Stage for the meal plan";
-    }
-    const btn = li.querySelector(".add-to-plan-btn");
-    if (btn) {
-      btn.classList.toggle("is-on", on);
-      btn.textContent = on ? "\u2713 Staged for plan" : "\ud83d\udcc5 Stage for plan";
-    }
+  // The recipe's next planned meal in the coming week, if any \u2014 what the open
+  // recipe's "Plan a night" button reports ("\u2713 Planned Fri").
+  function plannedEntry(id) {
+    const today = isoDate(midnight());
+    const end = isoDate(addDays(midnight(), 6));
+    return mealPlan
+      .filter((e) => e.recipeId === id && e.date >= today && e.date <= end)
+      .sort((a, b) => a.date.localeCompare(b.date))[0] || null;
+  }
+  // "tonight" / "tomorrow" / "Fri" \u2014 how a person says which night.
+  function nightName(ds, slot = "dinner") {
+    if (ds === isoDate(midnight())) return slot === "dinner" ? "tonight" : "today";
+    if (ds === isoDate(addDays(midnight(), 1))) return "tomorrow";
+    return parseIsoDate(ds).toLocaleDateString(undefined, { weekday: "short" });
+  }
+  function planBtnLabel(id) {
+    const e = plannedEntry(id);
+    return e ? `\u2713 Planned ${nightName(e.date, e.slot)}` : "Plan a night";
+  }
+  // Same idea as paintStar: the open detail's plan button is the only thing on
+  // the list that shows plan state, so touch only that.
+  function paintPlanState(id) {
+    const btn = listEl.querySelector(`.item[data-id="${CSS.escape(id)}"] .plan-night-btn`);
+    if (!btn) return;
+    btn.textContent = planBtnLabel(id);
+    btn.classList.toggle("is-on", !!plannedEntry(id));
   }
   function setTrayMembership(id, on) {
     if (on) mealPlanTray.add(id); else mealPlanTray.delete(id);
     saveLocal("mealTray", [...mealPlanTray]);
-    paintTrayState(id);
     renderStagedCount();
     renderMealPlan();
   }
   function addToMealPlanTray(id) {
     setTrayMembership(id, true);
-    toast("Staged \u2014 open Meal plan to put it on a day");
+    toast("Saved for planning \u2014 it\u2019s waiting under Meal plan");
   }
   function removeFromTray(id) {
     setTrayMembership(id, false);
@@ -3660,7 +3779,7 @@
     if (!el) return;
     const n = mealPlanTray.size;
     el.hidden = !n || section === "cocktails";   // meal planning lives on the Kitchen tab
-    el.textContent = n === 1 ? "1 recipe staged — plan it →" : `${n} recipes staged — plan them →`;
+    el.textContent = n === 1 ? "1 recipe saved for planning \u2192" : `${n} recipes saved for planning \u2192`;
   }
 
   async function assignMealEntry(recipeId, date, slot) {
@@ -3672,16 +3791,68 @@
       .insert({ recipe_id: recipeId, plan_date: date, slot, servings })
       .select()
       .single();
-    if (error) { toastError("Couldn\u2019t add that to the plan", error); return; }
+    if (error) { toastError("Couldn\u2019t add that to the plan", error); return false; }
     mealPlan.push({ id: data.id, recipeId, date, slot, servings, purchasedAt: null });
     renderMealPlan();
+    paintPlanState(recipeId);
+    renderTonight();
+    return true;
   }
 
   async function removeMealEntry(entryId) {
     const { error } = await supabaseClient.from("meal_plan_entries").delete().eq("id", entryId);
-    if (error) { toastError("Couldn\u2019t remove that", error); return; }
+    if (error) { toastError("Couldn\u2019t remove that", error); return false; }
+    const gone = mealPlan.find((e) => e.id === entryId);
     mealPlan = mealPlan.filter((e) => e.id !== entryId);
     renderMealPlan();
+    if (gone) paintPlanState(gone.recipeId);
+    renderTonight();
+    return true;
+  }
+
+  // "Plan a night" from an open recipe: one tap on a night schedules dinner.
+  // It used to be Stage for plan \u2192 Meal plan \u2192 tap the recipe \u2192 tap a day;
+  // fine for a Sunday session, heavy for "tacos Friday". The tray stays as
+  // "Not sure yet \u2014 save it for planning".
+  function openPlanNightSheet(recipeId) {
+    if (!byId[recipeId]) return;
+    if (!session) { toast("Sign in to plan meals."); return; }
+    placeSheetState = { mode: "night", recipeId };
+    renderPlaceSheet();
+    placeSheet.hidden = false;
+  }
+  async function planNight(recipeId, ds) {
+    if (!(await assignMealEntry(recipeId, ds, "dinner"))) return;
+    // Planned is no longer "not sure yet".
+    if (mealPlanTray.has(recipeId)) setTrayMembership(recipeId, false);
+    toast(`Planned for ${nightName(ds)}`);
+  }
+  function planNightSheetHtml(id) {
+    const it = byId[id];
+    const days = [0, 1, 2, 3, 4, 5, 6].map((i) => {
+      const d = addDays(midnight(), i);
+      const ds = isoDate(d);
+      const { wd, md } = dayLabel(d);
+      const day = i === 0 ? `Tonight \u00B7 ${wd} ${md}` : i === 1 ? `Tomorrow \u00B7 ${wd} ${md}` : `${wd} ${md}`;
+      const dinners = mealPlan.filter((e) => e.date === ds && e.slot === "dinner");
+      const mine = dinners.find((e) => e.recipeId === id);
+      const others = dinners.filter((e) => e.recipeId !== id).map((e) => byId[e.recipeId]?.name).filter(Boolean);
+      const note = mine
+        ? `Planned${others.length ? ` with ${others.join(", ")}` : ""}`
+        : others.length ? `${others.join(", ")} planned` : "Nothing planned";
+      const action = mine ? "Remove" : others.length ? "Add too" : "Plan";
+      const cls = mine ? " is-mine" : others.length ? " is-taken" : "";
+      return `<button type="button" class="ps-night${cls}" ${mine ? `data-night-remove="${esc(mine.id)}"` : `data-night="${ds}"`}>
+        <span class="ps-night-text"><span class="ps-night-day">${esc(day)}</span><span class="ps-night-note">${esc(note)}</span></span>
+        <span class="ps-night-action">${action}</span>
+      </button>`;
+    }).join("");
+    const later = mealPlanTray.has(id)
+      ? `<p class="ps-later-note">\u2713 Saved for planning. <button type="button" class="link-btn" data-later-remove>Take it off</button></p>`
+      : `<button type="button" class="link-btn ps-later" data-later>Not sure yet \u2014 save it for planning</button>`;
+    return `<p class="ps-sub">${esc(it.name)} \u00B7 ${defaultAddServings(it)} ${esc(it.servingsLabel)}</p>
+      <div class="ps-nights">${days}</div>
+      ${later}`;
   }
 
   // ---------- Add-to-plan picker sheet ----------
@@ -3711,7 +3882,10 @@
   }
   function renderPlaceSheet() {
     if (!placeSheetState) return;
-    if (placeSheetState.mode === "slot") {
+    if (placeSheetState.mode === "night") {
+      placeSheetTitle.textContent = "Which night?";
+      placeSheetBody.innerHTML = planNightSheetHtml(placeSheetState.recipeId);
+    } else if (placeSheetState.mode === "slot") {
       const it = byId[placeSheetState.recipeId];
       placeSheetTitle.textContent = `Add "${it.name}" to…`;
       placeSheetBody.innerHTML = [0, 1, 2, 3, 4, 5, 6].map((i) => {
@@ -3739,8 +3913,33 @@
       placeSheetBody.innerHTML = `<div class="ps-recipes">${recipeBtns}</div>`;
     }
   }
-  placeSheet.addEventListener("click", (e) => {
+  placeSheet.addEventListener("click", async (e) => {
     if (e.target === placeSheet) { closePlaceSheet(); return; }
+    const night = e.target.closest("[data-night]");
+    if (night) {
+      const id = placeSheetState.recipeId;
+      closePlaceSheet();
+      planNight(id, night.dataset.night);
+      return;
+    }
+    const nightRemove = e.target.closest("[data-night-remove]");
+    if (nightRemove) {
+      nightRemove.disabled = true;
+      if (await removeMealEntry(nightRemove.dataset.nightRemove)) renderPlaceSheet();
+      else nightRemove.disabled = false;
+      return;
+    }
+    if (e.target.closest("[data-later]")) {
+      const id = placeSheetState.recipeId;
+      closePlaceSheet();
+      addToMealPlanTray(id);
+      return;
+    }
+    if (e.target.closest("[data-later-remove]")) {
+      removeFromTray(placeSheetState.recipeId);
+      renderPlaceSheet();
+      return;
+    }
     const slotBtn = e.target.closest(".ps-slot-btn");
     if (slotBtn) {
       assignMealEntry(placeSheetState.recipeId, slotBtn.dataset.date, slotBtn.dataset.slot);
@@ -3785,7 +3984,7 @@
     upcoming.forEach((e) => { e.purchasedAt = now; });
     setViewMode("recipes");
     renderList();
-    renderGroceryBar();
+    renderGroceryCount();
     renderGroceryPanel();
     groceryPanel.hidden = false;
   }
@@ -4186,7 +4385,7 @@
             <button class="mp-tray-x" data-tray-remove="${esc(id)}" aria-label="Remove from tray">\u00d7</button>
           </span>`;
         }).join("")
-      : `<p class="mp-empty">Open a recipe and tap <b>\ud83d\udcc5 Stage for plan</b> to park it here, then tap it and a day below to schedule it.</p>`;
+      : `<p class="mp-empty">Open a recipe and tap <b>Plan a night</b> to put it on a day. Not sure which night yet? Save it for planning and it waits here; tap it and a day below when you\u2019ve decided.</p>`;
 
     const upcoming = [0, 1, 2, 3, 4, 5, 6].map((i) => mealDayCard(addDays(midnight(), i), false)).join("");
     const history = [1, 2, 3, 4, 5, 6, 7].map((i) => mealDayCard(addDays(midnight(), -i), true)).join("");
@@ -4222,6 +4421,46 @@
     updateMealplanBadge();
   }
 
+  // At 5:40 pm the question is "what's for dinner?", and the home screen
+  // answered "here are your recipes, A\u2013Z". When tonight has a planned dinner
+  // it sits above the list: name, a line about it, Start cooking and Recipe.
+  // Nothing otherwise \u2014 no empty "plan tonight?" nag.
+  function renderTonight() {
+    if (!tonightEl) return;
+    const today = isoDate(midnight());
+    const entries = section === "recipes" && viewMode === "recipes"
+      ? mealPlan.filter((e) => e.date === today && e.slot === "dinner" && byId[e.recipeId])
+      : [];
+    if (!entries.length) { tonightEl.hidden = true; tonightEl.innerHTML = ""; return; }
+    const e = entries[0];
+    const it = byId[e.recipeId];
+    const serv = e.servings || chosenServings(it);
+    const weekday = new Date().toLocaleDateString(undefined, { weekday: "long" });
+    const meta = [it.subtitle, `${serv} ${it.servingsLabel}`,
+      basket.has(it.id) ? "on your grocery list" : e.purchasedAt ? "shopped for" : ""].filter(Boolean);
+    const also = entries.slice(1).map((x) => byId[x.recipeId].name);
+    tonightEl.innerHTML = `
+      <p class="tonight-kicker">Tonight \u00B7 ${esc(weekday)}</p>
+      <h2 class="tonight-name" id="tonight-name">${esc(it.name)}</h2>
+      <p class="tonight-meta">${esc(meta.join(" \u00B7 "))}</p>
+      <div class="tonight-actions">
+        ${it.method && it.method.length ? `<button type="button" class="solid-btn" data-tonight-cook="${esc(it.id)}" data-serv="${serv}">Start cooking</button>` : ""}
+        <button type="button" class="ghost-btn" data-tonight-open="${esc(it.id)}">Recipe</button>
+      </div>
+      ${also.length ? `<p class="tonight-also">Also tonight: ${esc(also.join(", "))}</p>` : ""}`;
+    tonightEl.hidden = false;
+  }
+  tonightEl.addEventListener("click", (ev) => {
+    const cook = ev.target.closest("[data-tonight-cook]");
+    if (cook) {
+      const it = byId[cook.dataset.tonightCook];
+      if (it) openCookMode(it, Number(cook.dataset.serv) || chosenServings(it));
+      return;
+    }
+    const open = ev.target.closest("[data-tonight-open]");
+    if (open) openExistingRecipe(open.dataset.tonightOpen);
+  });
+
   // Counts what's SCHEDULED in the next 7 days plus what's STAGED in the tray.
   // It used to count scheduled meals only, so staging a recipe left the detail
   // button reading "\u2713 In meal plan" while the badge sat at 0 \u2014 three signals
@@ -4240,14 +4479,15 @@
   }
 
   // The Meal plan tab only earns its 80px of the first screen once there's
-  // something in it. Staging a recipe (\ud83d\udcc5 on any row, or "Stage for plan" in
-  // the open detail) brings it straight back, and the "N recipes staged" pill
-  // under the list is the other way in.
+  // something in it. Planning a night or saving a recipe for planning (both from
+  // "Plan a night" in the open recipe) brings it straight back, and the "N
+  // recipes saved for planning" pill under the list is the other way in.
   // Meal planning is Kitchen-only; Bottles is Bar-only. On the Bar tab the row
   // is always there (for Bottles); on Kitchen it shows once something is planned.
   function syncModeTabs(hasPlan) {
     if (!modeTabsEl) return;
     const bar = section === "cocktails";
+    modeRecipesBtn.textContent = bar ? "Cocktails" : "Recipes";
     modeBottlesBtn.hidden = !bar;
     modeMealplanBtn.hidden = bar || (!hasPlan && viewMode !== "mealplan");
     modeTabsEl.hidden = !bar && !hasPlan && viewMode === "recipes";
@@ -4268,10 +4508,12 @@
     if (searchStickyEl) searchStickyEl.hidden = !recipes;
     listEl.hidden = !recipes;
     resultRowEl.hidden = !recipes;
-    if (!recipes) pickHintEl.hidden = true;
-    else pickHintEl.hidden = seenPickHint || currentItems().length === 0;
+    syncPickHint();
     mealPlanView.hidden = mode !== "mealplan";
     bottlesView.hidden = mode !== "bottles";
+    // The ＋ adds a recipe, which isn't what anyone is doing in a store aisle.
+    addFab.hidden = mode === "bottles";
+    renderTonight();
     if (mode === "mealplan") {
       if (!session) { toast("Sign in to plan meals."); setViewMode("recipes"); return; }
       loadMealPlan().then(() => renderMealPlan());
@@ -5359,6 +5601,69 @@
     }).join("");
     genBarPicks.hidden = false;
   }
+  // ---- The start step ----
+  // "Generate" asked twenty questions: five option groups, nothing pre-chosen,
+  // for what is usually one sentence. It now opens on three choices; "Dinner
+  // from what I have" is one tap (your pantry, about 30 minutes, your
+  // household's size), and the options fold under Change.
+  let genStep = "start"; // "start" | "custom"
+  let genLastOverride = null; // the start-step inputs, so "Different ideas" reruns them
+  const GEN_SKIP_PANTRY = new Set(["Condiments, Sauces & Spices", "Beverages"]);
+  // What's on hand, as generator ingredients: the bar's bottles, or the
+  // pantry minus seasonings and drinks (the generator assumes seasonings, and a
+  // list of forty sauces would steer it more than the food does).
+  function genOnHand(bar) {
+    const seen = new Set();
+    return inventory
+      .filter((i) => i.status !== "out" && (bar ? i.section === "bar" : i.section === "pantry" && !GEN_SKIP_PANTRY.has(i.category)))
+      .map(genIngredientText)
+      .filter((t) => { const k = (t || "").toLowerCase(); if (!k || seen.has(k)) return false; seen.add(k); return true; })
+      .slice(0, 40);
+  }
+  const genServesDefault = () => Number(genState.servings) || householdServings || 4;
+  function renderGenStart() {
+    const bar = genIsBar();
+    $("#generate-title").textContent = bar ? "What should we mix?" : "What should we make?";
+    $("#gen-quick-title").textContent = bar ? "A drink from my bar" : "Dinner from what I have";
+    $("#gen-quick-sub").textContent = bar ? "Your bottles \u00B7 citrus and syrup assumed"
+      : `Your pantry \u00B7 ${genState.time === "involved" ? "worth the effort" : "about 30 minutes"} \u00B7 serves ${genServesDefault()}`;
+    $("#gen-mind-sub").textContent = bar ? "Start from gin, a lemon, some mint\u2026" : "Start from chicken, a squash, leftover rice\u2026";
+    $("#gen-shop-sub").textContent = bar ? "A drink worth one more bottle or mixer" : "Ideas worth a quick grocery run";
+    const pick = (v, anyLabel) => (v && v !== "any" ? invCap(v) : anyLabel);
+    $("#gen-settings-summary").textContent = [
+      pick(genState.cuisine, bar ? "Any style" : "Any cuisine"),
+      pick(genState.equipment, "any equipment").replace(/^Any/, "any")
+    ].join(" \u00B7 ");
+  }
+  function showGenStep(step) {
+    genStep = step;
+    $("#gen-start").hidden = step !== "start";
+    $("#gen-custom").hidden = step !== "custom";
+    genSubmitBtn.hidden = step !== "custom";
+    // On the start step the choice itself says whether to shop.
+    generatePanel.querySelector("#gen-opt-grocery").hidden = step === "start";
+  }
+  function runGenOnHand(shop) {
+    const bar = genIsBar();
+    const have = genOnHand(bar);
+    if (!have.length) {
+      // Nothing tracked yet: ask, rather than send an empty list.
+      if (shop) genState.groceryRun = "quick";
+      showGenStep("custom");
+      renderGenOptions();
+      generateStatus.textContent = bar
+        ? "Your bar list is empty \u2014 add a few bottles you have."
+        : "Your pantry list is empty \u2014 add a few things you have.";
+      genIngInput.focus();
+      return;
+    }
+    const chips = { groceryRun: shop ? "quick" : "none" };
+    if (!bar) {
+      chips.time = genState.time || "quick";
+      chips.servings = genServesDefault();
+    }
+    runConcepts({ ingredients: have, chips });
+  }
   function renderGenOptions() {
     const bar = genIsBar();
     genCuisineLabel.textContent = bar ? "Style" : "Cuisine";
@@ -5383,6 +5688,7 @@
     single("servings", GEN_SERVINGS, (o) => o, (o) => String(o));
     single("cuisine", bar ? GEN_STYLE_BAR : GEN_CUISINE, (o) => o, (o) => invCap(o));
     single("equipment", bar ? GEN_EQUIP_BAR : GEN_EQUIP_KITCHEN, (o) => o, (o) => invCap(o));
+    renderGenStart();
   }
   // The generate panel has three swappable views: the input form, the concept
   // picker, and the loading spinner. Exactly one shows at a time.
@@ -5403,6 +5709,10 @@
       ? "List the spirits and mixers you've got and AI will suggest a few cocktails to pick from."
       : "List your main ingredients and AI will suggest a few recipes to pick from. It assumes you have common seasonings.";
     genIngInput.placeholder = bar ? "Type an ingredient (e.g. gin, lime, mint)" : "Type a main ingredient (e.g. chicken thighs)";
+    genLastOverride = null;
+    $("#gen-opts").hidden = true;
+    $("#gen-change").setAttribute("aria-expanded", "false");
+    showGenStep("start");
     renderGenDietLine();
     renderGenChips();
     renderGenOptions();
@@ -5443,16 +5753,20 @@
     renderGenChips();
   }
   // Assemble the generator inputs — shared by the concepts step and the full step.
-  function buildGenPayload() {
+  // `override` (the start step's one-tap choices) supplies the ingredients and
+  // the grocery-run/time/servings; cuisine and equipment still come from Change.
+  function buildGenPayload(override) {
+    const o = override || {};
     return {
-      ingredients: genState.ingredients.slice(),
+      ingredients: (o.ingredients || genState.ingredients).slice(),
       section: genIsBar() ? "bar" : "kitchen",
       chips: {
         groceryRun: genState.groceryRun || undefined,
         time: genState.time || undefined,
         servings: genState.servings ? Number(genState.servings) : undefined,
         cuisine: genState.cuisine && genState.cuisine !== "any" ? genState.cuisine : undefined,
-        equipment: genState.equipment && genState.equipment !== "any" ? genState.equipment : undefined
+        equipment: genState.equipment && genState.equipment !== "any" ? genState.equipment : undefined,
+        ...(o.chips || {})
       },
       dietPrefs
     };
@@ -5465,9 +5779,10 @@
   function genFail(msg, backView) { showGenView(backView); generateStatus.textContent = msg; }
 
   // Step 1: ask for 3 concepts.
-  async function runConcepts() {
-    if (!genState.ingredients.length) { generateStatus.textContent = "Add at least one ingredient first."; return; }
-    genLastPayload = buildGenPayload();
+  async function runConcepts(override) {
+    genLastOverride = override || null;
+    if (!(override ? override.ingredients : genState.ingredients).length) { generateStatus.textContent = "Add at least one ingredient first."; return; }
+    genLastPayload = buildGenPayload(override);
     const token = ++generationToken;
     generateStatus.textContent = "";
     generateLoadingMsg.textContent = "Finding a few ideas…";
@@ -5513,9 +5828,25 @@
   addRecipeGenerateBtn.addEventListener("click", () => openGeneratePanel());
   closeGenerateBtn.addEventListener("click", closeGeneratePanel);
   generateCancelBtn.addEventListener("click", closeGeneratePanel);
-  genSubmitBtn.addEventListener("click", runConcepts);
+  genSubmitBtn.addEventListener("click", () => runConcepts());
   genConceptsBackBtn.addEventListener("click", () => { generateStatus.textContent = ""; showGenView("form"); });
-  genConceptsRerollBtn.addEventListener("click", runConcepts);
+  genConceptsRerollBtn.addEventListener("click", () => runConcepts(genLastOverride));
+  $("#gen-quick").addEventListener("click", () => runGenOnHand(false));
+  $("#gen-shop").addEventListener("click", () => runGenOnHand(true));
+  $("#gen-mind").addEventListener("click", () => {
+    generateStatus.textContent = "";
+    showGenStep("custom");
+    genIngInput.focus();
+  });
+  $("#gen-custom-back").addEventListener("click", () => {
+    generateStatus.textContent = "";
+    showGenStep("start");
+  });
+  $("#gen-change").addEventListener("click", (e) => {
+    const opts = $("#gen-opts");
+    opts.hidden = !opts.hidden;
+    e.currentTarget.setAttribute("aria-expanded", String(!opts.hidden));
+  });
   genConceptList.addEventListener("click", (e) => {
     const card = e.target.closest("[data-concept]");
     if (card) pickConcept(Number(card.dataset.concept));
@@ -6296,24 +6627,14 @@
       return;
     }
 
-    if (e.target.classList.contains("plan-pick")) {
-      setTrayMembership(id, e.target.checked);
-      return;
-    }
-
-    if (e.target.classList.contains("pick")) {
-      setBasketMembership(id, e.target.checked);
-      return;
-    }
-
-    if (e.target.closest(".detail-grocery-btn")) {
+    if (e.target.closest(".list-btn, .detail-grocery-btn")) {
       setBasketMembership(id, !basket.has(id));
       return;
     }
 
-    // Servings steppers: the list-row one (grocery) and the detail-view one
-    // both route through setRecipeServings so the scale stays consistent.
-    const stepBtn = e.target.closest(".serv-btn, .detail-serv-btn");
+    // The servings stepper in the open recipe scales the amounts shown AND the
+    // grocery list, through setRecipeServings.
+    const stepBtn = e.target.closest(".detail-serv-btn");
     if (stepBtn) {
       setRecipeServings(id, chosenServings(byId[id]) + Number(stepBtn.dataset.step));
       return;
@@ -6349,10 +6670,9 @@
       return;
     }
 
-    if (e.target.closest(".add-to-plan-btn")) {
-      if (mealPlanTray.has(id)) removeFromTray(id);
-      else addToMealPlanTray(id);
-      return; // setTrayMembership repaints the row
+    if (e.target.closest(".plan-night-btn")) {
+      openPlanNightSheet(id);
+      return;
     }
 
     const unitBtn = e.target.closest(".unit-toggle-btn");
@@ -6365,7 +6685,7 @@
       return;
     }
 
-    if (e.target.closest(".item-head") || e.target.classList.contains("chevron")) {
+    if (e.target.closest(".item-head")) {
       openItems.has(id) ? openItems.delete(id) : openItems.add(id);
       renderList();
     }
@@ -6788,9 +7108,8 @@
     // Refetch on open so a change made on another device shows up here.
     loadGroceryList().then(() => { if (!groceryPanel.hidden) renderGroceryPanel(); });
   }
-  $("#open-grocery").addEventListener("click", openGroceryPanel);
-  // Header shortcut: always available, so a list built only from pantry/bar
-  // restocks (no checked recipes) can still be opened.
+  // The header cart is the one way in (the bottom bar is gone), so it's there
+  // even with an empty list.
   $("#open-grocery-top").addEventListener("click", openGroceryPanel);
   $("#close-grocery").addEventListener("click", closeGroceryPanel);
   groceryPanel.addEventListener("click", (e) => {
@@ -6830,7 +7149,7 @@
   $("#clear-grocery").addEventListener("click", async () => {
     const n = basket.size + manualGroceryItems.length;
     if (!n) return;
-    if (!confirm("Clear your grocery list? This removes every checked recipe and added item.")) return;
+    if (!confirm("Clear your grocery list? This takes off every recipe and added item.")) return;
     if (session) {
       const [{ error: e1 }, { error: e2 }, { error: e3 }] = await Promise.all([
         supabaseClient.from("grocery_basket_items").delete().eq("user_id", session.user.id),
@@ -6843,7 +7162,7 @@
     manualGroceryItems = [];
     checkedGroceryItems.clear();
     renderList();
-    renderGroceryBar();
+    renderGroceryCount();
     if (!groceryPanel.hidden) renderGroceryPanel();
   });
 
@@ -7696,7 +8015,7 @@
   syncScope();
   renderTagFilters();
   renderList();
-  renderGroceryBar();
+  renderGroceryCount();
   updateMealplanBadge(); // also decides whether the Meal plan tab is shown
   initAuth();
 })();

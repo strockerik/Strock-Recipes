@@ -399,6 +399,9 @@ button:focus-visible, input:focus-visible {
   border: 1px solid var(--accent);
 }
 .intro-text { margin: 0; font-size: 0.92rem; color: var(--ink); line-height: 1.45; }
+.intro-bar { display: none; }
+body.section-cocktails .intro-kitchen { display: none; }
+body.section-cocktails .intro-bar { display: inline; }
 /* Offline: a quiet, persistent note rather than a toast — it stays true for as
    long as the connection is gone. */
 .offline-banner {
@@ -431,53 +434,33 @@ button:focus-visible, input:focus-visible {
 .item-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  position: relative; /* positioning context for the corner servings stepper */
+  gap: 6px;
+  padding: 10px 10px 10px 16px;
 }
-/* When a recipe is on the grocery list its servings stepper moves to the card's
-   bottom-right corner (out of the flex flow) so it no longer squeezes the
-   title/subtitle column — which forced long subtitles to wrap and stretch the
-   card. Top-align the row's controls and reserve a min-height so the corner
-   stepper always has room below them. */
-.item.has-serv .item-row { align-items: flex-start; min-height: 84px; }
-/* ...but the grocery checkbox keeps its vertical centering, so ticking a recipe
-   doesn't yank it up to the corner — only the right-edge controls (calendar,
-   star, chevron) ride up to clear the corner stepper. */
-.item.has-serv .pick-wrap { align-self: center; }
-.item.has-serv .serv-control {
-  position: absolute;
-  right: 16px;
-  bottom: 12px;
-  margin-left: 0;
-}
-
-/* grocery checkbox — wrapped with a cart glyph (dim -> lit) so the row reads
-   as "add to shopping" rather than a bare "select this row" checkbox. */
-.pick-wrap { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; flex: 0 0 auto; }
-.pick-wrap .pick-ico { font-size: 0.9rem; opacity: 0.45; transition: opacity 0.15s; }
-.pick-wrap .pick:checked + .pick-ico { opacity: 1; }
-.pick {
+/* The row's one action: "+ List" / "✓ On list". 40px tall, so a thumb finds it. */
+.list-btn {
   flex: 0 0 auto;
-  width: 21px; height: 21px;
-  accent-color: var(--accent);
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.85rem;
+  white-space: nowrap;
   cursor: pointer;
+  touch-action: manipulation;
 }
-
-/* meal-plan pick — right-edge sibling of the grocery .pick; calendar glyph,
-   dim -> lit, so the row reads as "stage for the week". Glyph-only (no visible
-   box) so the right edge doesn't get busy next to ★ and ▶. */
-.plan-pick-wrap { display: inline-flex; align-items: center; cursor: pointer; flex: 0 0 auto; }
-.plan-pick-wrap .plan-pick-ico { font-size: 0.95rem; opacity: 0.4; transition: opacity 0.15s; }
-.plan-pick-wrap .plan-pick:checked + .plan-pick-ico { opacity: 1; }
-.plan-pick { position: absolute; opacity: 0; width: 0; height: 0; }
+.list-btn.is-on { background: var(--accent-soft); border-color: var(--accent-soft); }
 
 .item-head {
   flex: 1;
   text-align: left;
   border: 0;
   background: none;
-  padding: 0;
+  padding: 4px 0;
+  cursor: pointer;
   display: block;
   color: var(--ink);
   min-width: 0;
@@ -488,7 +471,10 @@ button:focus-visible, input:focus-visible {
   font-size: 1.13rem;
   line-height: 1.3;
 }
+/* Name, then its line (time, method) underneath — scanned, not read. */
+.item-name { display: block; }
 .item-sub {
+  display: block;
   font-size: 0.83rem;
   color: var(--faint);
   margin-top: 1px;
@@ -510,22 +496,15 @@ button:focus-visible, input:focus-visible {
   padding: 1px 8px;
 }
 
-.chevron {
-  flex: 0 0 auto;
-  color: var(--faint);
-  font-size: 0.8rem;
-  transition: transform 0.15s;
-}
-.item.is-open .chevron { transform: rotate(90deg); color: var(--accent); }
-
 .star-btn {
   flex: 0 0 auto;
   border: 0;
   background: none;
-  padding: 2px;
-  font-size: 1.15rem;
+  width: 40px; height: 40px;
+  padding: 0;
+  font-size: 1.2rem;
   line-height: 1;
-  color: var(--line);
+  color: #C9C2B4;
   cursor: pointer;
 }
 .star-btn.is-on { color: #D9A521; }
@@ -550,7 +529,7 @@ button:focus-visible, input:focus-visible {
   margin: 0 0 14px;
 }
 .detail-serv-btn {
-  width: 28px; height: 28px;
+  width: 36px; height: 36px;
   border: 1px solid var(--line);
   background: var(--card);
   border-radius: 6px;
@@ -666,31 +645,35 @@ button:focus-visible, input:focus-visible {
   padding: 10px 14px;
 }
 
-.detail-actions-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 12px;
+/* Cook first, then shop/plan as a pair, then the occasional helpers as a quiet
+   line — at the top of the recipe, not under a long method. */
+.detail-actions { display: flex; flex-direction: column; gap: 10px; margin: 0 0 16px; }
+.detail-actions .cook-btn { min-height: 50px; font-size: 1rem; font-weight: 700; border-radius: 12px; }
+.detail-actions-pair { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; }
+.detail-actions-pair .ghost-btn {
+  min-height: 46px; border-radius: 12px; border-color: var(--accent); color: var(--accent);
+  font-weight: 700; white-space: normal; line-height: 1.2;
 }
-.detail-actions-row:first-of-type {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
+.detail-quiet {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0 2px;
+  margin: 0; font-size: 0.88rem; color: var(--faint);
 }
+.link-btn {
+  min-height: 44px; padding: 0 4px;
+  border: 0; background: none;
+  font: inherit; font-weight: 600;
+  color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
+  cursor: pointer;
+}
+.link-btn:hover { color: var(--ink); }
 .share-toggle-btn.is-on {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
 }
-.detail-grocery-btn.is-on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-.add-to-plan-btn.is-on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+.detail-actions-pair .ghost-btn.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
 }
 
 /* Per-recipient sharing panel, expanded under detail-actions via the Share
@@ -755,36 +738,6 @@ button:focus-visible, input:focus-visible {
 }
 .share-status:empty { display: none; }
 
-/* per-item servings stepper (shown when picked) */
-.serv-control {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-.serv-btn {
-  width: 26px; height: 26px;
-  border: 1px solid var(--line);
-  background: var(--card);
-  border-radius: 6px;
-  font-size: 1rem;
-  line-height: 1;
-  color: var(--ink);
-}
-.serv-num {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  min-width: 2.2em;
-  text-align: center;
-}
-.serv-label {
-  font-size: 0.72rem;
-  color: var(--faint);
-  display: none;
-}
-@media (min-width: 560px) { .serv-label { display: inline; } }
-
 .empty-state { color: var(--faint); text-align: center; margin: 48px 0; }
 /* A failed load used to render the "No recipes yet" invitation, so a dropped
    connection was indistinguishable from an empty account. This is the third
@@ -807,30 +760,7 @@ button:focus-visible, input:focus-visible {
 .list-skeleton span:first-child { width: 46%; }
 .list-skeleton span:last-child { width: 26%; height: 9px; }
 
-/* ---------- Grocery bar & panel ---------- */
-.grocery-bar {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  background: var(--ink);
-  color: #fff;
-  z-index: 30;
-}
-.grocery-bar-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 12px;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
-  flex-wrap: wrap;
-}
-.grocery-summary { font-size: 0.9rem; }
-.grocery-bar-actions { display: flex; gap: 8px; }
-.grocery-bar .ghost-btn {
-  background: transparent;
-  border-color: rgba(255,255,255,0.35);
-  color: #fff;
-}
+/* ---------- Grocery panel ---------- */
 
 .grocery-panel {
   position: fixed;
@@ -867,6 +797,13 @@ button:focus-visible, input:focus-visible {
   margin-bottom: 10px;
 }
 .panel-title { font-family: var(--font-display); font-size: 1.3rem; margin: 0; min-width: 0; }
+.panel-title-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.panel-count { font-size: 0.92rem; color: var(--faint); white-space: nowrap; }
+/* Grocery list: the two ways a list gets bought, up top. */
+.g-top-actions { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; margin: 0 0 14px; }
+.g-top-actions .solid-btn, .g-top-actions .ghost-btn { min-height: 48px; border-radius: 12px; font-size: 0.95rem; font-weight: 700; }
+.g-pickup-btn { border-color: var(--accent); color: var(--accent); }
+.grocery-panel.shopping .g-pickup-btn { display: none; }
 
 .grocery-content { font-size: 0.93rem; }
 .g-recipe { margin-bottom: 18px; }
@@ -919,8 +856,10 @@ button:focus-visible, input:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-height: 48px;
   padding: 4px 0;
-  border-bottom: 1px dotted var(--line);
+  border-bottom: 1px solid #F0ECE3;
+  font-size: 1rem;
 }
 .g-combined .g-item { flex: 1; }
 .g-manual-remove {
@@ -934,6 +873,7 @@ button:focus-visible, input:focus-visible {
 }
 .g-manual-remove:hover { color: var(--accent); }
 .g-combined li.g-category {
+  min-height: 0;
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -946,10 +886,12 @@ button:focus-visible, input:focus-visible {
 .g-combined .g-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  min-height: 44px;
   cursor: pointer;
 }
-.g-combined .g-item input { accent-color: var(--accent); }
+.g-combined .g-item input { accent-color: var(--accent); width: 24px; height: 24px; flex: 0 0 auto; margin: 0; }
+.g-item-name { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .g-combined .ing-amt { min-width: 72px; }
 .g-combined li.is-checked .g-item {
   color: var(--faint);
@@ -981,8 +923,8 @@ button:focus-visible, input:focus-visible {
 .g-pantry { margin-bottom: 18px; }
 .g-pantry-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; }
 .g-pantry-row > span { color: var(--faint); min-width: 0; }
-/* Quiet "· 3 recipes" provenance, shown only when the header toggle is on. */
-.g-item-recipes { color: var(--faint); font-size: 0.8rem; }
+/* "for Fajitas and Tacos" — only on lines two or more recipes share. */
+.g-item-recipes { color: var(--faint); font-size: 0.78rem; }
 
 .grocery-actions {
   display: flex;
@@ -1020,7 +962,10 @@ button:focus-visible, input:focus-visible {
 .grocery-panel.shopping .g-pantry,
 .grocery-panel.shopping .g-view,
 .grocery-panel.shopping .g-reorder,
-.grocery-panel.shopping .grocery-actions {
+.grocery-panel.shopping .g-add-manual,
+.grocery-panel.shopping .grocery-actions,
+.grocery-panel.shopping .export-more,
+.grocery-panel.shopping .keep-hint {
   display: none;
 }
 
@@ -1168,6 +1113,42 @@ button:focus-visible, input:focus-visible {
   color: var(--faint);
   margin-top: 2px;
 }
+
+/* "Plan a night": the next seven nights, one tap each. */
+.ps-sub { margin: -4px 0 2px; font-size: 0.95rem; color: var(--faint); }
+.ps-nights { display: flex; flex-direction: column; gap: 8px; }
+.ps-night {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; min-height: 56px; padding: 8px 16px;
+  border: 1px solid #C9DCC6; border-radius: 14px; background: var(--card);
+  text-align: left; font: inherit; color: var(--ink); cursor: pointer;
+}
+.ps-night:hover { border-color: var(--accent); }
+.ps-night.is-taken { background: var(--paper-soft); border-color: var(--line); }
+.ps-night.is-mine { background: var(--accent-soft); border-color: var(--accent); }
+.ps-night-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ps-night-day { font-weight: 700; font-size: 1rem; }
+.ps-night-note { font-size: 0.82rem; color: var(--faint); }
+.ps-night-action { flex: 0 0 auto; font-weight: 700; font-size: 0.88rem; color: var(--accent); }
+.ps-later { align-self: center; }
+.ps-later-note { margin: 0; text-align: center; font-size: 0.9rem; color: var(--faint); }
+
+/* Tonight: the planned dinner, above the list. */
+.tonight-card {
+  margin: 16px 0 0; padding: 16px 18px;
+  border: 1px solid #C9DCC6; border-radius: 16px; background: var(--accent-soft);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.tonight-kicker {
+  margin: 0; font-family: var(--font-mono); font-size: 0.75rem;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent);
+}
+.tonight-name { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 1.45rem; line-height: 1.15; }
+.tonight-meta { margin: 0; font-size: 0.88rem; color: #4A443C; }
+.tonight-actions { display: flex; gap: 10px; margin-top: 4px; }
+.tonight-actions .solid-btn { flex: 1; min-height: 46px; border-radius: 12px; font-size: 1rem; font-weight: 700; }
+.tonight-actions .ghost-btn { min-height: 46px; border-radius: 12px; border-color: #C9DCC6; }
+.tonight-also { margin: 0; font-size: 0.82rem; color: var(--faint); }
 
 /* ---------- Recipe form ---------- */
 .recipe-form { display: flex; flex-direction: column; gap: 14px; }
@@ -1358,9 +1339,6 @@ button:focus-visible, input:focus-visible {
   font-size: 0.8rem;
   color: var(--faint);
 }
-/* The grocery bar is fixed over the bottom of the page; without this the
-   footer (and the version under it) could never scroll out from beneath it. */
-body.has-grocery-bar .site-footer { padding-bottom: calc(24px + var(--grocery-bar-h, 76px)); }
 /* Release number: a small, quiet pill under the footer note. */
 .app-version {
   display: inline-flex; align-items: center; gap: 5px;
@@ -2130,16 +2108,10 @@ body.has-grocery-bar .site-footer { padding-bottom: calc(24px + var(--grocery-ba
 /* Meal plan inline view */
 .meal-plan-view { margin-top: 18px; display: flex; flex-direction: column; gap: 22px; }
 
-/* Mobile FAB */
-/* Sits above the home indicator, and rides up over the grocery bar when that
-   appears — the two used to overlap, with the FAB covering the bar's "Clear"
-   button. The bar's own padding already includes the safe-area inset, so the
-   lifted position doesn't add it a second time; --grocery-bar-h is measured in
-   JS because the bar wraps to two rows on a narrow phone. */
+/* Mobile FAB — sits above the home indicator. Hidden on Bottles (setViewMode). */
 .add-fab {
   position: fixed; right: 18px; z-index: 40;
   bottom: calc(20px + env(safe-area-inset-bottom));
-  transition: bottom 0.18s;
   width: 58px; height: 58px; border-radius: 50%;
   border: 0; background: var(--accent); color: #fff;
   font-size: 1.7rem; line-height: 1; cursor: pointer;
@@ -2195,11 +2167,6 @@ body.has-grocery-bar .site-footer { padding-bottom: calc(24px + var(--grocery-ba
   /* Hide the desktop ＋ Add button row; FAB takes over */
   .result-row-actions { display: none; }
 }
-/* Everything pinned to the bottom rides above the grocery bar when it's up —
-   the ＋ button and both kinds of toast were all landing on top of it. */
-body.has-grocery-bar .add-fab,
-body.has-grocery-bar .toast,
-body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76px)); }
 @media (min-width: 561px) { .add-fab { display: none; } }
 
 /* ---------- Dietary preferences (account panel) ---------- */
@@ -2263,10 +2230,7 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
 .inv-remove,
 .inv-restock,
 .g-manual-remove,
-.pick-wrap,
-.serv-btn,
 .detail-serv-btn,
-.plan-pick-wrap,
 .star-btn {
   position: relative;
   touch-action: manipulation;
@@ -2276,8 +2240,6 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
 .inv-remove::after,
 .inv-restock::after,
 .g-manual-remove::after,
-.pick-wrap::after,
-.serv-btn::after,
 .detail-serv-btn::after {
   content: "";
   position: absolute;
@@ -2285,20 +2247,8 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
   width: 44px; height: 44px;
   transform: translate(-50%, -50%);
 }
-/* The recipe row's own controls were the worst offenders and never got this
-   treatment: the calendar is a hidden checkbox behind a ~15px glyph and the star
-   is ~22px, both in the strip a right thumb lands on. They sit 12px apart with
-   the (clickable) chevron 12px further on, so a full 44px box here would swallow
-   its neighbour — 38px clears the chevron by 4px and still more than doubles
-   both targets. Widen the row gap before widening these. */
-.plan-pick-wrap::after,
-.star-btn::after {
-  content: "";
-  position: absolute;
-  left: 50%; top: 50%;
-  width: 38px; height: 38px;
-  transform: translate(-50%, -50%);
-}
+/* The row star is a 40px box itself now, beside the 40px "+ List" — no overlay
+   needed, and none that could swallow its neighbour. */
 
 .kroger-review-actions { margin-top: 14px; }
 .diet-tag {
@@ -2327,6 +2277,8 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
 .inv-add .inv-category { flex: 1 1 38%; min-width: 0; }
 .inv-add .inv-name { flex: 1 1 45%; min-width: 0; }
 .inv-add .solid-btn { flex: 0 0 auto; }
+/* Pantry: the item comes first, its (guessed) shelf after. */
+.inv-add.is-pantry .inv-name { order: -1; flex-basis: 100%; }
 .inventory-content { display: flex; flex-direction: column; gap: 18px; }
 .inv-empty { color: var(--faint); font-size: 0.9rem; text-align: center; padding: 18px 0; }
 .gen-from-inv { width: 100%; margin-top: 18px; }
@@ -2410,6 +2362,28 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
 .gen-chips-head { display: flex; justify-content: flex-end; margin-bottom: 4px; }
 .gen-chips-head[hidden] { display: none; }
 .gen-submit { width: 100%; margin-top: 4px; }
+/* Start step: three choices, the first one tap. */
+.gen-start { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.gen-choice {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 16px 18px; text-align: left; font: inherit; cursor: pointer;
+  border: 1px solid #C9DCC6; border-radius: 16px; background: var(--card); color: var(--ink);
+}
+.gen-choice:hover { border-color: var(--accent); }
+.gen-choice.is-primary { border: 0; background: var(--accent); color: #fff; padding: 18px; }
+.gen-choice-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.gen-choice-title { font-weight: 700; font-size: 1.05rem; }
+.gen-choice.is-primary .gen-choice-title { font-size: 1.15rem; }
+.gen-choice-sub { font-size: 0.88rem; color: var(--faint); }
+.gen-choice.is-primary .gen-choice-sub { color: rgba(255,255,255,0.85); }
+.gen-choice-go { flex: none; font-size: 1.6rem; line-height: 1; color: var(--accent); }
+.gen-choice.is-primary .gen-choice-go { color: #fff; }
+.gen-back { padding-left: 0; margin: -6px 0 4px; text-decoration: none; }
+.gen-settings {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border-top: 1px solid var(--line); padding-top: 4px; margin-top: 4px;
+}
+.gen-settings-summary { font-size: 0.88rem; color: #4A443C; min-width: 0; }
 .gen-tip { margin: 10px 0 0; font-size: 0.8rem; color: var(--faint); text-align: center; }
 
 /* Describe-a-recipe textarea */
@@ -2430,19 +2404,40 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 .bottles-view { padding: 4px 0 24px; display: flex; flex-direction: column; gap: 14px; }
-.bt-lookup { display: flex; flex-direction: column; gap: 10px; }
-.bt-lookup-btn { min-height: 52px; font-size: 1rem; font-weight: 700; }
+/* One field: type, or tap the camera inside it. */
+.bt-one-search {
+  display: flex; align-items: center; gap: 8px; margin: 0;
+  min-height: 52px; padding: 0 4px 0 16px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--card);
+}
+.bt-one-search:focus-within { border-color: var(--accent); }
+.bt-one-q {
+  flex: 1; min-width: 0; min-height: 44px; border: 0; outline: none; background: transparent;
+  font-family: var(--font-body); font-size: 1rem; color: var(--ink);
+}
+.bt-one-q::placeholder { color: var(--faint); }
+.bt-cam {
+  flex: none; width: 44px; height: 44px; border-radius: 50%; border: 0;
+  background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center;
+  padding: 0; cursor: pointer;
+}
 .bt-search { display: flex; gap: 8px; margin: 0; }
 .bt-search .search { flex: 1; min-width: 0; min-height: 44px; }
 .bt-search button { min-height: 44px; }
-.bt-best-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.bt-best-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin-top: 2px; }
 .bt-best-title, .bt-sub {
   margin: 0; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
   letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent);
 }
 .bt-sub { margin: 6px 0 2px; }
 .bt-total { font-size: 0.8rem; color: var(--faint); }
-.bt-filter { display: flex; flex-wrap: wrap; gap: 6px; }
+/* One row that scrolls sideways, not two rows of chips. */
+.bt-filter {
+  display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto;
+  margin: 0 -16px; padding: 0 16px; scrollbar-width: none;
+}
+.bt-filter::-webkit-scrollbar { display: none; }
+.bt-chip { flex: none; }
 .bt-chip {
   border: 1px solid var(--line); background: var(--card); color: var(--ink);
   border-radius: 999px; padding: 8px 14px; min-height: 44px;
@@ -2579,11 +2574,25 @@ body.has-grocery-bar .toast-action { bottom: calc(14px + var(--grocery-bar-h, 76
 .bt-fix { margin-top: 6px; }
 .bt-fix summary { cursor: pointer; color: var(--accent); font-size: 0.88rem; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
 .bt-fix .bt-search { margin-top: 4px; }
-/* Your bottles | Best rated: a two-way switch — a white segment on a grey track
-   (the desktop scope look), so it never reads as one more row of red chips. */
-.bt-lists { display: flex; background: var(--chip); border-radius: 999px; padding: 4px; gap: 4px; }
+/* Your bottles | Best rated: the list's own heading, two serif words with the
+   chosen one underlined — not one more control row above the list. */
+.bt-lists { display: flex; gap: 18px; }
 .bt-list-tab {
-  flex: 1 1 0; min-width: 0; min-height: 44px; border: 0; border-radius: 999px; background: transparent;
-  font-family: var(--font-body); font-size: 0.9rem; font-weight: 600; color: var(--faint); cursor: pointer;
+  min-height: 44px; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent;
+  font-family: var(--font-display); font-size: 1.2rem; font-weight: 600; color: var(--faint); cursor: pointer;
+  white-space: nowrap;
 }
-.bt-list-tab[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.bt-list-tab[aria-pressed="true"] { color: var(--ink); font-weight: 700; border-bottom-color: var(--accent); }
+/* Your bottles: an out bottle carries "+ List" beside its row. */
+.bt-mine-li { display: flex; align-items: center; gap: 8px; border-bottom: 1px dotted var(--line); }
+.bt-mine-li .bt-row { border-bottom: 0; }
+.bt-list li.bt-mine-li:last-child { border-bottom: 0; }
+.bt-mine-li.is-out .bt-score { opacity: 0.55; }
+.bt-restock[disabled] { cursor: default; }
+/* Score card: what to make with the bottle. */
+.bt-makes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bt-makes-label { font-size: 0.85rem; color: var(--faint); }
+.bt-make-chip {
+  min-height: 40px; padding: 0 14px; border: 1px solid #E9C9C0; border-radius: 999px;
+  background: var(--card); color: #8E3120; font-weight: 700; font-size: 0.88rem; cursor: pointer;
+}

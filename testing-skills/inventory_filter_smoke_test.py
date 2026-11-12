@@ -103,6 +103,21 @@ async function runTests() {
     click(document.querySelector("#inv-out-filter")); await delay(180);
     assert("toggling off reads unpressed",
            document.querySelector("#inv-out-filter").getAttribute("aria-pressed") === "false", "");
+
+    // ---- Pantry add form: the item first, its shelf guessed (and editable) ----
+    click(document.querySelector("#inv-tab-pantry")); await delay(150);
+    var form = document.querySelector("#inv-add"), nameIn = document.querySelector("#inv-name"), cat = document.querySelector("#inv-category");
+    assert("pantry form puts the item first", form.classList.contains("is-pantry"), form.className);
+    function typeName(v) { nameIn.value = v; nameIn.dispatchEvent(new Event("input", { bubbles: true })); }
+    typeName("black beans");      assert("black beans → Canned & Jarred", cat.value === "Canned & Jarred", cat.value);
+    typeName("frozen peas");      assert("frozen peas → Frozen", cat.value === "Frozen", cat.value);
+    typeName("rice");             assert("rice → Dry Goods & Baking", cat.value === "Dry Goods & Baking", cat.value);
+    typeName("soy sauce");        assert("soy sauce → Condiments, Sauces & Spices", cat.value === "Condiments, Sauces & Spices", cat.value);
+    cat.value = "Other"; cat.dispatchEvent(new Event("change", { bubbles: true }));
+    typeName("soy sauce, low sodium");
+    assert("a shelf picked by hand isn't overridden", cat.value === "Other", cat.value);
+    click(document.querySelector("#inv-tab-bar")); await delay(120);
+    assert("the bar form keeps the spirit first", !form.classList.contains("is-pantry"), form.className);
   } catch (e) { assert("no exception", false, String(e && e.stack || e)); }
   finish();
 }

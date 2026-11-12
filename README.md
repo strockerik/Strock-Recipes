@@ -212,10 +212,17 @@ Use the app — no editing JS files:
   conversation — including an "emphasize this in the recipe" request — counts as
   one request.
 
-Every open recipe has a **servings stepper** at the top: scale a recipe written
-for 4 up to 8 (it shows "×2 of 4") and the ingredient amounts rescale live. The
-chosen servings carry straight into the grocery list, so a doubled recipe adds
-doubled quantities to your shopping list.
+A recipe row in the list is for scanning: the name, its line (time, method),
+tags, the ★, and one **+ List** button that puts the recipe on the grocery list
+(it reads **✓ On list** after). Everything else lives in the open recipe, which
+leads with **▶ Start cooking**, then **Add to grocery list** and **Plan a
+night** side by side, then a quiet line: *Need a hand? Ask AI · Pair a drink ·
+More*.
+
+Every open recipe has a **servings stepper** above the ingredients: scale a
+recipe written for 4 up to 8 (it shows "×2 of 4") and the ingredient amounts
+rescale live. The chosen servings carry straight into the grocery list, so a
+doubled recipe adds doubled quantities to your shopping list.
 
 Tags are picked from a fixed list, not typed — kitchen recipes get at most one
 cuisine, one protein/diet, and one dish-type tag (e.g. italian + chicken +
@@ -420,15 +427,22 @@ writable row from a recipe shared with them.
 ## Weekly meal planning
 
 Plan what to cook across the week and shop for it in one pass. Meal planning
-lives on the **Kitchen** tab only — the Bar tab has no Meal plan tab, staged
-pill or 📅 controls (its second view is 🥃 Bottles).
+lives on the **Kitchen** tab only — the Bar tab has no Meal plan tab, "saved
+for planning" pill or Plan a night button (its second view is 🥃 Bottles).
 
-- On any kitchen recipe, tap **📅 Stage for plan** (next to ▶ Cook) — or the 📅 box on
-  the row itself — to stage it. It reads "✓ Staged for plan" once it's in the
-  tray; staging is *not* scheduling, and the wording is deliberate (it used to
-  say "✓ In meal plan", which it wasn't).
+- Open a kitchen recipe and tap **Plan a night**. A sheet lists the next seven
+  nights (Tonight, Tomorrow, then by day), each saying what's already planned;
+  one tap schedules the recipe for that night's dinner ("Add too" if something
+  is already there, "Remove" if this recipe is). The button then reads
+  "✓ Planned Fri".
+- Not sure which night? **Not sure yet — save it for planning** puts it in the
+  tray instead (the old "Stage for plan"); scheduling it later takes it out.
+- **Tonight**: when tonight has a planned dinner, a card sits above the recipe
+  list with the recipe's line, its servings, whether it's on the grocery list,
+  and **Start cooking** / **Recipe**. Nothing shows when nothing is planned.
 - Open **📅 Meal Plan** (top controls) for a three-part page:
-  - **Recipes to plan** (top) — your staged recipes. Tap one to *arm* it.
+  - **Recipes to plan** (top) — what you saved for planning. Tap one to pick
+    its day and meal.
   - **Upcoming 7 days** (middle) — with a recipe armed, tap a day's
     Breakfast / Lunch / Dinner **+** to schedule it there. A slot can hold more
     than one recipe; tap a meal's **×** to unschedule it.
@@ -456,10 +470,10 @@ pill or 📅 controls (its second view is 🥃 Bottles).
   fridge, one for the store. Where a file can't be shared it sends the same
   content as plain text, and on a desktop it downloads the file.
 
-The staging tray lives in this device's localStorage (so it does *not* follow
-you to another device); the schedule itself is saved per-user in Supabase, so
-that part does. The Meal plan tab only appears once something is staged or
-scheduled — the 📅 controls on a recipe are the way in. The app only ever shows a rolling
+The "saved for planning" tray lives in this device's localStorage (so it does
+*not* follow you to another device); the schedule itself is saved per-user in
+Supabase, so that part does. The Meal plan tab only appears once something is
+saved or scheduled — **Plan a night** in a recipe is the way in. The app only ever shows a rolling
 window of the past 7 and next 7 days.
 
 **One-time setup (Supabase SQL editor)** — run once:
@@ -490,6 +504,24 @@ Two additions that power the AI recipe generator: a per-user inventory of what's
 on hand (bar liquor by type + optional brand, and pantry staples), and dietary
 preferences/allergies stored on the profile so the generator honors them
 silently across devices.
+
+Adding to the pantry asks for the item first and guesses its shelf the way the
+grocery list guesses an aisle ("black beans" → Canned & Jarred, "frozen peas" →
+Frozen); the guess can be changed, and a shelf picked by hand isn't
+overridden. The bar keeps the spirit type first, since there the brand is
+optional.
+
+**The generator opens on three choices.** *Dinner from what I have* is one tap:
+it sends the pantry's in-stock food (not the condiments/spices or beverages
+shelves, at most 40 items) as the ingredients, with no grocery run, about 30
+minutes, and the household's size (Account → household, else 4). *Something new
+— I'll shop* sends the same pantry with a quick grocery run allowed. *I have
+something in mind* opens the ingredient box. Cuisine, equipment, time and
+servings fold under **Change** and apply to all three. On the Bar it's *A drink
+from my bar* (the in-stock bottles; lemons, limes, simple syrup, bitters and soda
+are assumed, the same bar basics Pair a drink assumes). An empty pantry or bar
+falls back to the ingredient box. No Edge Function change: these are the same
+`generate-recipe` inputs the form always sent.
 
 **Allergies are enforced twice.** The prompt states each allergy with its family
 spelled out ("shellfish (includes shrimp, prawn, crab, … clamato, oyster …)"), and
@@ -812,20 +844,26 @@ robots rules, all offline.
 
 ### Bottles: looking a bottle up in the app
 
-On the **Bar** tab, **Bottles** sits next to Recipes. It has a **Look up a
-bottle** button (photograph the label, or type a name) and two lists, switched
-at the top and both filterable by category: **Your bottles** — the bar's
-in-stock bottles from Bar & Pantry (not mixers), best score first, with the
-unscored ones after (tap one in the catalog for its card, or one that isn't for
-a free catalog search) — and **Best rated**, every well-reviewed bottle in the
-catalog. The app remembers which list you last used. A bar bottle added before
+On the **Bar** tab, **Bottles** sits next to Cocktails (the Bar's name for
+its recipe list). It opens on one search field: type a name, or tap the camera
+inside the field to photograph a label. Under it, one row of category chips
+that scrolls sideways, then the two lists, whose names are the list's heading
+(the chosen one underlined): **Your bottles** — the bar's bottles from Bar &
+Pantry (not mixers), best score first, the unscored ones after (tap one in the
+catalog for its card, or one that isn't for a free catalog search), and the
+ones marked out last, each with **+ List** to put it on the grocery list — and
+**Best rated**, every well-reviewed bottle in the catalog. Rows read "Rum ·
+based on 4 reviews". The app remembers which list you last used. A bar bottle added before
 the catalog had it is linked on the next load once the name is a sure match
 (one free catalog search per unlinked bottle per session). A lookup
 lands on one of three screens:
 
-- **One clear match** → the score card: the 0–10 score, its confidence, and
-  every review behind it with a link to the page it came from. *Add to my bar*
-  (or *In your bar*), and *Wrong bottle?* to report a bad match. Adding always
+- **One clear match** → the score card: the 0–10 score, its confidence, what
+  it's based on, and every review behind it with a link to the page it came
+  from. *Add to my bar* (or *In your bar*; a bottle you've marked out offers
+  *Out? Add to grocery list*), **Make with it** — your cocktails that call for
+  it, by name ("green chartreuse" → Last Word) or, for a base spirit, by type
+  ("white rum" → Daiquiri) — and *Wrong bottle?* to report a bad match. Adding always
   opens a confirm sheet first (*Add to your bar?* — name and category
   editable); renaming it to a different bottle saves it unlinked from that card.
 - **Several close matches** → *Which one is it?* (the label's age, proof and
@@ -1809,9 +1847,19 @@ left as-is. Prep instructions are dropped from the shopping name ("carrots,
 diced" → "carrots") while what-to-buy adjectives stay ("peeled tomatoes",
 "floury potatoes"). Items are grouped under store-aisle headers (Produce, Meat
 & Seafood, Dairy, …). Tap
-an item to check it off as you shop, or use **Skip pantry staples** to hide
-salt, pepper, oil, water, sugar, butter, and flour from the list (produce
-peppers like bell or red pepper are never treated as a staple). The **By
+an item to check it off as you shop, or use **Skip salt, oil and other
+staples** to hide salt, pepper, oil, water, sugar, butter, and flour from the
+list (produce peppers like bell or red pepper are never treated as a staple).
+A line two recipes share says so ("for Fajitas and Tacos"); single-recipe lines
+carry no credit.
+
+The panel's header reads "Grocery list · N items", and the 🛒 badge in the app
+header shows the same N: lines left to buy (pantry-held lines don't count).
+There is no bottom bar; **+ List** confirms with a toast that has a **View**
+button. The two main actions sit at the top: **Start shopping** (big rows and
+check boxes, screen kept awake; it becomes **✓ Done shopping**) and **Order for
+pickup** (the King Soopers cart). **Send to phone / Keep** and **Clear the list**
+are at the bottom. The **By
 recipe** section below the list still shows each recipe's full ingredients at
 your chosen servings, unaffected by the staples toggle.
 
@@ -1950,8 +1998,8 @@ it.
 
 **Toggles patch their row, they don't rebuild the list.** `renderList()`
 replaces every row's markup, which drops keyboard focus to `<body>`. The star,
-the grocery checkbox, the 📅 box and the unit toggle all go through
-`paintStar` / `paintTrayState` / `rerenderRow` instead. Reach for `renderList()`
+**+ List**, the plan button and the unit toggle all go through
+`paintStar` / `paintPlanState` / `rerenderRow` instead. Reach for `renderList()`
 only when the *set* of rows changes.
 
 **Three list states, not two.** `dataState` is `loading` | `ready` | `error`.
@@ -1961,9 +2009,9 @@ thrown lands in the error state with a Try again button, rather than leaving
 the placeholder rows up forever.
 
 **Small glyphs get an invisible 44px hit area**, never a bigger glyph — see the
-`::after` overlay block in `style.css`. The two right-edge row controls (📅 and
-★) use 38px instead, because a full 44 would swallow the chevron 12px away.
-`viewport_smoke_test.py` measures these.
+`::after` overlay block in `style.css`. A recipe row's two controls, the ★ and
+**+ List**, are real 40px boxes side by side. `viewport_smoke_test.py` measures
+these.
 
 **`--faint` must stay at 4.5:1 on `--paper`.** It carries every piece of quiet
 text in the app and is used ~96 times; it was #8A8276 (3.67:1) until the review.

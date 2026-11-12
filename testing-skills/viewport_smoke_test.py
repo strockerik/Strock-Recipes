@@ -112,65 +112,96 @@ async function run(){try{
     A("search sticks below the measured header", parseFloat(scs.top)>40, "top="+scs.top);
   }
 
-  // Finger-sized hit areas. The glyphs stay small by design; an invisible
-  // centred ::after box does the catching, so measure that rather than the
-  // glyph. 44px where there's room, 38px for the two right-edge controls that
-  // would otherwise swallow the chevron beside them.
-  var pick=document.querySelector(".item .pick");
-  if(pick){ click(pick); await delay(160); }
-  [[".pick-wrap",44],[".serv-btn",44],[".plan-pick-wrap",38],[".star-btn",38]].forEach(function(pair){
-    var el=document.querySelector(".item "+pair[0]);
-    if(!el){ A("hit area "+pair[0]+" present", false, "not rendered"); return; }
-    var after=getComputedStyle(el,"::after");
-    var w=parseFloat(after.width), h=parseFloat(after.height);
-    A("hit area "+pair[0]+" is "+pair[1]+"px (is "+Math.round(w)+"x"+Math.round(h)+")",
-      Math.round(w)===pair[1] && Math.round(h)===pair[1], "width="+after.width+" height="+after.height);
-  });
+  // Finger-sized targets. A row is name/tags, the star and one "+ List" now;
+  // both are real 40px boxes. The open recipe's servings buttons keep the
+  // invisible 44px ::after box.
+  var row=document.querySelector(".item .item-row"), listBtn=document.querySelector(".item .list-btn");
+  A("rows carry only the star and + List", !!listBtn && !document.querySelector(".item .pick, .item .plan-pick, .item .serv-control, .item .chevron"), "");
+  if(listBtn){
+    var lb=listBtn.getBoundingClientRect();
+    A("+ List is at least 40px tall (is "+Math.round(lb.height)+")", lb.height>=40, "");
+    A("+ List text fits its button", listBtn.scrollWidth<=listBtn.clientWidth+1, listBtn.scrollWidth+">"+listBtn.clientWidth);
+    A("+ List stays inside the row", lb.right<=row.getBoundingClientRect().right+0.5, "");
+  }
+  var star=document.querySelector(".item .star-btn");
+  if(star){
+    var sb=star.getBoundingClientRect();
+    A("the star is a 40px target (is "+Math.round(sb.width)+"x"+Math.round(sb.height)+")", Math.round(sb.width)>=40 && Math.round(sb.height)>=40, "");
+    if(listBtn){ var lb2=listBtn.getBoundingClientRect(); A("star and + List don't overlap", sb.right<=lb2.left+0.5, Math.round(sb.right)+" vs "+Math.round(lb2.left)); }
+  }
+  var nameEl=document.querySelector(".item .item-name");
+  A("the recipe name keeps most of the row (>=55%)", !!nameEl && nameEl.parentElement.getBoundingClientRect().width>=row.getBoundingClientRect().width*0.55,
+    nameEl ? Math.round(nameEl.parentElement.getBoundingClientRect().width)+"/"+Math.round(row.getBoundingClientRect().width) : "");
 
-  // The ＋ button used to sit on top of the grocery bar, covering "Clear".
+  // The bottom grocery bar is gone; + List says so with a toast instead.
   var fab=document.querySelector("#add-fab"), gbar=document.querySelector("#grocery-bar");
   // Not offsetParent: it's always null for a position:fixed element, which
   // silently skipped this check until 2026-11-08.
   function fabShown(){ return !!fab && getComputedStyle(fab).display!=="none"; }
   A("the ＋ button shows at phone width", fabShown(), "display="+(fab&&getComputedStyle(fab).display));
-  A("picking a recipe brings up the grocery bar", !!gbar && !gbar.hidden, "");
-  if(fab && gbar && !gbar.hidden && fabShown()){
-    var fr=fab.getBoundingClientRect(), gr=gbar.getBoundingClientRect();
-    var overlap = fr.bottom > gr.top && fr.top < gr.bottom && fr.right > gr.left && fr.left < gr.right;
-    A("the ＋ button clears the grocery bar", !overlap,
-      "fab="+Math.round(fr.top)+".."+Math.round(fr.bottom)+" bar top="+Math.round(gr.top));
-    A("the ＋ button stays on screen", fr.bottom <= window.innerHeight + 1,
-      "fab bottom="+Math.round(fr.bottom)+" vh="+window.innerHeight);
+  A("no bottom grocery bar", !gbar, "");
+  if(listBtn){ click(listBtn); await delay(160); }
+  var ta=document.querySelector(".toast-action.show");
+  A("+ List shows the View toast", !!ta && /View/.test(ta.textContent), "");
+  if(ta && fabShown()){
+    var fr=fab.getBoundingClientRect(), tr=ta.getBoundingClientRect();
+    var hitT = fr.bottom > tr.top && fr.top < tr.bottom && fr.right > tr.left && fr.left < tr.right;
+    A("the View toast clears the ＋ button", !hitT, "fab="+Math.round(fr.top)+".."+Math.round(fr.bottom)+" toast="+Math.round(tr.top)+".."+Math.round(tr.bottom));
+    A("the View toast fits the screen", tr.left>=0 && tr.right<=document.documentElement.clientWidth+0.5, Math.round(tr.left)+".."+Math.round(tr.right));
   }
+
+  // The open recipe: Start cooking, the pair, the quiet line, servings.
+  var head=document.querySelector(".item .item-head");
+  if(head){ click(head); await delay(160); }
+  var det=document.querySelector(".item .item-detail");
+  if(det){
+    var cook=det.querySelector(".cook-btn");
+    if(cook) A("Start cooking is a big target (is "+Math.round(cook.getBoundingClientRect().height)+")", cook.getBoundingClientRect().height>=48, "");
+    var pair=[].slice.call(det.querySelectorAll(".detail-actions-pair .ghost-btn"));
+    A("list + plan sit side by side", pair.length===2 && Math.abs(pair[0].getBoundingClientRect().top-pair[1].getBoundingClientRect().top)<1, pair.length);
+    A("…and their words fit", pair.every(function(b){ return b.scrollWidth<=b.clientWidth+1 && b.getBoundingClientRect().height>=44; }),
+      pair.map(function(b){ return b.scrollWidth+">"+b.clientWidth+"/"+Math.round(b.getBoundingClientRect().height); }).join(" "));
+    var quiet=[].slice.call(det.querySelectorAll(".detail-quiet .link-btn"));
+    A("the quiet line's links are 44px tall", quiet.length>=3 && quiet.every(function(b){ return b.getBoundingClientRect().height>=44; }), quiet.length);
+    var sv=det.querySelector(".detail-serv-btn");
+    if(sv){ var af=getComputedStyle(sv,"::after"); A("servings buttons have a 44px hit area", Math.round(parseFloat(af.width))>=44 && Math.round(parseFloat(af.height))>=44, af.width+"x"+af.height); }
+    ov("open recipe");
+    var pn=det.querySelector(".plan-night-btn");
+    if(pn){
+      click(pn); await delay(120);
+      var nights=[].slice.call(document.querySelectorAll("#place-sheet .ps-night"));
+      A("Plan a night: seven tall rows", nights.length===7 && nights.every(function(n){ return n.getBoundingClientRect().height>=56; }), nights.length);
+      ov("plan a night");
+      hide("#place-sheet");
+    }
+    click(head); await delay(120);
+  }
+  if(listBtn){ click(document.querySelector(".item .list-btn")); await delay(160); }
+
   // The release number in the footer: shown, small, and never stuck under the
   // grocery bar or the ＋ button once you scroll to the bottom of the page.
   var ver=document.querySelector("#app-version");
   function verChecks(state){
     if(!ver){ A("version badge present", false, "missing"); return; }
-    window.scrollTo(0, document.documentElement.scrollHeight);
+    // Instant: html has scroll-behavior: smooth, so a plain scrollTo is still animating when measured.
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" });
     var vr=ver.getBoundingClientRect();
     A("version reachable at the page bottom ("+state+")",
       !ver.hidden && vr.height>0 && vr.left>=0 && vr.top>=0 && vr.bottom<=window.innerHeight+1,
-      "top="+Math.round(vr.top)+" bottom="+Math.round(vr.bottom)+" vh="+window.innerHeight);
-    if(gbar && !gbar.hidden){
-      var gr=gbar.getBoundingClientRect();
-      A("version scrolls clear of the grocery bar", vr.bottom<=gr.top+1, "ver bottom="+Math.round(vr.bottom)+" bar top="+Math.round(gr.top));
-    }
+      "top="+Math.round(vr.top)+" bottom="+Math.round(vr.bottom)+" vh="+window.innerHeight+" scrollY="+Math.round(window.scrollY));
     if(fabShown()){
       var fr=fab.getBoundingClientRect();
       var hit = vr.bottom > fr.top && vr.top < fr.bottom && vr.right > fr.left && vr.left < fr.right;
       A("version isn't under the ＋ button ("+state+")", !hit, "ver="+Math.round(vr.left)+".."+Math.round(vr.right)+" fab="+Math.round(fr.left)+".."+Math.round(fr.right));
     }
-    window.scrollTo(0,0);
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
   if(ver){
     A("version reads v"+APP_VERSION+" (app.js APP_VERSION)", ver.querySelector(".app-version-num").textContent==="v"+APP_VERSION && ver.title.indexOf("version "+APP_VERSION)>=0,
       ver.querySelector(".app-version-num").textContent+" / "+ver.title);
     A("version is discreet (<=12px text)", parseFloat(getComputedStyle(ver).fontSize)<=12, getComputedStyle(ver).fontSize);
   }
-  if(gbar && !gbar.hidden) verChecks("grocery bar up");
-  if(pick){ click(document.querySelector(".item .pick")); await delay(160); }
-  verChecks("no grocery bar");
+  verChecks("list page");
   show("#grocery-panel"); await delay(70); ov("grocery");
   click(document.querySelector('[data-grocery-view="recipe"]')); await delay(70); ov("grocery by-recipe");
   click(document.querySelector('[data-grocery-view="aisle"]')); await delay(50);

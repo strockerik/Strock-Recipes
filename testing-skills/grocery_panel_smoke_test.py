@@ -94,9 +94,21 @@ function pantryText() { var e = document.querySelector(".g-pantry");   return e 
 
 async function runTests() {
   try {
-    click(document.querySelector("#open-grocery"));
+    // The header cart is the one way in now (the bottom bar is gone).
+    assert("no bottom grocery bar", !document.querySelector("#grocery-bar"), "");
+    click(document.querySelector("#open-grocery-top"));
     await delay(250);
     assert("grocery panel opens", !document.querySelector("#grocery-panel").hidden, "");
+    // One number with one meaning: the badge and the panel header both count lines to buy.
+    var lines = document.querySelectorAll(".g-combined .g-item").length;
+    var badge = document.querySelector("#grocery-top-count").textContent.trim();
+    var head = document.querySelector("#grocery-head-count").textContent.trim();
+    assert("badge counts the lines on the list", badge === String(lines), badge + " vs " + lines + " lines");
+    assert("panel header says the same number", head === lines + " items", head);
+    assert("top actions: Start shopping + Order for pickup",
+           /^Start shopping$/.test(document.querySelector("#shopping-mode-toggle").textContent.trim()) &&
+           /Order for pickup/.test(document.querySelector("#send-to-kingsoopers").textContent), "");
+    assert("Clear lives in the panel", !!document.querySelector("#grocery-panel #clear-grocery"), "");
 
     // --- purchase units (shared with the King Soopers sheet) ---
     var L = listText();
@@ -119,11 +131,11 @@ async function runTests() {
     assert("added-back item leaves the pantry section", !/oregano/i.test(pantryText()), pantryText());
     assert("added-back item appears in the list", /oregano/i.test(listText()), listText());
 
-    // --- recipe counts are always shown inline (no toggle button) ---
+    // --- credits only on a line two recipes share ---
     assert("no recipe-counts button in the header", !document.querySelector("#recipe-counts-toggle"), "");
     var LC = listText();
-    assert("garlic annotated '· 2 recipes' (used in both)", /·\s*2 recipes/.test(LC), LC);
-    assert("single-recipe item annotated '· 1 recipe'", /·\s*1 recipe\b/.test(LC), LC);
+    assert("garlic credited 'for Garlic Pasta and Garlic Soup' (used in both)", /for Garlic Pasta and Garlic Soup/.test(LC), LC);
+    assert("single-recipe lines carry no credit", !/· 1 recipe|for Garlic Pasta\b(?! and)/.test(LC) && document.querySelectorAll(".g-item-recipes").length === 1, LC);
 
     // --- by-aisle / by-recipe view switch ---
     var aisleBtn = document.querySelector('[data-g-view="aisle"]'), recipeBtn = document.querySelector('[data-g-view="recipe"]');
@@ -141,6 +153,7 @@ async function runTests() {
     click(document.querySelector('[data-g-view="recipe"]')); await delay(140);
     click(document.querySelector("#shopping-mode-toggle")); await delay(160);
     assert("shopping mode adds .shopping", document.querySelector("#grocery-panel").classList.contains("shopping"), "");
+    assert("the main action now reads Done shopping", /Done shopping/.test(document.querySelector("#shopping-mode-toggle").textContent), document.querySelector("#shopping-mode-toggle").textContent);
     assert("shopping mode snaps back to the tickable aisle list",
            !!document.querySelector(".g-combined") && !document.querySelector(".g-by-recipe-view"), "");
   } catch (e) { assert("no exception", false, String(e && e.stack || e)); }

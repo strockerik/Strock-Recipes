@@ -211,8 +211,10 @@ async function runTests(){
 
   // ---------- UI: bar cocktails on the grocery list ----------
   var barTab=document.querySelector('.tab[data-section="cocktails"]'); click(barTab); await later(30);
-  click($('.item[data-id="r2"] .pick')); await later(80);
-  for(var i=0;i<7;i++){ click($('.item[data-id="r2"] .serv-btn[data-step="1"]')); }
+  click($('.item[data-id="r2"] .list-btn')); await later(80);
+  // Servings live in the open recipe now (the row only has "+ List").
+  click($('.item[data-id="r2"] .item-head')); await later(40);
+  for(var i=0;i<7;i++){ click($('.item[data-id="r2"] .detail-serv-btn[data-step="1"]')); }
   await later(250);
   var gin=T.combinedGroceryItems().filter(function(x){return /gin/.test(x.item);})[0];
   ok("PROBE 8 gin sours: gin not listed by weight (lb)",gin && gin.unit!=="lb",JSON.stringify(gin));

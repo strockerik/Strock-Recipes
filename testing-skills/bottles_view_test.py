@@ -241,22 +241,32 @@ async function runTests() {
     await toBar();
     assert("Bar: the view row shows with Bottles", !$(".mode-tabs").hidden && !$("#mode-bottles").hidden, "");
     assert("Bar: no Meal plan tab (meal planning is Kitchen-only)", $("#mode-mealplan").hidden, "");
-    assert("Bar: no 📅 stage controls on cocktails", !document.querySelector('.item[data-id="r1"] .plan-pick'), "");
+    assert("Bar: the first tab says Cocktails", txt($("#mode-recipes")) === "Cocktails", txt($("#mode-recipes")));
+    click($('.item[data-id="r1"] .item-head'));
+    await delay(100);
+    assert("Bar: no Plan a night on cocktails", !document.querySelector('.item[data-id="r1"] .plan-night-btn') && !!document.querySelector('.item[data-id="r1"] .cook-btn'), "");
+    click($('.item[data-id="r1"] .item-head'));
+    await delay(60);
     click($("#mode-bottles"));
     await until(function () { return /8\.5/.test(txt($("#bt-mine .bt-row"))) && !!$('#bt-mine [data-bt-product="p-tiki"]'); });
 
     // ---- Your bottles: the default list ----
     var mine = $$("#bt-mine .bt-row");
     assert("Bottles opens on Your bottles", $('[data-bt-list="mine"]').getAttribute("aria-pressed") === "true" && !$("#bt-mine").hidden && $("#bt-best").hidden && txt($("#bt-list-title")) === "Your bottles", txt($("#bt-list-title")));
-    assert("…the bar's in-stock bottles (not pantry, mixers or ones marked out), scored first",
-      mine.map(function (r) { return txt(r.querySelector(".bt-row-name")); }).join("|") === "Green Chartreuse|Laws San Luis Valley Rye|Plantation 3 Stars|Tiki Lovers White Rum",
+    assert("…the bar's bottles (not pantry or mixers), scored first, the ones marked out last",
+      mine.map(function (r) { return txt(r.querySelector(".bt-row-name")); }).join("|") === "Green Chartreuse|Laws San Luis Valley Rye|Plantation 3 Stars|Tiki Lovers White Rum|Old Tom Gin",
       mine.map(function (r) { return txt(r.querySelector(".bt-row-name")); }).join("|"));
-    assert("a scored bottle reads its score, reviews and confidence", /8\.5/.test(txt(mine[0])) && /Liqueur · 3 reviews · medium confidence/.test(txt(mine[0])) && mine[0].dataset.btProduct === "p-green", txt(mine[0]));
+    assert("a scored bottle reads its score, category and how many reviews", /8\.5/.test(txt(mine[0])) && /Liqueur · based on 3 reviews/.test(txt(mine[0])) && mine[0].dataset.btProduct === "p-green", txt(mine[0]));
+    assert("only the out bottle offers + List", $$("#bt-mine .bt-restock").length === 1 && /Gin · out/.test(txt(mine[4])) && /\+ List/.test(txt($('#bt-mine [data-bt-restock="i6"]'))), $$("#bt-mine .bt-restock").length + " " + txt(mine[4]));
     assert("a catalog bottle with no reviews says No scores yet, and opens its card", /Rye · No scores yet/.test(txt(mine[1])) && mine[1].dataset.btProduct === "p-laws", txt(mine[1]));
     assert("a bottle not in the catalog says so, and offers a lookup", /Rum · Not in the catalog yet — tap to look it up/.test(txt(mine[2])) && mine[2].dataset.btFind === "Plantation 3 Stars", txt(mine[2]));
     var tlink = UPDATES.filter(function (u) { return u.table === "inventory_items" && u.patch.product_id === "p-tiki"; })[0];
     assert("a bar bottle added before the catalog had it is linked on load", !!tlink && /Rum · No scores yet/.test(txt(mine[3])), JSON.stringify(UPDATES));
-    assert("the count says how many are scored", txt($("#bt-total")) === "4 bottles · 1 scored", txt($("#bt-total")));
+    assert("the count says how many are scored", txt($("#bt-total")) === "5 bottles · 1 scored", txt($("#bt-total")));
+    click($('#bt-mine [data-bt-restock="i6"]'));
+    await until(function () { var b = $('#bt-mine [data-bt-restock="i6"]'); return b && /On list/.test(txt(b)); });
+    var restockIns = INSERTS.filter(function (x) { return x.table === "grocery_manual_items"; })[0];
+    assert("+ List puts the out bottle on the grocery list, tied to it", !!restockIns && restockIns.row.source_inventory_id === "i6" && /Gin - Old Tom Gin/.test(restockIns.row.name), JSON.stringify(restockIns));
     click($('[data-bt-filter="rum"]'));
     await delay(60);
     assert("the category chips filter Your bottles too", $$("#bt-mine .bt-row-name").map(txt).join("|") === "Plantation 3 Stars|Tiki Lovers White Rum" && txt($("#bt-total")) === "2 bottles · 0 scored", $$("#bt-mine .bt-row-name").map(txt).join("|") + " / " + txt($("#bt-total")));
@@ -286,7 +296,7 @@ async function runTests() {
     assert("the total counts every scored bottle", /5 bottles scored/.test(txt($("#bt-total"))), txt($("#bt-total")));
     var greenRow = $$("#bt-best .bt-row").filter(function (r) { return /Green Chartreuse/.test(txt(r)); })[0];
     assert("owned bottles say In your bar (others don't)", /In your bar/.test(txt(greenRow)) && !/In your bar/.test(txt($$("#bt-best .bt-row")[1])), txt(greenRow));
-    assert("a row reads score, category, reviews and confidence", /8\.5/.test(txt(greenRow)) && /Liqueur · 3 reviews · medium confidence/.test(txt(greenRow)), txt(greenRow));
+    assert("a row reads score, category and how many reviews", /8\.5/.test(txt(greenRow)) && /Liqueur · based on 3 reviews/.test(txt(greenRow)), txt(greenRow));
     QUERIES = [];
     click($('[data-bt-filter="rum"]'));
     await until(function () { return $$("#bt-best .bt-row").length === 1; });
@@ -316,7 +326,9 @@ async function runTests() {
     assert("reviews read in the source's own terms", srcs.some(function (a) { return /Wine Enthusiast/.test(txt(a)) && /93 points · 2016/.test(txt(a)); }) && srcs.some(function (a) { return /Drinkhacker/.test(txt(a)) && /9\.5\/10/.test(txt(a)); }), srcs.map(txt).join(" | "));
     var field = srcs.filter(function (a) { return /Some Liqueur Blog/.test(txt(a)); })[0];
     assert("an unverified lookup find is named by its publication and tagged AI-found", !!field && /AI-found/.test(txt(field)), field ? txt(field) : "missing");
-    assert("the footnote explains the ¾ weight when AI finds are shown", /count ¾ until/.test(txt($(".bottle-body"))), "");
+    assert("the footnote says lookup finds count a little less, in plain words", /count a little less until they’re confirmed/.test(txt($(".bottle-body"))) && !/Medals count half/.test(txt($(".bottle-body"))), "");
+    assert("the score says what it's based on", /Based on 3 reviews from 3 sources/.test(txt($(".bt-scorecard"))), txt($(".bt-scorecard")));
+    assert("Make with it lists the cocktails that use it", /Make with it/.test(txt($(".bt-makes"))) && txt($('.bt-makes [data-bt-make="r1"]')) === "Last Word", txt($(".bt-makes")));
     assert("an owned bottle says In your bar instead of offering Add", !!$(".bt-actions .bt-owned") && !$('[data-bt="add"]'), "");
     assert("the typed name itself never called the label reader", !INVOKES.some(function (i) { return i.name === "identify-bottle"; }), JSON.stringify(INVOKES));
     await until(function () { return /Updated/.test(txt($("#bt-check"))); }, 15000);
@@ -467,8 +479,12 @@ async function runTests() {
     // Age wording differs between label and name: not a misread.
     FN["identify-bottle"] = function () { return { label: { printed_words: "THE GLENLIVET 12 YEARS OF AGE SINGLE MALT SCOTCH WHISKY", full_name: "The Glenlivet 12 Year Old Single Malt Scotch", brand: "The Glenlivet", expression: "12", category: "scotch", age_years: 12, abv: 40, proof: null, batch: null, single_barrel: false, country: "Scotland" } }; };
     click($("#close-bottle"));
+    // The camera inside the search field goes straight to the camera.
+    var camInput = $("#bt-photo-camera"), camClicks = 0, realClick = camInput.click;
+    camInput.click = function () { camClicks++; };
     click($("#bt-open"));
-    await until(function () { return !!$("[data-bt-form]"); });
+    camInput.click = realClick;
+    assert("the camera in the search field opens the camera directly", camClicks === 1 && $("#bottle-panel").hidden, "clicks=" + camClicks);
     choosePhoto(pngFile());
     await until(function () { return screen() === "Not in the catalog yet" && /Glenlivet/.test(txt($(".bt-label-card"))); });
     assert("“12 YEARS OF AGE” on the label vs “12 Year Old” in the name is no misread", !!$(".bt-label-card") && !$(".bt-label-card.is-misread") && !!$(".bt-fix") && !$(".bt-fix").open, txt($(".bt-label-card")));
@@ -497,7 +513,7 @@ async function runTests() {
     await resultFor("Green Chartreuse");
     await delay(200);
     assert("tapping the chip opens that bottle's score card", !$("#bottle-panel").hidden, "");
-    assert("browsing to a card spends nothing, and says when it was last checked", INVOKES.length === before && /Reviews last checked today/.test(txt($("#bt-check"))) && !!$('[data-bt="verify"]'), txt($("#bt-check")));
+    assert("browsing to a card spends nothing, and says when it was last checked", INVOKES.length === before && /Last checked: today/.test(txt($("#bt-check"))) && !!$('[data-bt="verify"]'), txt($("#bt-check")));
     click($('[data-bt="verify"]'));
     await until(function () { return /Up to date/.test(txt($("#bt-check"))); });
     var vc = INVOKES.slice(before).filter(function (i) { return i.name === "research-bottle"; })[0];
@@ -519,12 +535,17 @@ async function runTests() {
     await delay(120);
     assert("switching to Kitchen leaves Bottles for the recipe list", $("#bottles-view").hidden && $("#mode-bottles").hidden, "");
 
-    // ---- meal planning is Kitchen-only, even with something staged ----
-    var pick = document.querySelector('.item[data-id="k1"] .plan-pick');
-    assert("Kitchen rows keep their 📅 stage box", !!pick, "");
-    click(pick);
+    // ---- meal planning is Kitchen-only, even with something saved for planning ----
+    assert("on Kitchen the first tab says Recipes again", txt($("#mode-recipes")) === "Recipes", txt($("#mode-recipes")));
+    click($('.item[data-id="k1"] .item-head'));
+    await delay(120);
+    var planNight = document.querySelector('.item[data-id="k1"] .plan-night-btn');
+    assert("Kitchen recipes offer Plan a night", !!planNight, "");
+    click(planNight);
+    await delay(120);
+    click($("#place-sheet [data-later]"));
     await delay(150);
-    assert("staging a kitchen recipe shows the Meal plan tab and the staged pill", !$("#mode-mealplan").hidden && !$("#staged-count").hidden, "");
+    assert("saving a kitchen recipe for planning shows the Meal plan tab and the pill", !$("#mode-mealplan").hidden && !$("#staged-count").hidden, "");
     click($("#mode-mealplan"));
     await delay(200);
     click($(".tab-bar"));
@@ -561,10 +582,18 @@ function noSpill(name, els) {
   var bad = els.filter(function (e) { return e && e.scrollWidth > e.clientWidth + 1; });
   assert(name + ": text stays inside its box", els.length > 0 && els.every(Boolean) && !bad.length, bad.slice(0, 3).map(function (e) { return txt(e).slice(0, 40) + " " + e.scrollWidth + ">" + e.clientWidth; }).join(" | "));
 }
+function inSideScroller(el, W) {
+  for (var p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    var ox = getComputedStyle(p).overflowX;
+    if ((ox === "auto" || ox === "scroll" || ox === "hidden") && p.getBoundingClientRect().right <= W + 0.5) return true;
+  }
+  return false;
+}
 function noSideScroll(name) {
   var W = document.documentElement.clientWidth, bad = [];
   $$("body *").forEach(function (el) {
     if (el.closest("[hidden]") || !el.getClientRects().length) return;
+    if (inSideScroller(el, W)) return;   // e.g. the category chips: one row that scrolls on its own
     var r = el.getBoundingClientRect();
     if (r.width && r.right > W + 0.5) bad.push((el.id || el.className || el.tagName) + "@" + r.right.toFixed(0));
   });
@@ -573,8 +602,10 @@ function noSideScroll(name) {
 async function runTests() {
   try {
     await toBottles();
-    fits("Look up a bottle", $("#bt-open"));
-    tall("the lookup button, search, chips and rows", [$("#bt-open"), $("#bt-view-q"), $("#bt-view-search button")].concat($$(".bt-chip"), $$("#bt-best .bt-row")));
+    fits("the search field with its camera", $("#bt-view-search"));
+    tall("the camera, search, chips and rows", [$("#bt-open"), $("#bt-view-q")].concat($$(".bt-chip"), $$("#bt-best .bt-row")));
+    var chipRows = {}; $$(".bt-chip").forEach(function (c) { chipRows[Math.round(c.getBoundingClientRect().top)] = 1; });
+    assert("the category chips sit in one row", Object.keys(chipRows).length === 1, Object.keys(chipRows).join(","));
     noSideScroll("Bottles view");
     click($('[data-bt-list="mine"]'));
     await until(function () { return $$("#bt-mine .bt-row").length >= 4; });

@@ -41,8 +41,14 @@ var FAKE_INVENTORY = [
   { id: "i1", section: "bar", category: "rum",   name: null,      status: "in"  },
   { id: "i2", section: "bar", category: "amaro", name: "Campari", status: "in"  },
   { id: "i3", section: "bar", category: "gin",   name: null,      status: "in"  },
-  { id: "i4", section: "bar", category: "vodka", name: null,      status: "out" }
+  { id: "i4", section: "bar", category: "vodka", name: null,      status: "out" },
+  // pantry: two foods in stock, a sauce (left out: seasonings are assumed) and an out item
+  { id: "p1", section: "pantry", category: "Frozen", name: "chicken thighs", status: "in" },
+  { id: "p2", section: "pantry", category: "Canned & Jarred", name: "black beans", status: "in" },
+  { id: "p3", section: "pantry", category: "Condiments, Sauces & Spices", name: "soy sauce", status: "in" },
+  { id: "p4", section: "pantry", category: "Dry Goods & Baking", name: "rice", status: "out" }
 ];
+var INVOKES = [];
 
 // ---- chainable, thenable Supabase query-builder stub ----
 function makeBuilder(table) {
@@ -77,7 +83,10 @@ window.supabase = {
         resetPasswordForEmail: function () { return Promise.resolve({ data: {}, error: null }); },
         updateUser: function () { return Promise.resolve({ data: {}, error: null }); }
       },
-      functions: { invoke: function () { return Promise.resolve({ data: {}, error: null }); } }
+      functions: { invoke: function (name, opts) {
+        INVOKES.push({ name: name, body: opts && opts.body });
+        return Promise.resolve({ data: { concepts: [{ title: "Idea A", blurb: "a" }, { title: "Idea B", blurb: "b" }, { title: "Idea C", blurb: "c" }] }, error: null });
+      } }
     };
   }
 };
@@ -107,7 +116,10 @@ function picks() { return Array.prototype.slice.call(document.querySelectorAll('
 function pickByText(txt) { return picks().filter(function (b) { return (b.getAttribute("data-gen-barpick") || "").toLowerCase() === txt.toLowerCase(); })[0]; }
 function chipCount() { return document.querySelectorAll('#gen-ing-chips .gen-chip').length; }
 
-function runTests() {
+function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+async function until(fn) { for (var i = 0; i < 80 && !fn(); i++) await delay(25); return fn(); }
+function lastBody() { return (INVOKES[INVOKES.length - 1] || {}).body || {}; }
+async function runTests() {
   try {
     // (1) bar mode: pick row visible with the 3 in-stock spirits, vodka(out) excluded
     openBar();
@@ -147,6 +159,59 @@ function runTests() {
     // (5) kitchen mode: pick row hidden (bar-only feature)
     openKitchen();
     assert("kitchen mode hides bar pick-row", q("#gen-bar-picks").hidden, "hidden=" + q("#gen-bar-picks").hidden);
+
+    // (6) the start step: three choices; "Dinner from what I have" is one tap
+    assert("Generate opens on the three choices", !q("#gen-start").hidden && q("#gen-custom").hidden && q("#gen-submit").hidden, "");
+    assert("the kitchen asks what to make", q("#generate-title").textContent === "What should we make?", q("#generate-title").textContent);
+    assert("the one-tap line says pantry, about 30 minutes, serves 4",
+      /Your pantry · about 30 minutes · serves 4/.test(q("#gen-quick-sub").textContent), q("#gen-quick-sub").textContent);
+    assert("the options start folded under Change", q("#gen-opts").hidden && q("#gen-change").getAttribute("aria-expanded") === "false", "");
+    click(q("#gen-change"));
+    assert("Change opens them (grocery run is the choice itself here)", !q("#gen-opts").hidden && q("#gen-opt-grocery").hidden, "");
+    click(q('[data-gen-opt="cuisine"][data-val="italian"]'));
+    assert("the summary follows the options", q("#gen-settings-summary").textContent === "Italian · any equipment", q("#gen-settings-summary").textContent);
+    INVOKES = [];
+    click(q("#gen-quick"));
+    await until(function () { return INVOKES.length > 0 && !q("#generate-concepts").hidden; });
+    var b = lastBody();
+    assert("Dinner from what I have sends the pantry's food (no sauces, nothing out)",
+      JSON.stringify(b.ingredients) === '["chicken thighs","black beans"]', JSON.stringify(b.ingredients));
+    assert("…as a no-shopping, about-30-minute dinner for the household, honoring Change",
+      b.mode === "concepts" && b.section === "kitchen" && b.chips.groceryRun === "none" && b.chips.time === "quick" && b.chips.servings === 4 && b.chips.cuisine === "italian",
+      JSON.stringify(b.chips));
+    assert("the ideas show", !q("#generate-concepts").hidden && document.querySelectorAll("#gen-concept-list .gen-concept").length === 3, "");
+    INVOKES = [];
+    click(q("#gen-concepts-reroll"));
+    await until(function () { return INVOKES.length > 0; });
+    assert("Different ideas asks the same pantry question again",
+      JSON.stringify(lastBody().ingredients) === '["chicken thighs","black beans"]' && lastBody().chips.groceryRun === "none", JSON.stringify(lastBody()));
+    await until(function () { return !q("#generate-concepts").hidden; });
+    click(q("#gen-concepts-back"));
+    assert("Start over goes back to the three choices", !q("#generate-form").hidden && !q("#gen-start").hidden, "");
+    INVOKES = [];
+    click(q("#gen-shop"));
+    await until(function () { return INVOKES.length > 0; });
+    assert("Something new — I'll shop allows a quick grocery run",
+      lastBody().chips.groceryRun === "quick" && JSON.stringify(lastBody().ingredients) === '["chicken thighs","black beans"]', JSON.stringify(lastBody().chips));
+    await until(function () { return !q("#generate-concepts").hidden; });
+    click(q("#gen-concepts-back"));
+    click(q("#gen-mind"));
+    assert("I have something in mind opens the ingredient box",
+      !q("#gen-custom").hidden && q("#gen-start").hidden && !q("#gen-submit").hidden && !q("#gen-opt-grocery").hidden, "");
+    click(q("#gen-custom-back"));
+    assert("Back returns to the choices", !q("#gen-start").hidden && q("#gen-custom").hidden, "");
+
+    // (7) the bar's version
+    openBar();
+    assert("the bar asks what to mix", q("#generate-title").textContent === "What should we mix?" && q("#gen-quick-title").textContent === "A drink from my bar",
+      q("#generate-title").textContent + " / " + q("#gen-quick-title").textContent);
+    INVOKES = [];
+    click(q("#gen-quick"));
+    await until(function () { return INVOKES.length > 0; });
+    var bb = lastBody();
+    assert("A drink from my bar sends the bottles in stock, nothing to buy",
+      JSON.stringify(bb.ingredients) === '["Rum","Amaro (Campari)","Gin"]' && bb.section === "bar" && bb.chips.groceryRun === "none" && bb.chips.time === undefined && bb.chips.servings === undefined,
+      JSON.stringify(bb));
   } catch (e) {
     assert("no exception during test", false, String(e && e.stack || e));
   }

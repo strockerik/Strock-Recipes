@@ -282,7 +282,7 @@ async function runTests() {
     // ---- side effects ----
     assert("the real grocery basket is untouched",
       localStorage.getItem("hi:u1:basket") === basketBefore && !INSERTS.some(function (i) { return i.table === "grocery_basket_items"; })
-        && DELETES.indexOf("grocery_basket_items") === -1 && $("#grocery-bar").hidden,
+        && DELETES.indexOf("grocery_basket_items") === -1 && $("#grocery-top-count").hidden,
       JSON.stringify(INSERTS) + " " + DELETES.join());
 
     // ---- delivery fallbacks ----

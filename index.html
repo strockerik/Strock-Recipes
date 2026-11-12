@@ -81,10 +81,14 @@
     </p>
 
     <div id="intro-card" class="intro-card" hidden>
+      <!-- The Bar has no meal plan, so it gets its own first tip. -->
       <p class="intro-text">
-        New here? <b>Cook</b> walks you through a recipe step by step,
-        <b>Plan</b> stages recipes onto your week, and <b>Shop</b> builds a
-        combined grocery list as you add them.
+        <span class="intro-kitchen">New here? Open a recipe: <b>Start cooking</b> walks
+        you through it step by step, <b>Plan a night</b> puts it on your week, and
+        <b>+ List</b> adds it to one combined grocery list.</span>
+        <span class="intro-bar">New here? In a store, open <b>Bottles</b> and snap a
+        label to see how a bottle rates. <b>+ List</b> on a cocktail adds what it
+        needs to your grocery list.</span>
       </p>
       <button type="button" id="intro-dismiss" class="ghost-btn small">Got it</button>
     </div>
@@ -107,6 +111,9 @@
         📅 Meal plan <span id="mealplan-count" class="mode-tab-badge" hidden></span>
       </button>
     </nav>
+
+    <!-- Tonight's planned dinner, when there is one (renderTonight). -->
+    <section id="tonight-card" class="tonight-card" aria-labelledby="tonight-name" hidden></section>
 
     <!-- Search sticks under the header rather than scrolling away with the list
          (see .search-sticky). It's full-bleed, so it lives outside the padded
@@ -171,7 +178,7 @@
     </div>
 
     <p id="pick-hint" class="pick-hint" hidden>
-      Check recipes to build a grocery list.
+      Tap <b>+ List</b> on what you want to make; it all adds up to one grocery list.
       <button type="button" id="pick-hint-dismiss" class="ghost-btn small">Got it</button>
     </p>
 
@@ -189,30 +196,26 @@
 
   </main>
 
-  <!-- Grocery bar (appears when items are selected) -->
-  <div id="grocery-bar" class="grocery-bar" hidden>
-    <div class="wrap grocery-bar-row">
-      <span id="grocery-summary" class="grocery-summary"></span>
-      <div class="grocery-bar-actions">
-        <button id="open-grocery" class="solid-btn">View grocery list</button>
-        <button id="clear-grocery" class="ghost-btn small">Clear</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Grocery list panel -->
   <div id="grocery-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Grocery list" hidden>
     <div class="grocery-panel-inner wrap">
       <div class="grocery-panel-head">
-        <h2 class="panel-title">Grocery list</h2>
-        <button id="shopping-mode-toggle" class="ghost-btn small" aria-pressed="false">🛒 Shopping mode</button>
+        <div class="panel-title-row">
+          <h2 class="panel-title">Grocery list</h2>
+          <span id="grocery-head-count" class="panel-count"></span>
+        </div>
         <button id="close-grocery" class="ghost-btn small" aria-label="Close grocery list">Close</button>
+      </div>
+      <!-- The two ways a list gets bought: walk the store, or have it picked. -->
+      <div class="g-top-actions">
+        <button id="shopping-mode-toggle" class="solid-btn" aria-pressed="false">Start shopping</button>
+        <button id="send-to-kingsoopers" class="ghost-btn g-pickup-btn" title="Add the list to your King Soopers cart">Order for pickup</button>
       </div>
       <p id="grocery-progress" class="g-progress" hidden></p>
       <div id="grocery-content" class="grocery-content"></div>
       <div class="grocery-actions grocery-actions-primary">
-        <button id="share-grocery" class="solid-btn">Send to phone / Keep</button>
-        <button id="send-to-kingsoopers" class="solid-btn">🛒 Add to King Soopers cart</button>
+        <button id="share-grocery" class="ghost-btn">Send to phone / Keep</button>
+        <button id="clear-grocery" class="ghost-btn">Clear the list</button>
       </div>
       <div class="export-more">
         <button type="button" id="export-more-toggle" class="export-more-btn"
@@ -285,7 +288,7 @@
 
         <div class="kroger-prefs">
           <p class="diet-prefs-h">🛒 King Soopers ordering</p>
-          <p class="diet-prefs-sub">Set your store and how to pick products. You can also set your store the first time you tap <strong>Add to King Soopers cart</strong> on the grocery list.</p>
+          <p class="diet-prefs-sub">Set your store and how to pick products. You can also set your store the first time you tap <strong>Order for pickup</strong> on the grocery list.</p>
           <label class="diet-field" for="kroger-zip">
             <span>Your store</span>
             <div class="kroger-store-row">
@@ -395,7 +398,7 @@
         <section class="guide-feature">
           <p class="guide-kicker">02 — Cook mode</p>
           <h2 class="guide-h2">Cook hands-free, one step at a time</h2>
-          <p class="guide-p">Tap <b>▶ Cook</b> on any recipe for a full-screen guided mode. Each step fills the screen in large type; tap to advance. The ingredient list is one tap away, already scaled to your servings.</p>
+          <p class="guide-p">Open a recipe and tap <b>▶ Start cooking</b> for a full-screen guided mode. When tonight has a planned dinner, it waits at the top of your recipes with its own <b>Start cooking</b>. Each step fills the screen in large type; tap to advance. The ingredient list is one tap away, already scaled to your servings.</p>
           <ul class="guide-pts">
             <li><b>The screen stays awake</b> while you cook — no more tapping with floury hands</li>
             <li><b>Big, glanceable steps</b> you can read from across the counter</li>
@@ -405,20 +408,21 @@
         <section class="guide-feature">
           <p class="guide-kicker">03 — Grocery list</p>
           <h2 class="guide-h2">From recipes to a shopping list in one tap</h2>
-          <p class="guide-p">Check off the recipes you want to make and the app builds one combined list — the same ingredient from two recipes becomes a single line, with amounts rounded up to what a store actually sells.</p>
+          <p class="guide-p">Tap <b>+ List</b> on the recipes you want to make and the app builds one combined list — the same ingredient from two recipes becomes a single line, with amounts rounded up to what a store actually sells.</p>
           <ul class="guide-pts">
             <li><b>Sorted by aisle</b> — produce, meat, dairy, and so on</li>
             <li><b>Knows what you have</b> — anything already in your pantry is set aside in its own group, one tap from going back on the list</li>
             <li><b>Store-sized amounts</b> — two dozen cloves of garlic becomes “≈ 3 bulbs”, and a few tomato slices become one tomato</li>
-            <li><b>🍽 Recipe counts</b> shows how many recipes each line is for</li>
-            <li><b>Tick items off</b> as you shop, then send it to your phone, copy it, or download it</li>
+            <li><b>One number</b> — the 🛒 in the header counts the items on your list</li>
+            <li><b>Shared lines say why</b> — a line two recipes need reads “for Fajitas and Tacos”</li>
+            <li><b>Start shopping</b> for big check-offs as you go, or send it to your phone, copy it, or download it</li>
           </ul>
         </section>
 
         <section class="guide-feature">
           <p class="guide-kicker">04 — Order from King Soopers</p>
           <h2 class="guide-h2">Turn the list into a cart you can check out</h2>
-          <p class="guide-p">Tap <b>🛒 Add to King Soopers cart</b> and the app matches every item to a real product at your store, then shows you a review sheet before anything is ordered.</p>
+          <p class="guide-p">Tap <b>Order for pickup</b> on the grocery list and the app matches every item to a real product at your store, then shows you a review sheet before anything is ordered.</p>
           <ul class="guide-pts">
             <li><b>Set your store once</b> — the first time, a quick ZIP lookup right inside the sheet; skipped every time after</li>
             <li><b>Three clear groups</b> — what's going to your cart, what it couldn't match, and what it skipped because you already have it</li>
@@ -430,8 +434,9 @@
         <section class="guide-feature">
           <p class="guide-kicker">05 — Weekly meal plan</p>
           <h2 class="guide-h2">Plan the week, shop for it once</h2>
-          <p class="guide-p">On the <b>Kitchen</b> tab, stage the recipes you're thinking about, then drop them onto a day and a meal — breakfast, lunch, or dinner. When the week's set, roll the whole plan into one grocery list.</p>
+          <p class="guide-p">Open a recipe on the <b>Kitchen</b> tab and tap <b>Plan a night</b>: the next seven nights, one tap each. Not sure which night? <b>Save it for planning</b> and drop it onto a day and a meal later. When the week's set, roll the whole plan into one grocery list.</p>
           <ul class="guide-pts">
+            <li><b>Tonight's dinner</b> sits at the top of your recipes, one tap from cooking</li>
             <li><b>A rolling 7-day view</b>, plus a week of history</li>
             <li><b>Servings add up</b> across the days a recipe appears</li>
             <li><b>📤 Send plan</b> texts the family one page: the week at a glance, a single shopping list in aisle order, and each recipe's ingredients</li>
@@ -454,11 +459,12 @@
         <section class="guide-feature">
           <p class="guide-kicker">07 — Bottles</p>
           <h2 class="guide-h2">What the experts think, in the store aisle</h2>
-          <p class="guide-p">On the <b>Bar</b> tab, open <b>🥃 Bottles</b> and tap <b>Look up a bottle</b>: photograph the label (or type the name) and see its expert score out of 10, how sure that score is, and every review and medal behind it with a link to each.</p>
+          <p class="guide-p">On the <b>Bar</b> tab, open <b>🥃 Bottles</b> and type a name or tap the camera in the search field to photograph the label. You'll see its expert score out of 10, how sure that score is, and every review and medal behind it with a link to each.</p>
           <ul class="guide-pts">
             <li><b>Best rated</b> ranks every scored bottle in the catalog, by category</li>
             <li><b>Not in the catalog yet?</b> <b>Look it up</b> searches critic reviews and competition results (about 20 seconds) and saves what it finds for everyone</li>
-            <li><b>Add to my bar</b> straight from the score card</li>
+            <li><b>Add to my bar</b> straight from the score card, and <b>Make with it</b> lists your cocktails that use it</li>
+            <li><b>Out of a bottle?</b> <b>+ List</b> puts it on your grocery list, from Your bottles or its score card</li>
             <li><b>Wrong bottle?</b> flags a bad match so it gets fixed</li>
           </ul>
         </section>
@@ -493,8 +499,8 @@
             <h3 class="guide-h3">🪄 Generate <span class="guide-tag">from what you have</span></h3>
             <ol class="guide-steps">
               <li>Tap <b>🪄 Generate a recipe</b>.</li>
-              <li>List your main ingredients, or pull them from your inventory.</li>
-              <li>Optionally set time, servings, and cuisine, then pick from a few ideas.</li>
+              <li>Tap <b>Dinner from what I have</b> to start from your pantry, or <b>I have something in mind</b> to list a few ingredients yourself.</li>
+              <li>Pick from a few ideas. <b>Change</b> sets the cuisine, time, servings, or equipment.</li>
               <li>AI writes it; review and <b>Save</b>.</li>
             </ol>
           </div>
@@ -900,13 +906,29 @@
   <div id="generate-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Generate a recipe" hidden>
     <div class="grocery-panel-inner wrap">
       <div class="grocery-panel-head">
-        <h2 class="panel-title">Generate a recipe</h2>
+        <h2 class="panel-title" id="generate-title">What should we make?</h2>
         <button id="close-generate" class="ghost-btn small" aria-label="Close generator">Close</button>
       </div>
 
       <div id="generate-form">
+        <!-- One tap for the usual question; the details only if you want them. -->
+        <div id="gen-start" class="gen-start">
+          <button type="button" id="gen-quick" class="gen-choice is-primary">
+            <span class="gen-choice-text"><span class="gen-choice-title" id="gen-quick-title">Dinner from what I have</span><span class="gen-choice-sub" id="gen-quick-sub"></span></span>
+            <span class="gen-choice-go" aria-hidden="true">›</span>
+          </button>
+          <button type="button" id="gen-mind" class="gen-choice">
+            <span class="gen-choice-text"><span class="gen-choice-title">I have something in mind</span><span class="gen-choice-sub" id="gen-mind-sub"></span></span>
+            <span class="gen-choice-go" aria-hidden="true">›</span>
+          </button>
+          <button type="button" id="gen-shop" class="gen-choice">
+            <span class="gen-choice-text"><span class="gen-choice-title">Something new — I’ll shop</span><span class="gen-choice-sub" id="gen-shop-sub"></span></span>
+            <span class="gen-choice-go" aria-hidden="true">›</span>
+          </button>
+        </div>
+        <div id="gen-custom" hidden>
+        <button type="button" id="gen-custom-back" class="link-btn gen-back">‹ Back</button>
         <p class="gen-hint" id="gen-hint">List your main ingredients and AI will suggest a few recipes to pick from. It assumes you have common seasonings.</p>
-        <p class="gen-diet-line" id="gen-diet-line"></p>
         <div id="gen-bar-picks" class="gen-bar-picks" hidden>
           <span class="gen-opt-label">From your bar <span class="gen-bar-hint">· tap to add just what you want</span></span>
           <div class="gen-chip-row" id="gen-bar-picks-row"></div>
@@ -921,8 +943,14 @@
             <button type="button" id="gen-ing-add" class="solid-btn small">＋ Add</button>
           </div>
         </div>
+        </div>
 
-        <div class="gen-opts">
+        <div class="gen-settings">
+          <span id="gen-settings-summary" class="gen-settings-summary"></span>
+          <button type="button" id="gen-change" class="link-btn" aria-expanded="false" aria-controls="gen-opts">Change</button>
+        </div>
+        <p class="gen-diet-line" id="gen-diet-line"></p>
+        <div class="gen-opts" id="gen-opts" hidden>
           <div class="gen-opt" id="gen-opt-grocery">
             <span class="gen-opt-label">Grocery run</span>
             <div class="gen-chip-row" data-gen-single="groceryRun"></div>
@@ -945,7 +973,7 @@
           </div>
         </div>
 
-        <button type="button" id="gen-submit" class="solid-btn gen-submit">✨ Suggest recipes</button>
+        <button type="button" id="gen-submit" class="solid-btn gen-submit" hidden>✨ Suggest recipes</button>
         <p class="gen-tip">AI-written, not yet kitchen-tested — give it a look before you save.</p>
       </div>
 

@@ -8,8 +8,10 @@ second, so the failed-load state and its Try again button are covered too.
 Covers:
   - load states      (failed load is NOT "no recipes yet"; retry recovers)
   - filter sheet     (scope moved in behind 🏷; active scope surfaces as a chip)
-  - row patching     (star / cart / plan toggles don't rebuild the whole list)
-  - staging wording  ("Stage for plan", badge counts the tray, tab appears)
+  - row patching     (star / "+ List" don't rebuild the whole list; no old row controls)
+  - one count        (no bottom bar; the header badge counts lines to buy)
+  - open recipe      (Start cooking first; Plan a night: seven nights, one tap; the tray
+                      as "save it for planning"; the Tonight card)
   - sheets           (focus moves in, page locks, Escape closes only the top one)
   - cook mode        (last-step tap is inert; Done ✓ lands on a done screen)
   - undo             (deleting a recipe offers it back)
@@ -176,41 +178,68 @@ async function runTests() {
     assert("the star reflects its new state",
       row("r1").querySelector(".star-btn").getAttribute("aria-pressed") === "true", "");
 
-    var pick = row("r1").querySelector(".pick");
-    pick.focus();
-    click(pick);                       // the click itself ticks the box
-    await until(function () { return row("r1").classList.contains("has-serv"); });
-    assert("ticking the cart adds the servings stepper",
-      row("r1").classList.contains("has-serv") && !!row("r1").querySelector(".serv-control"), "");
-    assert("ticking the cart leaves the other rows alone",
+    // A row is name/tags, the star and one "+ List" — none of the old six controls.
+    var listBtn = row("r1").querySelector(".list-btn");
+    assert("a row has one list button and none of the old controls",
+      !!listBtn && !row("r1").querySelector(".pick, .plan-pick, .serv-control, .chevron"), txt(row("r1")));
+    listBtn.focus();
+    click(listBtn);
+    await until(function () { return row("r1").querySelector(".list-btn").getAttribute("aria-pressed") === "true"; });
+    assert("+ List turns into ✓ On list", /On list/.test(txt(row("r1").querySelector(".list-btn"))), txt(row("r1").querySelector(".list-btn")));
+    assert("adding leaves the other rows alone",
       row("r2").dataset.sentinel === "kept", "r2 was rebuilt");
     assert("focus stays on the control you just used",
-      document.activeElement === row("r1").querySelector(".pick"),
+      document.activeElement === row("r1").querySelector(".list-btn"),
       document.activeElement ? (document.activeElement.className || document.activeElement.tagName) : "none");
+    assert("adding says so, with a way to the list",
+      /Added to your grocery list/.test(txt($(".toast-action"))) && txt($(".toast-action-btn")) === "View", txt($(".toast-action")));
 
-    // ---------- 5. the grocery bar and the header count ----------
-    assert("grocery bar is up", !$("#grocery-bar").hidden, "");
-    assert("body is flagged so the ＋ button can clear the bar",
-      document.body.classList.contains("has-grocery-bar"), "");
-    assert("header cart carries the count",
-      !$("#grocery-top-count").hidden && txt($("#grocery-top-count")) === "1", txt($("#grocery-top-count")));
-    assert("header cart's label includes the count",
-      /1 added/.test($("#open-grocery-top").getAttribute("aria-label")), $("#open-grocery-top").getAttribute("aria-label"));
+    // ---------- 5. one grocery count, no bottom bar ----------
+    assert("the bottom grocery bar is gone", !$("#grocery-bar"), "");
+    assert("header cart counts the lines on the list (stock + beef)",
+      !$("#grocery-top-count").hidden && txt($("#grocery-top-count")) === "2", txt($("#grocery-top-count")));
+    assert("header cart's label says items",
+      /2 items/.test($("#open-grocery-top").getAttribute("aria-label")), $("#open-grocery-top").getAttribute("aria-label"));
 
-    // ---------- 6. staging says staging ----------
+    // ---------- 6. the open recipe: Start cooking first; Plan a night ----------
     click(row("r1").querySelector(".item-head"));
     await delay(140);
-    var planBtn = row("r1").querySelector(".add-to-plan-btn");
-    assert("the detail button says Stage, not In meal plan",
-      /Stage for plan/.test(txt(planBtn)) && !/In meal plan/.test(txt(planBtn)), txt(planBtn));
+    var detail = row("r1").querySelector(".item-detail");
+    assert("Start cooking leads the open recipe",
+      !!detail.querySelector(".detail-actions > .cook-btn") && /Start cooking/.test(txt(detail.querySelector(".cook-btn"))), "");
+    assert("the list button and Plan a night are the pair",
+      /On grocery list/.test(txt(detail.querySelector(".detail-actions-pair .detail-grocery-btn"))) && !!detail.querySelector(".detail-actions-pair .plan-night-btn"), "");
+    assert("Ask AI and Pair a drink sit in the quiet line",
+      !!detail.querySelector(".detail-quiet .coach-btn") && !!detail.querySelector(".detail-quiet .pair-btn"), "");
+    assert("servings show in the recipe even when it's on the list", !!detail.querySelector(".detail-serv"), "");
+    var planBtn = row("r1").querySelector(".plan-night-btn");
+    assert("the plan button says Plan a night", txt(planBtn) === "Plan a night", txt(planBtn));
     click(planBtn);
+    await delay(140);
+    var nights = document.querySelectorAll("#place-sheet .ps-night");
+    assert("Plan a night opens the next seven nights",
+      !$("#place-sheet").hidden && nights.length === 7 && /^Tonight/.test(txt(nights[0])) && /^Tomorrow/.test(txt(nights[1])), nights.length + " " + txt(nights[0]));
+    click($("#place-sheet [data-later]"));
     await delay(160);
-    planBtn = row("r1").querySelector(".add-to-plan-btn");
-    assert("staged state reads as staged", /Staged for plan/.test(txt(planBtn)), txt(planBtn));
-    assert("the row's calendar box agrees", row("r1").querySelector(".plan-pick").checked, "");
-    assert("the badge counts what's staged",
+    assert("Not sure yet saves it for planning", $("#place-sheet").hidden, "");
+    assert("the badge counts what's saved for planning",
       !$("#mealplan-count").hidden && txt($("#mealplan-count")) === "1", txt($("#mealplan-count")));
-    assert("the Meal plan tab comes back once something is staged", !$(".mode-tabs").hidden, "");
+    assert("the Meal plan tab comes back once something is saved", !$(".mode-tabs").hidden, "");
+    assert("the pill under the list says saved for planning", /1 recipe saved for planning/.test(txt($("#staged-count"))), txt($("#staged-count")));
+    click(row("r1").querySelector(".plan-night-btn"));
+    await delay(140);
+    assert("the sheet knows it's saved", /Saved for planning/.test(txt($("#place-sheet-body"))), txt($("#place-sheet-body")).slice(-80));
+    var now = new Date(), pad = function (n) { return String(n).padStart(2, "0"); };
+    var today = now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+    click(document.querySelector("#place-sheet .ps-night"));
+    await delay(220);
+    assert("one tap schedules tonight's dinner",
+      INSERTS.some(function (x) { return x.table === "meal_plan_entries" && x.row.slot === "dinner" && x.row.plan_date === today && x.row.recipe_id === "r1"; }),
+      JSON.stringify(INSERTS.filter(function (x) { return x.table === "meal_plan_entries"; })));
+    assert("the button reports it", /Planned tonight/.test(txt(row("r1").querySelector(".plan-night-btn"))), txt(row("r1").querySelector(".plan-night-btn")));
+    assert("planned is no longer 'not sure yet'", $("#staged-count").hidden && txt($("#mealplan-count")) === "1", txt($("#mealplan-count")));
+    assert("tonight's dinner tops the list",
+      !$("#tonight-card").hidden && /Three Step Stew/.test(txt($("#tonight-card"))) && !!$("#tonight-card [data-tonight-cook]"), txt($("#tonight-card")));
 
     // ---------- 7. the unit choice is remembered ----------
     var metric = row("r1").querySelector('.unit-toggle-btn[data-unit="metric"]');
@@ -313,7 +342,8 @@ async function runTests() {
     $("#recipe-form-panel").hidden = false; await delay(80);
     $("#rf-id").value = "r2";
     click($("#delete-recipe"));
-    await until(function () { var t = $(".toast-action"); return t && t.classList.contains("show"); });
+    // (The "Added to your grocery list · View" toast from earlier may still be up.)
+    await until(function () { var t = $(".toast-action"); return t && t.classList.contains("show") && /Undo/.test(txt(t)); });
     var undo = $(".toast-action");
     assert("deleting a recipe offers an Undo",
       !!undo && undo.classList.contains("show") && /Undo/.test(txt(undo.querySelector(".toast-action-btn"))), txt(undo));
