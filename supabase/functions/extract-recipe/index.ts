@@ -420,8 +420,11 @@ function parseYield(v: unknown): number {
 
 // recipeInstructions: string | string[] | HowToStep[] | HowToSection[] (each
 // section carrying itemListElement of steps). Sections become the app's
-// sub-recipe groups.
-function parseInstructions(v: unknown): { text: string; group: string | null }[] {
+// sub-recipe groups. HowToTip entries (King Arthur puts five after its steps:
+// gluten-free swaps, French toast, a reduced-sugar version) are advice, not
+// steps — they go to `tips`, which the caller puts in notes, instead of being
+// numbered into the method for Cook mode to walk through.
+function parseInstructions(v: unknown, tips: string[] = []): { text: string; group: string | null }[] {
   const out: { text: string; group: string | null }[] = [];
   const addText = (raw: string, group: string | null) => {
     const cleaned = htmlToText(raw).replace(/\s+/g, " ").trim();
@@ -440,6 +443,11 @@ function parseInstructions(v: unknown): { text: string; group: string | null }[]
       if (types.some((t) => typeof t === "string" && t.toLowerCase() === "howtosection")) {
         const name = schemaText(o["name"]) || null;
         walk(o["itemListElement"], name);
+        return;
+      }
+      if (types.some((t) => typeof t === "string" && t.toLowerCase() === "howtotip")) {
+        const tip = htmlToText(schemaText(o["text"] ?? o["name"] ?? "")).replace(/\s+/g, " ").trim();
+        if (tip) tips.push(tip);
         return;
       }
       const text = schemaText(o["text"] ?? o["name"] ?? "");
@@ -463,7 +471,8 @@ function schemaOrgToRecipe(node: unknown, url: URL, meta: { siteName: string }):
     .map((line: unknown) => schemaText(line))
     .filter(Boolean)
     .map(parseIngredientLine);
-  const method = parseInstructions(o["recipeInstructions"]);
+  const tips: string[] = [];
+  const method = parseInstructions(o["recipeInstructions"], tips);
 
   // Acceptance gate: enough structure to trust, and enough of the ingredient
   // lines parsed a quantity (short lines — "lime wedge", "salt" — are fine
@@ -499,7 +508,7 @@ function schemaOrgToRecipe(node: unknown, url: URL, meta: { siteName: string }):
     servings_label: "servings",
     ingredients,
     method,
-    notes: null
+    notes: tips.length ? tips.join("\n\n").slice(0, 2000) : null
   };
 }
 
