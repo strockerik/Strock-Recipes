@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "1.2";
+  const APP_VERSION = "1.3";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -117,7 +117,7 @@
   function syncPickHint(itemCount) {
     const homeTipDone = seenHomeTip || !canInstallToHomeScreen();
     const n = itemCount ?? (viewMode === "recipes" ? currentItems().length : 0);
-    pickHintEl.hidden = seenPickHint || !seenIntro || !homeTipDone || viewMode !== "recipes" || n === 0;
+    pickHintEl.hidden = seenPickHint || !seenIntro || !homeTipDone || viewMode !== "recipes" || section !== "recipes" || n === 0;
   }
 
   const DATA = { recipes: [], cocktails: [], sharedRecipes: [], sharedCocktails: [] };
@@ -1054,7 +1054,7 @@
   // used to duplicate this (list-row .pick and the detail-view button).
   async function setBasketMembership(id, on) {
     const it = byId[id];
-    if (!it) return;
+    if (!it || (on && it.section !== "kitchen")) return; // cocktails never go on the list
     const prev = basket.has(id) ? { ...basket.get(id) } : null;
     if (on) basket.set(id, { servings: defaultAddServings(it) }); else basket.delete(id);
     // Only this row's button (and its open detail) changes; the other forty
@@ -1191,8 +1191,21 @@
   // Drop basket / open-row / active-tag references to recipes or tags that no
   // longer exist (e.g. a recipe deleted on another device). This lets us reload
   // data without nuking the user's whole grocery list, filters, and open rows.
+  // Cocktails stopped going on the grocery list on 2026-11-12. One added before
+  // then would sit on the list with no button to take it off, so it's dropped
+  // here and on the server. Typed items and bottle restocks are untouched.
+  function dropCocktailsFromBasket() {
+    const bar = [...basket.keys()].filter((id) => byId[id] && byId[id].section !== "kitchen");
+    if (!bar.length) return;
+    bar.forEach((id) => basket.delete(id));
+    if (session && !session.offline) {
+      supabaseClient.from("grocery_basket_items").delete().in("recipe_id", bar)
+        .then(({ error }) => { if (error) console.error("Couldn't drop cocktails from the grocery list:", error.message); });
+    }
+  }
   function pruneStaleState() {
     for (const id of [...basket.keys()]) if (!byId[id]) basket.delete(id);
+    dropCocktailsFromBasket();
     for (const id of [...openItems]) if (!byId[id]) openItems.delete(id);
     for (const id of [...openShareIds]) if (!byId[id]) openShareIds.delete(id);
     for (const id of [...mealPlanTray]) if (!byId[id]) mealPlanTray.delete(id);
@@ -2997,7 +3010,9 @@
   // its own (see rerenderRow). Toggling a star or the list button used to
   // rebuild every row in the list, which dropped keyboard focus to <body> each
   // time — adding five recipes meant five trips back through the Tab order.
-  // A row is for scanning: name, subtitle and tags, the star, and one "+ List".
+  // A row is for scanning: name, subtitle and tags, the star, and one "+ List"
+  // (Kitchen only: cocktails don't go on the grocery list — their bottles and
+  // mixers are added by hand, or restocked from Bottles).
   // It used to carry six controls (a checkbox and a cart glyph for the same
   // thing, a servings stepper, a calendar box, the star and a chevron); the
   // servings and the plan live in the open recipe now.
@@ -3016,7 +3031,7 @@
           <span class="item-tags">${it.tags.map((t) => `<span class="mini-tag">${esc(t)}</span>`).join("")}</span>
         </button>
         ${mine ? `<button class="star-btn${it.isFavorite ? " is-on" : ""}" aria-label="${it.isFavorite ? "Remove from favorites" : "Add to favorites"}" aria-pressed="${it.isFavorite}">${it.isFavorite ? "\u2605" : "\u2606"}</button>` : ""}
-        ${listBtnHtml(it.name, picked)}
+        ${it.section === "kitchen" ? listBtnHtml(it.name, picked) : ""}
       </div>
       ${open ? renderDetail(it, servings) : ""}
     </li>`;
@@ -3146,10 +3161,10 @@
     const actions = `
       <div class="detail-actions">
         ${it.method && it.method.length ? `<button class="solid-btn cook-btn" data-id="${esc(it.id)}">\u25B6 Start cooking</button>` : ""}
-        <div class="detail-actions-pair">
+        ${kitchen ? `<div class="detail-actions-pair">
           <button class="ghost-btn detail-grocery-btn${onList ? " is-on" : ""}" data-id="${esc(it.id)}">${onList ? "\u2713 On grocery list" : "Add to grocery list"}</button>
-          ${kitchen ? `<button class="ghost-btn plan-night-btn${plannedEntry(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}" aria-haspopup="dialog">${esc(planBtnLabel(it.id))}</button>` : ""}
-        </div>
+          <button class="ghost-btn plan-night-btn${plannedEntry(it.id) ? " is-on" : ""}" data-id="${esc(it.id)}" aria-haspopup="dialog">${esc(planBtnLabel(it.id))}</button>
+        </div>` : ""}
         <p class="detail-quiet">
           <span>Need a hand?</span>
           <button class="link-btn coach-btn" data-id="${esc(it.id)}">Ask AI</button>

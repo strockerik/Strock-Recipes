@@ -245,6 +245,8 @@ async function runTests() {
     click($('.item[data-id="r1"] .item-head'));
     await delay(100);
     assert("Bar: no Plan a night on cocktails", !document.querySelector('.item[data-id="r1"] .plan-night-btn') && !!document.querySelector('.item[data-id="r1"] .cook-btn'), "");
+    assert("Bar: cocktails don't go on the grocery list (no + List, no Add to grocery list)",
+      !document.querySelector('.item[data-id="r1"] .list-btn') && !document.querySelector('.item[data-id="r1"] .detail-grocery-btn'), "");
     click($('.item[data-id="r1"] .item-head'));
     await delay(60);
     click($("#mode-bottles"));

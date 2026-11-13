@@ -219,6 +219,11 @@ leads with **▶ Start cooking**, then **Add to grocery list** and **Plan a
 night** side by side, then a quiet line: *Need a hand? Ask AI · Pair a drink ·
 More*.
 
+Cocktails don't go on the grocery list: their rows have no **+ List** and an
+open cocktail has no Add to grocery list. Bottles and mixers are added by hand,
+or restocked from Bottles (**+ List** on a bottle you're out of). A cocktail
+already on someone's list from before is taken off when the app loads.
+
 Every open recipe has a **servings stepper** above the ingredients: scale a
 recipe written for 4 up to 8 (it shows "×2 of 4") and the ingredient amounts
 rescale live. The chosen servings carry straight into the grocery list, so a

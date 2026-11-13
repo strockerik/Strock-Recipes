@@ -41,13 +41,15 @@ var FAKE_RECIPES=[
   base_servings:2,servings_label:"<b>srv</b>",created_at:"2026-01-03T00:00:00Z",
   ingredients:[{amount:1,unit:"<i>u</i>",item:"<svg onload=window.XSS=4>",group:"<img src=y onerror=window.XSS=5>"}],
   method:[{text:"<img src=z onerror=window.XSS=6>",group:null}],specs:null,notes:"<iframe src=javascript:window.XSS=7>",is_favorite:false}];
-window.CALLS={invoke:[],insert:[],update:[]};
+window.CALLS={invoke:[],insert:[],update:[],deleteIn:[]};
 window.INVOKE_IMPL=null;
 function snap(x){return JSON.parse(JSON.stringify(x));}
 function makeBuilder(table){
-  var single=false;
+  var single=false, del=false;
   var val=function(){
     if(table==="recipes")return{data:FAKE_RECIPES,error:null};
+    // A cocktail left on the list from before cocktails stopped going on it.
+    if(table==="grocery_basket_items")return{data:[{recipe_id:"r2",servings:2}],error:null};
     var prof={id:USER_ID,display_name:"T",diet_prefs:null,grocery_prefs:null,kroger_prefs:null};
     if(table==="profiles")return{data:single?prof:[prof],error:null};
     return{data:[],error:null};};
@@ -57,6 +59,8 @@ function makeBuilder(table){
     if(k==="insert")return function(row){CALLS.insert.push([table,snap(row)]);return p;};
     if(k==="update")return function(row){CALLS.update.push([table,snap(row)]);return p;};
     if(k==="single")return function(){single=true;return p;};
+    if(k==="delete")return function(){del=true;return p;};
+    if(k==="in")return function(col,vals){if(del)CALLS.deleteIn.push([table,col,snap(vals)]);return p;};
     return function(){return p;};}});
   return p;}
 window.supabase={createClient:function(){return{
@@ -87,6 +91,9 @@ async function runTests(){
  var T=window.__T;
  try{
   ok("app booted and rendered the list", !!document.querySelector('.item[data-id="r1"]'), "items="+document.querySelectorAll(".item").length+" gate="+(document.getElementById("auth-gate")||{}).hidden+" errs="+(window.ERRS||[]).join(" | "));
+  ok("a cocktail left on the grocery list is taken off, on the server too",
+     T.combinedGroceryItems().length===0 && CALLS.deleteIn.some(function(d){return d[0]==="grocery_basket_items"&&d[1]==="recipe_id"&&JSON.stringify(d[2])==='["r2"]';}),
+     JSON.stringify(CALLS.deleteIn)+" items="+T.combinedGroceryItems().length);
   // ---------- fmtAmount ----------
   eq("fmtAmount 0.5",T.fmtAmount(0.5),"½"); eq("fmtAmount 0.25",T.fmtAmount(0.25),"¼");
   eq("fmtAmount 0.33",T.fmtAmount(0.33),"⅓"); eq("fmtAmount 1.5",T.fmtAmount(1.5),"1 ½");
@@ -209,14 +216,13 @@ async function runTests(){
   $("#recipe-form").requestSubmit(); $("#recipe-form").requestSubmit(); await later(150);
   eq("PROBE double submit inserts once",CALLS.insert.filter(function(x){return x[0]==="recipes";}).length,1);
 
-  // ---------- UI: bar cocktails on the grocery list ----------
+  // ---------- UI: cocktails don't go on the grocery list ----------
   var barTab=document.querySelector('.tab[data-section="cocktails"]'); click(barTab); await later(30);
-  click($('.item[data-id="r2"] .list-btn')); await later(80);
-  // Servings live in the open recipe now (the row only has "+ List").
+  ok("cocktail rows have no + List", !$('.item[data-id="r2"] .list-btn'));
   click($('.item[data-id="r2"] .item-head')); await later(40);
-  for(var i=0;i<7;i++){ click($('.item[data-id="r2"] .detail-serv-btn[data-step="1"]')); }
-  await later(250);
-  var gin=T.combinedGroceryItems().filter(function(x){return /gin/.test(x.item);})[0];
+  ok("an open cocktail has no Add to grocery list", !$('.item[data-id="r2"] .detail-grocery-btn') && !!$('.item[data-id="r2"] .detail-serv-btn'));
+  // The engine still scales bar units right (the meal-plan page and old lists use it).
+  var gin=T.combinedGroceryItems([["r2",{servings:8}]]).filter(function(x){return /gin/.test(x.item);})[0];
   ok("PROBE 8 gin sours: gin not listed by weight (lb)",gin && gin.unit!=="lb",JSON.stringify(gin));
  }catch(e){ok("no exception",false,e&&e.stack||e);}
  finish();
