@@ -12,6 +12,12 @@
 # Re-running is safe: scores already in are skipped, and a merge whose bottle is
 # already gone is skipped.
 cd "$(dirname "$0")" || exit 1
+if [ $# -gt 1 ] || { [ -n "$1" ] && [ "$1" != "--apply" ]; }; then
+  echo "Usage: bash catalog_pass.sh            (preview, writes nothing)"
+  echo "       bash catalog_pass.sh --apply    (write it)"
+  echo "Run them as two separate commands."
+  exit 1
+fi
 APPLY="$1"
 for f in batches/curated.json batches/review-pass-2026-11-12.json batches/merges-2026-11-12.sh; do
   [ -f "$f" ] || { echo "Missing $f"; exit 1; }
