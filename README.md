@@ -132,7 +132,11 @@ Use the app — no editing JS files:
   schema.org Recipe data (JSON-LD — most recipe blogs do), it's parsed
   **deterministically and returned without any AI call at all** — instant,
   free, doesn't count against the daily cap, and the review form says so
-  ("Read straight from the site's recipe data"). Only when the structured
+  ("Read straight from the site's recipe data"). That path tidies two site
+  habits out of the ingredient names — a conversion after the measure ("8
+  tablespoons (113g) butter") and the site's own brand on its products ("King
+  Arthur Unbleached All-Purpose Flour") — and puts schema.org tips (HowToTip)
+  in Notes instead of numbering them as steps. Only when the structured
   data is absent or too partial does the extraction fall back to the AI path
   (which still receives the JSON-LD as context when present). **YouTube**
   links (including Shorts) work too: the function reads the recipe out of the
@@ -1214,9 +1218,20 @@ python3 ratings.py import-batch batches/bsa.json      # preview: joins, new bott
 python3 ratings.py import-batch batches/bsa.json --apply
 python3 ratings.py import-batch batches/ssel.json --join-only   # only deepen bottles we have
 bash build_catalog.sh            # every batch, in order (preview); --apply to write
+bash catalog_pass.sh             # the 2026-11-12 review pass (preview); --apply to write
 python3 ratings.py dupes         # bottles one word apart → batches/dupes.csv
 python3 ratings.py merge KEEP_ID DROP_ID --apply                # fold a duplicate into its twin
 ```
+
+`dupes` only proposes; a person decides. Its "likely same" verdict is a word
+that rarely makes another bottle (white, silver, original, premium…), but
+"blended" counts only outside whiskey: Arlett Single Malt and Arlett Blended
+are two whiskies, and so are Four Roses Bourbon and Four Roses Small Batch.
+`catalog_pass.sh` is the 2026-11-12 pass: the hand-checked `curated` scores
+(their first import stopped on an alias bug after making the bottles), 38
+critic scores for widely stocked bottles that had none or one thin one
+(`batches/review-pass-2026-11-12.json`, each read on the critic's own page),
+then 72 hand-checked merges (`batches/merges-2026-11-12.sh`).
 
 `batches/` is gitignored like `cache/`: the site is published from this repo,
 and harvested scores shouldn't be republished as files.

@@ -409,6 +409,40 @@ function parseIngredientLine(raw: string): { amount: number | null; unit: string
   return { amount, unit, item: rest, group: null };
 }
 
+// A site's own recipe data is its own wording, and two habits leak into the
+// item: a conversion right after the measure ("8 tablespoons (113g) unsalted
+// butter") and the site's brand on its own products ("King Arthur Unbleached
+// All-Purpose Flour"). The amount already says how much, and a shopper doesn't
+// need the brand, so both go. A size after a can or a package ("1 can (14 oz)
+// tomatoes") stays: it says which can. Notes like "at room temperature" stay
+// too — there's no method rewrite on this path to move them into.
+const MEASURE_UNITS = new Set([
+  "cup", "cups", "c", "tablespoon", "tablespoons", "tbsp", "tbs", "tb", "teaspoon", "teaspoons", "tsp",
+  "ounce", "ounces", "oz", "pound", "pounds", "lb", "lbs", "gram", "grams", "g", "kilogram", "kilograms", "kg",
+  "milliliter", "milliliters", "millilitre", "millilitres", "ml", "liter", "liters", "litre", "litres", "l",
+  "quart", "quarts", "qt", "pint", "pints", "pt", "stick", "sticks"
+]);
+// "King Arthur Baking" → "King Arthur"; one-word leftovers ("Simply" from
+// "Simply Recipes") are too likely to start a real ingredient, so none.
+function siteBrand(siteName: string): string {
+  const words = (siteName || "").split(/\s+/).filter(Boolean);
+  while (words.length && /^(baking|kitchen|recipes?|foods?|magazine|company|co\.?|inc\.?)$/i.test(words[words.length - 1])) words.pop();
+  return words.length >= 2 ? words.join(" ") : "";
+}
+function tidyStructuredIngredient(ing: { amount: number | null; unit: string | null; item: string; group: null }, brand: string): { amount: number | null; unit: string | null; item: string; group: null } {
+  let item = ing.item;
+  if (ing.unit && MEASURE_UNITS.has(ing.unit)) {
+    item = item.replace(/^\(\s*[\d.,\/½⅓⅔¼¾⅛ ]+\s*(?:g|grams?|kg|ml|millilit(?:er|re)s?|l|oz|ounces?|lbs?|pounds?|cups?|tbsp|tsp)\.?\s*\)\s*/i, "");
+  }
+  if (brand) {
+    const escaped = brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp("^" + escaped + "['’]?s?\\s+", "i");
+    // A product name is Title Case; once the brand is off, it reads as an ingredient.
+    if (re.test(item)) item = item.replace(re, "").replace(/^[^,]*/, (s) => s.toLowerCase());
+  }
+  return { ...ing, item: item.trim() || ing.item };
+}
+
 // recipeYield arrives as number | "4 servings" | "Makes 12" | array — first
 // sensible integer wins.
 function parseYield(v: unknown): number {
@@ -467,10 +501,11 @@ function schemaOrgToRecipe(node: unknown, url: URL, meta: { siteName: string }):
   const name = schemaText(o["name"]);
   if (!name) return null;
 
+  const brand = siteBrand(meta.siteName);
   const ingredients = (Array.isArray(o["recipeIngredient"]) ? o["recipeIngredient"] : [])
     .map((line: unknown) => schemaText(line))
     .filter(Boolean)
-    .map(parseIngredientLine);
+    .map((line: string) => tidyStructuredIngredient(parseIngredientLine(line), brand));
   const tips: string[] = [];
   const method = parseInstructions(o["recipeInstructions"], tips);
 

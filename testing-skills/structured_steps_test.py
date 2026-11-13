@@ -6,7 +6,9 @@ A link whose page carries schema.org Recipe data is read straight from it (the
 helpers it uses) out of the Edge Function, strips the type annotations, and
 runs it in headless Chrome: plain step lists, HowToSection groups, and
 HowToTip entries, which go to notes rather than into the method (King Arthur
-lists five tips after its steps; Cook mode used to walk through them as steps).
+lists five tips after its steps; Cook mode used to walk through them as steps);
+and the ingredient-line tidy-up (a conversion after the measure and the site's
+own brand come off the item; a can's size stays).
 Run from anywhere in the repo:  python3 testing-skills/structured_steps_test.py
 """
 import json, pathlib, re, subprocess, sys, tempfile
@@ -25,8 +27,18 @@ def fn(name):
     if not m: sys.exit(f"FAIL  {name} not found in extract-recipe")
     return m.group(0)
 
+def const_block(name):
+    m = re.search(rf"^const {name}(?:: [^=]+)? = .*?^(?:\}};|\]\);)\n", SRC, re.S | re.M)
+    if not m: sys.exit(f"FAIL  const {name} not found in extract-recipe")
+    return m.group(0)
+
 def strip(ts):
-    for pat, rep in [(r"\(html: string\): string \{", "(html) {"), (r"\(s: string\): string \{", "(s) {"),
+    for pat, rep in [(r"const UNICODE_FRACTIONS: Record<string, number> =", "const UNICODE_FRACTIONS ="),
+                     (r"\(raw: string\): \{ amount: number \| null; unit: string \| null; item: string; group: null \} \{", "(raw) {"),
+                     (r"\(s: string \| undefined\): number =>", "(s) =>"),
+                     (r"let unit: string \| null = null;", "let unit = null;"),
+                     (r"\(siteName: string\): string \{", "(siteName) {"),
+                     (r"\(ing: \{ amount: number \| null; unit: string \| null; item: string; group: null \}, brand: string\): \{ amount: number \| null; unit: string \| null; item: string; group: null \} \{", "(ing, brand) {"),(r"\(html: string\): string \{", "(html) {"), (r"\(s: string\): string \{", "(s) {"),
                      (r"\(v: unknown\): string \{", "(v) {"),
                      (r"\(v: unknown, tips: string\[\] = \[\]\): \{ text: string; group: string \| null \}\[\] \{", "(v, tips = []) {"),
                      (r"const out: \{ text: string; group: string \| null \}\[\] = \[\];", "const out = [];"),
@@ -34,10 +46,24 @@ def strip(ts):
                      (r"\(node: unknown, group: string \| null\)", "(node, group)"),
                      (r" as Record<string, unknown>", "")]:
         ts = re.sub(pat, rep, ts)
-    if re.search(r":\s*(?:string|unknown|any)\b|\bas Record\b", ts): sys.exit("FAIL  type-strip left annotations — extend strip()")
+    if re.search(r":\s*(?:string|unknown|any|number)\b|\bas Record\b|Record<", ts): sys.exit("FAIL  type-strip left annotations — extend strip()")
     return ts
 
-JS = "\n".join(strip(fn(n)) for n in ["htmlToText", "decodeEntities", "schemaText", "parseInstructions"])
+JS = "\n".join([strip(fn(n)) for n in ["htmlToText", "decodeEntities", "schemaText", "parseInstructions"]] +
+               [strip(const_block(n)) for n in ["UNICODE_FRACTIONS", "INGREDIENT_UNITS", "MEASURE_UNITS"]] +
+               [strip(fn(n)) for n in ["parseIngredientLine", "siteBrand", "tidyStructuredIngredient"]])
+
+# Ingredient lines from a site's own recipe data: (label, line, site name, [amount, unit, item])
+ING = [
+    ("a conversion after the measure goes", "8 tablespoons (113g) unsalted butter, at cool room temperature", "King Arthur Baking",
+     [8, "tablespoons", "unsalted butter, at cool room temperature"]),
+    ("…and the site's own brand on its product", "2 1/4 cups (270g) King Arthur Unbleached All-Purpose Flour", "King Arthur Baking",
+     [2.25, "cups", "unbleached all-purpose flour"]),
+    ("a brand with no conversion", "1 teaspoon King Arthur Pure Vanilla Extract", "King Arthur Baking", [1, "teaspoon", "pure vanilla extract"]),
+    ("a can's size stays (it says which can)", "1 can (14 oz) diced tomatoes", "Serious Eats", [1, "can", "(14 oz) diced tomatoes"]),
+    ("another brand is left alone", "1 cup King Arthur flour", "Simply Recipes", [1, "cup", "King Arthur flour"]),
+    ("a plain line is untouched", "2 large eggs", "King Arthur Baking", [2, None, "large eggs"]),
+]
 
 STEP = lambda t: {"@type": "HowToStep", "text": t}
 CASES = [
@@ -60,14 +86,20 @@ CASES = [
 
 PAGE = """<!doctype html><meta charset=utf-8><pre id=out></pre><script>
 %s
-var CASES = %s, R = [];
+var CASES = %s, ING = %s, R = [];
+ING.forEach(function (c) {
+  var g = tidyStructuredIngredient(parseIngredientLine(c[1]), siteBrand(c[2]));
+  var got = [Math.round(g.amount * 1000) / 1000, g.unit, g.item];
+  var ok = JSON.stringify(got) === JSON.stringify(c[3]);
+  R.push({ name: "ingredients: " + c[0], pass: ok, detail: ok ? "" : JSON.stringify(got) });
+});
 CASES.forEach(function (c) {
   var tips = [], got = parseInstructions(c[1], tips).map(function (s) { return [s.text, s.group]; });
   var ok = JSON.stringify(got) === JSON.stringify(c[2]) && JSON.stringify(tips) === JSON.stringify(c[3]);
   R.push({ name: c[0], pass: ok, detail: ok ? "" : JSON.stringify({ method: got, tips: tips }) });
 });
 document.getElementById("out").textContent = JSON.stringify(R);
-</script>""" % (JS, json.dumps(CASES).replace("</", "<\\/"))
+</script>""" % (JS, json.dumps(CASES).replace("</", "<\\/"), json.dumps(ING).replace("</", "<\\/"))
 
 def main():
     with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False) as f:

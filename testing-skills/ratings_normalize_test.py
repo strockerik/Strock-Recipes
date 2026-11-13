@@ -397,6 +397,25 @@ rr = [R.review_row(MB, row, pid, sc) for row, pid, sc in PM["reviews"]]
 eq("mixed batch: each review keeps its own source, scale and curated origin", sorted((r["source_id"], r["score_10"], r["origin"]) for r in rr),
    [("drinkhacker", 8.0, "curated"), ("drinkhacker", 8.0, "curated"), ("whisky_advocate", 8.0, "curated")])
 eq("mixed batch: one page reviewing two bottles gives two distinct refs", len({r["source_ref"] for r in rr}), 3)
+posts3 = []
+def fake_sb_mixed(method, path, body=None, prefer="return=representation"):
+    if method == "GET":
+        if path.startswith("/rest/v1/rating_sources"):
+            return [{"id": "drinkhacker", "name": "Drinkhacker", "default_weight": 1.0}, {"id": "whisky_advocate", "name": "Whisky Advocate", "default_weight": 1.0}]
+        return []
+    posts3.append((path, body))
+    if path == "/rest/v1/spirit_products":
+        return [{"id": "new-" + str(i), "name_norm": b["name_norm"]} for i, b in enumerate(body)]
+    return None
+tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False); _json.dump(MB, tmp); tmp.close()
+saved = R.sb; R.sb = fake_sb_mixed
+with contextlib.redirect_stdout(io.StringIO()):
+    R.main(["import-batch", tmp.name, "--apply"])
+R.sb = saved; os.unlink(tmp.name)
+als3 = [r for p_, b in posts3 if p_.startswith("/rest/v1/spirit_aliases") for r in b]
+revs3 = [r for p_, b in posts3 if p_.startswith("/rest/v1/spirit_reviews") for r in b]
+eq("mixed batch import: aliases carry no '*' source (not a rating_sources id)", all(a["source_id"] is None for a in als3) and len(als3) > 0, True)
+eq("mixed batch import: every score is written, each on its own source", sorted(r["source_id"] for r in revs3), ["drinkhacker", "drinkhacker", "whisky_advocate"])
 
 # Whiskyfun: official bottlings only; core range vs limited; type from the name/region, never the cask
 WFP = "".join(f'<td><span class="textegrandfoncegras">{n} <img src="s.jpg"></span> notes… <strong>SGP:552 - {p} points.</strong></td>' for n, p in [
@@ -416,11 +435,17 @@ DP = [{"id": "a", "canonical_name": "Plantation 3 Stars", "name_norm": "plantati
       {"id": "b", "canonical_name": "Plantation 3 Stars White Rum", "name_norm": "plantation 3 stars white rum", "category": "rum", "age_years": None, "abv": None, "batch": None},
       {"id": "c", "canonical_name": "Devils River Cinnamon Bourbon", "name_norm": "devils river cinnamon bourbon", "category": "bourbon", "age_years": None, "abv": None, "batch": None},
       {"id": "d", "canonical_name": "Devils River Bourbon", "name_norm": "devils river bourbon", "category": "bourbon", "age_years": None, "abv": None, "batch": None},
-      {"id": "e", "canonical_name": "Devils River Gin", "name_norm": "devils river gin", "category": "gin", "age_years": None, "abv": None, "batch": None}]
+      {"id": "e", "canonical_name": "Devils River Gin", "name_norm": "devils river gin", "category": "gin", "age_years": None, "abv": None, "batch": None},
+      {"id": "f", "canonical_name": "Arlett Single Malt Whisky", "name_norm": "arlett single malt whisky", "category": "whiskey", "age_years": None, "abv": None, "batch": None},
+      {"id": "g", "canonical_name": "Arlett Blended Single Malt Whisky", "name_norm": "arlett blended single malt whisky", "category": "whiskey", "age_years": None, "abv": None, "batch": None},
+      {"id": "h", "canonical_name": "Worthy Park Reserve Rum", "name_norm": "worthy park reserve rum", "category": "rum", "age_years": None, "abv": None, "batch": None},
+      {"id": "i", "canonical_name": "Worthy Park Reserve Blended Rum", "name_norm": "worthy park reserve blended rum", "category": "rum", "age_years": None, "abv": None, "batch": None}]
 nd = {(a["id"], b["id"], x, v) for a, b, x, v in R.near_duplicates(DP)}
 eq("dupes: a colour word apart = likely the same bottle", ("b", "a", "white", "likely same") in nd, True)
 eq("dupes: a flavour apart = check", ("c", "d", "cinnamon", "check") in nd, True)
 eq("dupes: never across categories (the gin isn't the bourbon's twin)", any("e" in (a, b) for a, b, _, _ in nd), False)
+eq("dupes: 'blended' is another whiskey, so check it", ("g", "f", "blended", "check") in nd, True)
+eq("dupes: 'blended' on a rum label is filler", ("i", "h", "blended", "likely same") in nd, True)
 calls = []
 def fake_sb3(method, path, body=None, prefer="return=representation"):
     calls.append((method, path, body))

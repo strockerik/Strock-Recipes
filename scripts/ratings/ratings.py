@@ -1092,10 +1092,14 @@ def cmd_import_batch(args):
             made[m["name_norm"]] = m["id"]
         print(f"  added bottles {i + 1}–{i + len(chunk)}")
     alias_rows = []
+    # A hand-checked batch is marked "*" (several sources); that isn't a
+    # rating_sources id, so its aliases carry none. Saving "*" broke the
+    # 2026-11-12 curated import after its bottles were made, before any score.
+    alias_src = None if b["source_id"] == "*" else b["source_id"]
     for key, pid in plan["aliases"]:   # every printed form points at its bottle
         pid = made.get(pid[4:]) if pid.startswith("new:") else pid
         if pid:
-            alias_rows.append({"alias_norm": key, "product_id": pid, "source_id": b["source_id"]})
+            alias_rows.append({"alias_norm": key, "product_id": pid, "source_id": alias_src})
     for i in range(0, len(alias_rows), 500):
         sb("POST", "/rest/v1/spirit_aliases?on_conflict=alias_norm", alias_rows[i:i + 500],
            prefer="resolution=ignore-duplicates,return=minimal")
@@ -1641,7 +1645,11 @@ def near_duplicates(products):
         for extra in sorted(w):
             for q_ in index.get((fam(p.get("category")), w - {extra}), []):
                 if q_["id"] != p["id"] and N.attrs_compatible(_prod_attrs(p), _prod_attrs(q_)):
-                    verdict = "likely same" if extra in WEAK_WORDS or re.fullmatch(r"(19|20)\d\d", extra) else "check"
+                    # "Blended" is filler on a rum label but a different bottle
+                    # in whiskey: Arlett Single Malt vs Arlett Blended, Early
+                    # Times Bourbon vs Early Times American Blended.
+                    weak = extra in WEAK_WORDS and not (extra == "blended" and fam(p.get("category")) == "whiskey")
+                    verdict = "likely same" if weak or re.fullmatch(r"(19|20)\d\d", extra) else "check"
                     out.append((p, q_, extra, verdict))
     return out
 
