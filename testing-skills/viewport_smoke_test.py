@@ -42,12 +42,21 @@ var FAKE_RECIPES=[{id:"r1",user_id:USER_ID,section:"kitchen",name:"Test Recipe",
   source:null,tags:["italian"],base_servings:4,servings_label:"servings",
   ingredients:[{amount:2,unit:"cup",item:"flour",group:null},{amount:38,unit:null,item:"garlic",group:null}],
   method:[{text:"Mix for 10 minutes.",group:null}],specs:null,notes:null,is_favorite:false,
-  created_at:"2026-01-01T00:00:00Z"}];
+  created_at:"2026-01-01T00:00:00Z"},
+ {id:"r2",user_id:USER_ID,section:"kitchen",name:"Sheet-Pan Chicken Thighs with Potatoes, Onions and Garlic",subtitle:"one pan",
+  source:null,tags:["chicken"],base_servings:4,servings_label:"servings",
+  ingredients:[{amount:1.5,unit:"lb",item:"chicken thighs",group:null},{amount:1,unit:"lb",item:"potatoes",group:null}],
+  method:Array.apply(null,{length:20}).map(function(_,i){return {text:"Step "+(i+1)+": keep going until it is golden and done.",group:null};}),
+  specs:null,notes:null,is_favorite:false,created_at:"2026-01-02T00:00:00Z"}];
+// Tonight's dinner is the long recipe, so the Tonight card shows.
+var TODAY=(function(){var d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");})();
+var FAKE_PLAN=[{id:"m1",recipe_id:"r2",plan_date:TODAY,slot:"dinner",servings:4,purchased_at:null}];
 var FAKE_INVENTORY=[{id:"i1",section:"pantry",category:"Spices",name:"oregano",status:"in"},
                     {id:"i2",section:"pantry",category:"Produce",name:"lemons",status:"out"}];
 function builder(tbl){var single=false;var val=function(){
   if(tbl==="recipes") return {data:FAKE_RECIPES,error:null};
   if(tbl==="inventory_items") return {data:FAKE_INVENTORY,error:null};
+  if(tbl==="meal_plan_entries") return {data:FAKE_PLAN,error:null};
   // A list select returns rows, .single() returns one. Returning the object for
   // both made loadProfiles' forEach throw, so every run of this harness was
   // silently testing a half-finished load (no tag cloud, no refreshViews).
@@ -177,6 +186,35 @@ async function run(){try{
     click(head); await delay(120);
   }
   if(listBtn){ click(document.querySelector(".item .list-btn")); await delay(160); }
+
+  // Tonight → Recipe: the open recipe's header lands at the top, just under the
+  // sticky header and search (it used to be centred, so you landed mid-method).
+  var tn=document.querySelector("#tonight-card [data-tonight-open]");
+  A("the Tonight card shows tonight's dinner", !!tn && !document.querySelector("#tonight-card").hidden, "");
+  if(tn){
+    var realScrollTo=window.scrollTo, target=null;
+    window.scrollTo=function(o){ target=o; realScrollTo.call(window,{top:(o&&o.top)||0,behavior:"instant"}); };
+    click(tn); await delay(200);
+    window.scrollTo=realScrollTo;
+    var li2=document.querySelector('.item[data-id="r2"]');
+    var stickyB=document.querySelector("#search-sticky").getBoundingClientRect().bottom;
+    var top2=li2 ? li2.getBoundingClientRect().top : -1;
+    A("Tonight → Recipe puts the recipe's header just under the search bar (gap "+Math.round(top2-stickyB)+"px)",
+      !!target && !!li2 && li2.classList.contains("is-open") && top2>=stickyB-1 && top2<=stickyB+24,
+      "top="+Math.round(top2)+" searchBottom="+Math.round(stickyB));
+    // Cook mode with a long name: the title wraps and Exit stays on screen.
+    if(li2){
+      click(li2.querySelector(".cook-btn")); await delay(150);
+      var ex=document.querySelector("#cook-close"), ttl=document.querySelector("#cook-title");
+      var er=ex.getBoundingClientRect(), vw2=document.documentElement.clientWidth;
+      A("cook mode: a long name wraps onto more lines (is "+Math.round(ttl.getBoundingClientRect().height)+"px tall)", ttl.getBoundingClientRect().height>30, ttl.textContent);
+      A("cook mode: Exit stays on screen and is 44px tall", er.left>=0 && er.right<=vw2+0.5 && er.height>=44, Math.round(er.left)+".."+Math.round(er.right)+" vw="+vw2+" h="+Math.round(er.height));
+      ov("cook mode, long name");
+      click(ex); await delay(120);
+      click(li2.querySelector(".item-head")); await delay(120);
+    }
+    window.scrollTo({top:0,behavior:"instant"});
+  }
 
   // The release number in the footer: shown, small, and never stuck under the
   // grocery bar or the ＋ button once you scroll to the bottom of the page.

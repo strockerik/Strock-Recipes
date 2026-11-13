@@ -1719,20 +1719,28 @@ body.section-cocktails .intro-bar { display: inline; }
 }
 .cook-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding-top: 14px;
   padding-bottom: 14px;
 }
+/* A long name wraps (up to three lines) instead of running off the screen.
+   It used to stay on one line with no min-width, which pushed the Exit
+   button past the right edge — no way out of cook mode on a phone. */
 .cook-title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--font-display);
   font-size: 1.2rem;
   font-weight: 600;
+  line-height: 1.25;
   color: var(--ink);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .cook-progress {
   height: 4px;
@@ -1934,13 +1942,16 @@ body.section-cocktails .intro-bar { display: inline; }
 
 /* ✕ Exit button — replaces the old "Done" ghost-btn in the cook head */
 .cook-close-btn {
-  border: 1px solid rgba(255,255,255,0.25);
-  background: transparent;
-  color: var(--faint);
+  flex: none;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
   border-radius: var(--radius);
-  padding: 7px 13px;
-  font-size: 0.85rem;
+  padding: 0 14px;
+  font-size: 0.9rem;
   font-weight: 600;
+  white-space: nowrap;
 }
 .cook-close-btn:hover { border-color: var(--accent); color: var(--accent); }
 

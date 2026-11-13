@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "1.3";
+  const APP_VERSION = "1.4";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -6447,7 +6447,18 @@
     openItems.add(id);
     refreshViews();
     const li = document.querySelector(`.item[data-id="${CSS.escape(id)}"]`);
-    if (li) li.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (li) scrollRecipeToTop(li);
+  }
+  // Bring an open recipe's header to the top of the screen, just under the
+  // sticky header and search bar. Centering it (the old way) landed a tall open
+  // recipe halfway down its method, from Tonight's "Recipe" button especially.
+  function scrollRecipeToTop(li) {
+    const header = document.querySelector(".site-header");
+    const sticky = searchStickyEl && !searchStickyEl.hidden ? searchStickyEl : null;
+    const offset = (header ? header.getBoundingClientRect().height : 0) +
+      (sticky ? sticky.getBoundingClientRect().height : 0) + 8;
+    const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: Math.max(0, li.getBoundingClientRect().top + window.scrollY - offset), behavior: still ? "auto" : "smooth" });
   }
 
   async function pickPairOption(i) {
