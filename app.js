@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "1.4";
+  const APP_VERSION = "1.5";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -2214,7 +2214,7 @@
         <ul id="bt-mine" class="bt-list" aria-live="polite" hidden></ul>
         <p class="bt-foot" id="bt-mine-foot" hidden>Your bar bottles from Bar &amp; Pantry, best score first; the ones you’re out of are last, a tap from the grocery list. Tap a bottle for its reviews.</p>
         <ul id="bt-best" class="bt-list" aria-live="polite"></ul>
-        <p class="bt-foot" id="bt-best-foot">Ranked by score and by how many reviews back it up. Listed: bottles with a critic’s review or three or more competition results. Any bottle’s score shows when you look it up.</p>`;
+        <p class="bt-foot" id="bt-best-foot">Ranked by score and by how many reviews back it up. Listed: bottles with two or more reviews. Any bottle’s score shows when you look it up.</p>`;
       bottlesView.dataset.built = "1";
     }
     if (!bottles.list) bottles.list = loadLocal("bottleList", "mine") === "best" ? "best" : "mine";
@@ -2281,10 +2281,10 @@
     if (!bottles.best.has(filter)) {
       listEl2.innerHTML = `<li class="bt-empty">Loading…</li>`;
       const cats = (BT_FILTERS.find((f) => f[0] === filter) || [])[2];
-      // Medium or high confidence only: a bottle known from one competition medal
-      // (half weight) would otherwise tie a well-reviewed bottle, and there are
-      // hundreds of them. They still have a score when looked up, and join the
-      // list once a lookup adds a review.
+      // Medium or high confidence only (two or more reviews): a bottle known from a
+      // single review would otherwise tie a well-reviewed bottle, and there are
+      // thousands of them. They still have a score when looked up, and join the
+      // list once a second review arrives.
       let query = supabaseClient.from("spirit_consensus")
         .select("product_id,canonical_name,category,n_reviews,n_sources,score_10,confidence,rank_score")
         .in("confidence", ["medium", "high"])
@@ -2464,17 +2464,21 @@
       });
     }
     renderBtBusy("Loading the score…");
-    const [prodRes, consRes, revRes, sources] = await Promise.all([
+    const [prodRes, consRes, revRes, sources, comRes] = await Promise.all([
       supabaseClient.from("spirit_products").select("id,canonical_name,category,producer,country,age_years,abv,researched_at").eq("id", pid).maybeSingle(),
       supabaseClient.from("spirit_consensus").select("product_id,n_reviews,n_sources,score_10,confidence").eq("product_id", pid).maybeSingle(),
       supabaseClient.from("spirit_reviews").select("id,source_id,score_raw,score_10,medal,review_year,url,reviewer,origin,verified").eq("product_id", pid),
-      btSources()
+      btSources(),
+      // RumX's community median, shown beside the expert score and never in it.
+      // The table arrives with SQL step 11; until then this read just comes back empty.
+      supabaseClient.from("spirit_community").select("median,n_ratings,url").eq("product_id", pid).maybeSingle()
     ]);
     if (token !== btToken || bottlePanel.hidden) return;
     const prod = prodRes.data;
     if (prodRes.error || !prod) { renderBtStart("Couldn’t load that bottle — try again."); return; }
     btRemember(prod.id, prod.canonical_name);
-    renderBtResult(prod, consRes.data || null, revRes.data || [], sources, ctx, opts);
+    renderBtResult(prod, consRes.data || null, revRes.data || [], sources, ctx,
+      { ...opts, community: comRes && !comRes.error && comRes.data ? comRes.data : null });
     if (opts.verify && consRes.data) btVerify(prod, ctx);
   }
   function btAgo(iso) {
@@ -2552,12 +2556,19 @@
           <span class="bt-score-why"><b>No expert scores yet.</b> A lookup searches critic reviews and competition results and saves what it finds.</span>
           <button type="button" class="solid-btn bt-wide" data-bt="research-product">Look it up</button>
         </div>`;
+    // "RumX community median 7.8/10 (499 ratings)" — worded the way RumX asks to be
+    // cited. Members' opinions, so it sits under the expert score and says so.
+    const com = opts.community;
+    const communityLine = com && Number(com.n_ratings) >= 4
+      ? `<p class="bt-community"><a href="${esc(com.url)}" target="_blank" rel="noopener noreferrer">RumX community median ${esc(scoreText(com.median))}/10 (${Number(com.n_ratings).toLocaleString()} ratings) <span aria-hidden="true">\u2197</span></a>
+          <span class="bt-community-note">Members, not critics \u2014 not part of the score above.</span></p>` : "";
     btSet("result", `
       <div class="bt-result-head">
         <h3 class="bt-result-name">${esc(prod.canonical_name)}</h3>
         ${facts ? `<span class="bt-result-facts">${esc(facts)}</span>` : ""}
       </div>
       ${scoreBlock}
+      ${communityLine}
       ${checkLine}
       <div class="bt-actions">
         ${outItem ? (restockListed(outItem) ? `<span class="bt-owned">Out \u00B7 \u2713 on your grocery list</span>`

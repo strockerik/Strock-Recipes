@@ -36,3 +36,9 @@ data/King Soopers Match/Test account - house-index-backup-2026-07-29.json
 scripts/ratings/cache/
 # Harvested batches (re-creatable with `ratings.py harvest`; GitHub Pages would publish them)
 scripts/ratings/batches/
+
+# Distiller scores the user collected by hand/script (their terms: no databases) — personal, never published
+data/Distiller/
+
+# Gemini's research output (scraped reviews + a database mirror): personal, never published
+gemini_research/

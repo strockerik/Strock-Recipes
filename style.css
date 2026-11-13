@@ -2600,6 +2600,10 @@ body.section-cocktails .intro-bar { display: inline; }
 .bt-list li.bt-mine-li:last-child { border-bottom: 0; }
 .bt-mine-li.is-out .bt-score { opacity: 0.55; }
 .bt-restock[disabled] { cursor: default; }
+/* Score card: a crowd's median under the experts' score, clearly apart from it. */
+.bt-community { margin: -4px 0 0; font-size: 0.85rem; line-height: 1.45; }
+.bt-community a { color: var(--ink); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.bt-community-note { display: block; color: var(--faint); font-size: 0.8rem; margin-top: 2px; }
 /* Score card: what to make with the bottle. */
 .bt-makes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .bt-makes-label { font-size: 0.85rem; color: var(--faint); }

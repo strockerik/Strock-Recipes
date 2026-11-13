@@ -323,6 +323,170 @@ eq("import-batch: one review per bottle-year, refs unique", len(revs), len({r["s
 eq("import-batch: new bottles' reviews point at the new ids", all(r["product_id"] in {"p-ec"} | {f"new-{i}" for i in range(len(prods))} for r in revs), True)
 eq("import-batch: the joined bottle's printed name becomes its alias", any(a["alias_norm"] == "elijah craig small batch bourbon" and a["product_id"] == "p-ec" for a in als), True)
 
+# RumX: a rum page's JSON-LD -> facts, matching, community medians
+def rx_page(name, brand, maker, age, abv, median, n, critics):
+    ld = {"@context": "https://schema.org", "@type": "Product", "name": name, "brand": {"@type": "Brand", "name": brand},
+          "manufacturer": {"@type": "Organization", "name": maker},
+          "aggregateRating": {"@type": "AggregateRating", "ratingValue": str(median), "bestRating": "10.0", "worstRating": "0.1", "ratingCount": n},
+          "additionalProperty": [{"@type": "PropertyValue", "name": "Age Statement", "value": f"{age} years"} if age else {"@type": "PropertyValue", "name": "Style", "value": "x"},
+                                 {"@type": "PropertyValue", "name": "Alcohol Content", "value": f"{abv}%"}],
+          "subjectOf": [{"@type": "CriticReview", "url": u, "reviewRating": {"@type": "Rating", "ratingValue": str(sc)},
+                         "author": {"@type": "Organization", "@id": f"https://rumx.com/en/experts/{slug}/#expert", "name": nm}}
+                        for nm, slug, u, sc in critics] + [{"@type": "VideoObject", "name": "a video", "url": "https://youtube.test/x"}]}
+    return '<html><script type="application/ld+json">' + json.dumps(ld) + "</script></html>"
+import json
+RXP = rx_page("Smith & Cross Traditional Jamaican Rum", "Smith & Cross", "Hampden", 3, 57, 7.8, 499,
+              [("Rhummer", "rhummer", "https://www.rhummer.it/recensione/rum/smith-cross/", 8.1),
+               ("The Lone Caner", "the-lone-caner", "https://thelonecaner.com/r1/", 7.0),
+               ("Fat Rum Pirate", "the-fat-rum-pirate", "https://thefatrumpirate.com/smith-cross", 8.0)])
+rf = R.rumx_facts(RXP)
+eq("rumx: name, age, strength and brand come off the page", (rf["name"], rf["age_years"], rf["abv"], rf["brand"], rf["maker"]), ("Smith & Cross Traditional Jamaican Rum", 3, 57.0, "Smith & Cross", "Hampden"))
+eq("rumx: the community median and its count", (rf["median"], rf["n_ratings"]), (7.8, 499))
+eq("rumx: critics' reviews only (a video isn't one), each with its own page and /10 score", [(c["critic"], c["score"]) for c in rf["critics"]], [("Rhummer", 8.1), ("The Lone Caner", 7.0), ("Fat Rum Pirate", 8.0)])
+eq("rumx: a page with no Product data is nothing", R.rumx_facts("<html>no data</html>"), None)
+SC = {"id": "p-sc", "canonical_name": "Smith & Cross", "name_norm": "smith and cross", "category": "rum", "age_years": None, "abv": 57, "batch": None}
+eq("rumx_same: the distillery, a place and a filler word may differ ('Hampden … Traditional Jamaican')", R.rumx_same(SC, rf), True)
+other = dict(rf, abv=60.0)
+eq("rumx_same: a different stated strength is another bottle", R.rumx_same(SC, other), False)
+HJ = dict(SC, id="p-hj", canonical_name="Hampden Gold", name_norm="hampden gold")
+eq("rumx_same: another bottle of the distillery isn't it", R.rumx_same(HJ, rf), False)
+idx = [{"rxid": "43", "slug": "s", "name": "Smith & Cross Traditional Jamaican Rum"}, {"rxid": "9", "slug": "q", "name": "Quite Different Rum"}]
+cands = R.rumx_candidates([SC], idx)
+eq("rumx_candidates: shortlists the page whose words contain the bottle's", list(cands), ["43"])
+okurl = {"https://www.rhummer.it/recensione/rum/smith-cross/": True, "https://thefatrumpirate.com/smith-cross": False}
+saved = R.rumx_critic_ok
+R.rumx_critic_ok = lambda u: okurl.get(u, False)
+saved_fetch = R.fetch
+pages = {"https://rumx.com/en/rums/43/s/": RXP, "https://rumx.com/en/best-rums/": ""}
+R.fetch = lambda u, **k: (pages.get(u) if u in pages else (_ for _ in ()).throw(AssertionError("unexpected fetch " + u)))
+R.rumx_index = lambda: idx
+tmpc = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False); _json.dump({"prods": [SC]}, tmpc); tmpc.close()
+with contextlib.redirect_stdout(io.StringIO()):
+    nm, meta, rrows = R.harvest_rumx(type("A", (), {"catalog": tmpc.name, "limit": None})())
+os.unlink(tmpc.name)
+R.rumx_critic_ok = saved; R.fetch = saved_fetch
+eq("harvest_rumx: critics RumX links, on their own pages, as 'other critic' with their names", [(r["name"], r["source_id"], r["reviewer"], r["score_raw"]) for r in rrows], [("Smith & Cross", "other_critic", "Rhummer", 8.1)])
+eq("harvest_rumx: The Lone Caner is left to its own harvest, and a critic whose site blocks AI is left out", len(rrows), 1)
+eq("harvest_rumx: the community median rides along, with RumX's page", meta["community"], [{"name": "Smith & Cross", "median": 7.8, "n_ratings": 499, "url": "https://rumx.com/en/rums/43/s/"}])
+com_posts = []
+def fake_sb_com(method, path, body=None, prefer="return=representation"):
+    if method == "GET":
+        if path.startswith("/rest/v1/spirit_products"): return [{"id": "p-sc", "name_norm": "smith and cross"}]
+        return []
+    com_posts.append((path, body)); return None
+saved = R.sb; R.sb = fake_sb_com
+with contextlib.redirect_stdout(io.StringIO()):
+    R.import_community(meta["community"] + [{"name": "Nobody Rum", "median": 8.0, "n_ratings": 90, "url": "u"}, {"name": "Smith & Cross", "median": 9.9, "n_ratings": 2, "url": "u"}])
+R.sb = saved
+eq("import_community: one row per known bottle, with RumX as source; unknown bottles and <4 ratings are left out",
+   [(p, [(r["product_id"], r["source"], r["median"], r["n_ratings"]) for r in b]) for p, b in com_posts],
+   [("/rest/v1/spirit_community?on_conflict=product_id", [("p-sc", "rumx", 7.8, 499)])])
+
+# Distiller: the user's own SQLite file of expert scores
+import sqlite3
+card = lambda sc, cr, name, style, country: f"{sc}\n\n\n\n{cr}\n\n\n\n\n\n\n\n{name}\n\n\n\n{style},\n\n\n{country}\n\n\n\n\n\n\n{sc}\n\n\n\n{cr}"
+dr = R.distiller_row("Aged Rum", "https://distiller.com/spirits/x", card("96", "4.81", "Appleton Estate Joy Anniversary Blend", "Aged Rum", "Jamaica"), "96")
+eq("distiller_row: the name and country come out of the saved list card; the score is the expert's",
+   (dr["name"], dr["country"], dr["score_raw"], dr["url"], dr["reviewer"]), ("Appleton Estate Joy Anniversary Blend", "Jamaica", 96.0, "https://distiller.com/spirits/x", "Distiller"))
+eq("distiller_row: no score, no row", R.distiller_row("Aged Rum", "https://distiller.com/spirits/x", card("", "4.0", "X", "Aged Rum", "Y"), None), None)
+tmpd = tempfile.mkdtemp(); dbp = os.path.join(tmpd, "distiller_top_rums.db")
+con = sqlite3.connect(dbp)
+con.execute("create table rums (id integer primary key autoincrement, style_category text, url text unique, name text, distiller_score text, community_rating text, scraped_at text)")
+for st, u, nm, sc, ctry in [("Aged Rum", "https://d/a", "El Dorado 15 Year Rum", "94", "Guyana"),
+                            ("Flavored Rum", "https://d/b", "Charbay Hop Flavored Whiskey Release III", "90", "California, USA"),
+                            ("Silver Rum", "https://d/c", "Nolet's Silver Gin", "91", "Netherlands"),
+                            ("Rhum Agricole Blanc", "https://d/d", "Lillet Blanc", "90", "France")]:
+    con.execute("insert into rums (style_category, url, name, distiller_score, community_rating) values (?,?,?,?,?)", (st, u, card(sc, "4.5", nm, st, ctry), sc, "4.5"))
+con.commit(); con.close()
+with contextlib.redirect_stdout(io.StringIO()):
+    dn, dm, drows = R.harvest_distiller(type("A", (), {"db": dbp, "category": None})())
+eq("harvest_distiller: a distiller_top_rums.db is a rum file, one batch for that spirit", (dn, dm["source_id"], dm["scale"], dm["ref"]), ("distiller-rum", "distiller", "critic100", "url"))
+eq("harvest_distiller: a name that says whiskey or gin is filed as that, a rum stays a rum", [(r["name"], r["category"]) for r in drows],
+   [("El Dorado 15 Year Rum", "rum"), ("Charbay Hop Flavored Whiskey Release III", "whiskey"), ("Nolet's Silver Gin", "gin")])
+eq("harvest_distiller: a known non-rum (Lillet Blanc) is left out of the rum file", "Lillet Blanc" in [r["name"] for r in drows], False)
+eq("harvest_distiller: the community rating is never read", any("community" in r or "4.5" in str(r) for r in drows), False)
+DPL = R.plan_batch(dict(dm, rows=drows), [{"id": "p-ed", "canonical_name": "El Dorado 15 Year Old Rum", "name_norm": "el dorado 15 year old rum", "category": "rum", "age_years": 15, "abv": None, "batch": None}], [], set())
+eq("distiller import: the El Dorado joins its catalog bottle at 94 → 8.5, the others become new bottles",
+   ([(pid, round(sc, 1)) for _, pid, sc in DPL["reviews"] if pid == "p-ed"], len(DPL["new"])), ([("p-ed", 8.5)], 2))
+import shutil; shutil.rmtree(tmpd)
+
+# The three critics' own feeds (2026-11-12)
+eq("frp_stars: the review's own rating image, halves included", R.frp_stars('<p><img src="https://i0.wp.com/x/uploads/2014/12/3.5-stars1.jpg?resize=285" /></p>'), 3.5)
+eq("frp_stars: text and links about other rums' stars don't count",
+   R.frp_stars('<p>One of 3 Foursquare rums that gained a 5 star rating. <a href="/rhum-barbancourt-5-star-8-year-old">x</a></p><img src="/u/4-stars1.jpg">'), 4.0)
+eq("frp_stars: no image, no score (an article)", R.frp_stars("<p>Top five of 2020: a 5 star rum</p>"), None)
+eq("frp_stars: two different images, nothing to read", R.frp_stars('<img src="/u/3-stars.jpg"><img src="/u/5-stars.jpg">'), None)
+BXP = ('<p>As always: <a href="/wine/reviews/">Wine Reviews</a> and <a href="/archive/">Spirits Reviews</a></p>'
+       '<p><strong>Wine Reviews</strong></p><p><b>Some Rosé 2024</b><br />Pink. $20 – <b>4.5 Stars/94 points</b></p>'
+       '<p><strong>Spirits Reviews</strong></p>'
+       '<p><b>Old Elk Blended Whiskey</b><br />Amber. $49.99 – <b>4.5 Stars </b></p>'
+       '<p><b>Hardhide Peach Whiskey Iced Tea (RTD)</b><br />Peach. $14.99 – <b>4.5 Stars </b></p>'
+       '<p><b>Glenfarclas 17 Years Old Single Malt Scotch Whisky</b><br />Gold. $110 – <b>4 Stars/92 points</b></p>'
+       '<p><b>Mid Rum</b><br />Meh. $20 – <b>2.5 Stars </b></p>'
+       '<p><strong>Beer Reviews</strong></p><p><b>Some Lager</b><br />Pale. $9 – <b>4 Stars </b></p>')
+eq("bevx_spirit_blocks: only the Spirits Reviews heading's section (not the intro link, not wine or beer)",
+   [R.text_of(b)[:18] for b in R.bevx_spirit_blocks(BXP)], ["Old Elk Blended Wh", "Hardhide Peach Whi", "Glenfarclas 17 Yea", "Mid Rum Meh. $20 –"])
+saved_all = R.wp_api_all
+R.wp_api_all = lambda *a, **k: [{"link": "https://bevx.com/bevx-news/x/", "date": "2026-11-11T04:29:00", "title": {"rendered": "x"}, "content": {"rendered": BXP}}]
+with contextlib.redirect_stdout(io.StringIO()):
+    bn, bm, brows = R.harvest_bevx(type("A", (), {})())
+R.wp_api_all = saved_all
+eq("harvest_bevx: wine, beer and RTDs are out; stars become BevX's own points on the competition curve; < 3 stars stay stars",
+   [(r["name"][:12], r["scale"], r["score_raw"]) for r in brows], [("Old Elk Blen", "competition100", 95), ("Glenfarclas ", "competition100", 92), ("Mid Rum", "stars5", 2.5)])
+eq("harvest_bevx: a batch for its own source, at the lower weight", (bn, bm["source_id"], bm["weight"]), ("bevx", "bevx", 0.6))
+R.wp_api_all = lambda *a, **k: [
+    {"link": "https://tbc/a/", "date": "2025-05-17T00:00:00", "title": {"rendered": "Penelope Cooper Series Havana Review"}, "content": {"rendered": "<p>Notes… Score: 3.9/10</p>"}},
+    {"link": "https://tbc/b/", "date": "2025-05-18T00:00:00", "title": {"rendered": "Rye Showdown: A vs B"}, "content": {"rendered": "<p>Score: 8/10</p>"}},
+    {"link": "https://tbc/c/", "date": "2025-05-19T00:00:00", "title": {"rendered": "Two Scores Whiskey"}, "content": {"rendered": "<p>Score: 8/10 … Score: 6/10</p>"}}]
+with contextlib.redirect_stdout(io.StringIO()):
+    cn, cm, crows = R.harvest_bourbonculture(type("A", (), {})())
+R.wp_api_all = saved_all
+eq("harvest_bourbonculture: one score per review; a comparison and a two-score page are left out",
+   [(r["name"], r["score_raw"], r["year"]) for r in crows], [("Penelope Cooper Series Havana", 3.9, 2025)])
+R.wp_api_all = lambda *a, **k: [
+    {"link": "https://frp/a", "date": "2021-01-01T00:00:00", "title": {"rendered": "Morvenna White Rum"}, "content": {"rendered": '<img src="/u/3.5-stars1.jpg"><p>a 5 star rum elsewhere</p>'}},
+    {"link": "https://frp/b", "date": "2020-12-01T00:00:00", "title": {"rendered": "Rum of the Year 2020 – Winner"}, "content": {"rendered": '<img src="/u/5-stars.jpg">'}},
+    {"link": "https://frp/c", "date": "2022-01-01T00:00:00", "title": {"rendered": "Foursquare Redoubtable 2019 Edition"}, "content": {"rendered": '<img src="/u/4.5-stars.jpg">'}}]
+with contextlib.redirect_stdout(io.StringIO()):
+    fn, fm, frows = R.harvest_fatrumpirate(type("A", (), {})())
+R.wp_api_all = saved_all
+eq("harvest_fatrumpirate: stars from the image, the 'Rum of the Year' article skipped, a limited release join-only",
+   [(r["name"], r["score_raw"], r["join_only"]) for r in frows], [("Morvenna White Rum", 3.5, False), ("Foursquare Redoubtable 2019 Edition", 4.5, True)])
+eq("harvest_fatrumpirate: its own source and weight", (fn, fm["source_id"], fm["scale"], fm["weight"]), ("fatrumpirate", "fat_rum_pirate", "stars5", 0.8))
+
+# calibrate + the weight note
+def fake_sb_cal(method, path, body=None, prefer="return=representation"):
+    if method == "GET":
+        if path.startswith("/rest/v1/spirit_products?select="):
+            return [{"id": f"p{i}", "canonical_name": f"Test Rum {i}", "name_norm": f"test rum {i}", "category": "rum", "age_years": None, "abv": None, "batch": None} for i in range(20)]
+        if path.startswith("/rest/v1/spirit_consensus?select="):
+            return [{"product_id": f"p{i}", "score_exact": 6.0, "n_reviews": 3, "confidence": "medium"} for i in range(20)]
+        return []
+    return None
+tmpk = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+_json.dump({"source_id": "other_critic", "scale": "ten", "weight": 0.5, "ref": "url",
+            "rows": [{"name": f"Test Rum {i}", "category": "rum", "score_raw": 7.0, "url": f"https://x/{i}"} for i in range(20)]}, tmpk); tmpk.close()
+saved = R.sb; R.sb = fake_sb_cal
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    R.main(["calibrate", tmpk.name])
+R.sb = saved; os.unlink(tmpk.name)
+eq("calibrate: reports the mean gap on shared bottles and says what it means", ("mean +1.00" in buf.getvalue(), "Noticeably generous" in buf.getvalue()), (True, True))
+def fake_sb_w(method, path, body=None, prefer="return=representation"):
+    if method == "GET":
+        if path.startswith("/rest/v1/rating_sources?id=eq."):
+            return [{"id": "fat_rum_pirate", "name": "FRP", "default_weight": 1.0}]
+        return []
+    return None
+tmpw = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+_json.dump({"source_id": "fat_rum_pirate", "scale": "stars5", "weight": 0.8, "ref": "url", "rows": [{"name": "A Rum", "category": "rum", "score_raw": 4.0, "url": "https://x/a"}]}, tmpw); tmpw.close()
+saved = R.sb; R.sb = fake_sb_w
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    R.main(["import-batch", tmpw.name])
+R.sb = saved; os.unlink(tmpw.name)
+eq("import-batch: a batch weight that differs from the source's registered weight is called out", "NOTE: this batch's weight (0.8) differs" in buf.getvalue(), True)
+
 # parsers, on fixtures modelled on the live markup
 BTN = """<article class="isotopeGridItem" data-brand="Plymouth Gin" data-country="United Kingdom" data-category="Gin" data-points="91">
 <div class="txt"><h1>Plymouth Gin</h1><ul><li><strong>Producer Name:</strong> Pernod Ricard USA</li><li><strong>Country:</strong> United Kingdom</li>

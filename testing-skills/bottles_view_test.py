@@ -78,6 +78,8 @@ var T = {
     { id:"v4", product_id:"p-ec", source_id:"sfwsc", score_raw:null, score_10:8.5, medal:"Double Gold", review_year:2022, url:"https://elijahcraig.com/small-batch", reviewer:null, origin:"curated", verified:true }],
   rating_sources: [{ id:"wine_enthusiast", name:"Wine Enthusiast", scale:"wine_enthusiast" }, { id:"drinkhacker", name:"Drinkhacker", scale:"drinkhacker" },
     { id:"other_critic", name:"Other critic", scale:"critic100" }, { id:"sfwsc", name:"San Francisco World Spirits Competition", scale:"sfwsc" }],
+  // RumX's community median for one bottle (shown beside the expert score, never in it).
+  spirit_community: [{ product_id:"p-green", median:7.8, n_ratings:499, url:"https://rumx.com/en/rums/43/hampden-smith-cross-traditional-jamaican-rum/" }],
   bottle_usage: [{ user_id:USER_ID, usage_date:new Date().toISOString().slice(0,10), kind:"lookup", count:2 }],
   spirit_lookups: [], spirit_reports: []
 };
@@ -330,6 +332,10 @@ async function runTests() {
     assert("an unverified lookup find is named by its publication and tagged AI-found", !!field && /AI-found/.test(txt(field)), field ? txt(field) : "missing");
     assert("the footnote says lookup finds count a little less, in plain words", /count a little less until they’re confirmed/.test(txt($(".bottle-body"))) && !/Medals count half/.test(txt($(".bottle-body"))), "");
     assert("the score says what it's based on", /Based on 3 reviews from 3 sources/.test(txt($(".bt-scorecard"))), txt($(".bt-scorecard")));
+    var com = $(".bt-community");
+    assert("the RumX community median sits beside the score, worded as RumX asks, linked to its page",
+      !!com && /RumX community median 7\.8\/10 \(499 ratings\)/.test(txt(com)) && /rumx\.com\/en\/rums\/43\//.test(com.querySelector("a").href) && com.querySelector("a").target === "_blank", com ? txt(com) : "missing");
+    assert("…and says it isn't part of the score", /not part of the score/i.test(txt(com)), txt(com));
     assert("Make with it lists the cocktails that use it", /Make with it/.test(txt($(".bt-makes"))) && txt($('.bt-makes [data-bt-make="r1"]')) === "Last Word", txt($(".bt-makes")));
     assert("an owned bottle says In your bar instead of offering Add", !!$(".bt-actions .bt-owned") && !$('[data-bt="add"]'), "");
     assert("the typed name itself never called the label reader", !INVOKES.some(function (i) { return i.name === "identify-bottle"; }), JSON.stringify(INVOKES));

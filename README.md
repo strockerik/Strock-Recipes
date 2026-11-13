@@ -612,7 +612,9 @@ or two older reviews per bottle it squeezed every bottle into 7.0–8.0 (changed
 
 `confidence` is **high** with total weight ≥ 2.5 from at least two sources
 including a critic or panel (setup SQL step 10 — medals alone never get there),
-**medium** at ≥ 1, otherwise **low**. What's stored per review is facts — score,
+**medium** with two or more reviews, and **low** with one (setup SQL step 13,
+2026-11-13: it used to be total weight ≥ 1, which let one full-weight review of
+a limited release top Best rated). What's stored per review is facts — score,
 medal, year, reviewer, link — never review prose (`excerpt` is capped at 120
 characters and only for a short attributed phrase). Distiller's and
 Tastings.com's (BTI) terms forbid scraping and building databases from them, so
@@ -1189,6 +1191,62 @@ select p.id as product_id,
        round((sum(w.w * w.score_10) + 7.0) / (sum(w.w) + 1), 2) as rank_score
 from w join public.spirit_products p on p.id = w.product_id
 group by p.id, p.canonical_name, p.category;
+
+-- 11. RumX community medians (2026-11-12): a crowd's median per rum, shown under
+-- the expert score on the score card and never part of it (so it isn't a
+-- spirit_reviews row: a median has no weight in the consensus).
+create table if not exists public.spirit_community (
+  product_id uuid primary key references public.spirit_products(id) on delete cascade,
+  source text not null default 'rumx',
+  median numeric(3,1) not null,
+  n_ratings int not null check (n_ratings >= 4),
+  url text not null,
+  fetched_at timestamptz not null default now()
+);
+alter table public.spirit_community enable row level security;
+drop policy if exists "signed-in read" on public.spirit_community;
+create policy "signed-in read" on public.spirit_community for select to authenticated using (true);
+
+-- 12. Three critics under their own names (2026-11-12), so the catalog counts them as
+--     independent sources and the score card names them. Weights from how each one's
+--     scores sit against the catalog's consensus on the bottles they share.
+insert into public.rating_sources (id, name, kind, scale, default_weight, scrape_ok, homepage, tos_notes) values
+ ('fat_rum_pirate','The Fat Rum Pirate','critic','stars5',0.8,true,'https://thefatrumpirate.com','Rum, 0.5-5 stars. robots allows; read through its WordPress feed, from each review''s own rating image.'),
+ ('bourbon_culture','The Bourbon Culture','critic','ten',0.7,true,'https://thebourbonculture.com','Whiskey, x/10. robots allows; harvested through its WordPress feed.'),
+ ('bevx','BevX','critic','competition100',0.6,true,'https://bevx.com','Spirits; stars on a generous wine-style points scale, so read like a competition''s points. robots allows; WordPress feed, spirit sections only.')
+on conflict (id) do nothing;
+
+-- 13. Confidence by review count (decided 2026-11-13): one review = low, two or more =
+--     medium, and "high" as in step 10. One full-weight review used to be enough for
+--     "medium", so a single Distiller or Drinkhacker review of a limited release could
+--     top Best rated (the list is built from medium and high). Projected on the merged
+--     catalog, Best rated is rum 177, whiskey 589, agave 211, gin 276, liqueur 109,
+--     amaro 10, and the top of the rum list is bottles several critics agree on.
+--     Two weak reviews (say two old medals) also reach medium under this rule.
+create or replace view public.spirit_consensus with (security_invoker = true) as
+with w as (
+  select r.product_id, r.source_id, r.score_10, s.kind,
+         r.weight * (case when r.verified then 1 else 0.75 end)
+                   * power(0.5, greatest(0, extract(year from now())::int
+                                            - coalesce(r.review_year, extract(year from now())::int)) / 10.0) as w
+  from public.spirit_reviews r
+  join public.rating_sources s on s.id = r.source_id
+  where r.product_id is not null and r.score_10 is not null
+    and r.match_status in ('auto','confirmed')
+)
+select p.id as product_id,
+       p.canonical_name,
+       p.category,
+       count(*) as n_reviews,
+       count(distinct w.source_id) as n_sources,
+       round(sum(w.w * w.score_10) / sum(w.w), 2) as score_exact,
+       floor((sum(w.w * w.score_10) / sum(w.w)) * 2 + 0.5) / 2 as score_10,
+       case when sum(w.w) >= 2.5 and count(distinct w.source_id) >= 2
+                 and bool_or(w.kind in ('critic','panel')) then 'high'
+            when count(*) >= 2 then 'medium' else 'low' end as confidence,
+       round((sum(w.w * w.score_10) + 7.0) / (sum(w.w) + 1), 2) as rank_score
+from w join public.spirit_products p on p.id = w.product_id
+group by p.id, p.canonical_name, p.category;
 ```
 
 Then deploy two Edge Functions (dashboard paste, as for the others; both use the
@@ -1244,6 +1302,84 @@ and harvested scores shouldn't be republished as files.
 | `lonecaner` | The Lone Caner (`lone_caner`) | scored rum reviews via the site's WordPress feed | critic100_harsh, 1.0 |
 | `ginisin` | The GIN is IN (`gin_is_in`) | the site's own star ratings, never reader votes | stars5, 1.0 |
 | `whiskyfun` | Whiskyfun (`whiskyfun`) | scored notes on official bottlings only | critic100_harsh, 1.0 (0.8 non-whisky) |
+| `distiller` | Distiller's expert score (`distiller`), from your own `data/Distiller/distiller_top_<spirit>.db` | the 0–100 expert score per bottle, linking to its Distiller page; the community rating isn't read | critic100, 1.0 |
+| `fatrumpirate` | The Fat Rum Pirate (`fat_rum_pirate`) | ~900 rum reviews, 0.5–5 stars read from each review's own rating image | stars5, 0.8 |
+| `bourbonculture` | The Bourbon Culture (`bourbon_culture`) | ~800 whiskey reviews, its own x/10; one score per page | ten, 0.7 |
+| `bevx` | BevX (`bevx`) | ~575 spirit reviews from the Spirits sections of its weekly posts; stars are read through BevX's own stars-to-points pairing | competition100, 0.6 |
+| `rumx` | RumX's expert layer, as "other critic" with the critic's name | rum blogs' reviews that RumX links from each rum's page, each already on /10 and linking to the critic's own review | ten, 0.5 |
+
+**Distiller (`bash distiller.sh`).** Distiller's terms ban scraping and building
+databases, and the catalog's `distiller` source row still says "manual entry
+only" — so this never touches Distiller. It reads the SQLite files you collected
+in `data/Distiller/` (git-ignored: personal, never published), one per spirit
+(`distiller_top_rums.db`; gins, whiskeys… the same way later), matches each bottle
+to the catalog like any other batch and adds its expert score. A name that says
+vodka, whiskey or gin is filed as that even inside a rum file; three known
+non-rums (Lillet Blanc, Lot No. 40, Rutte genever) are left out until their own
+spirit's file. Re-running is safe (a score already in is skipped).
+
+**The expert pass (2026-11-12): `bash expert_pass.sh`.** Gemini researched a set of
+review sources into `gemini_research/` (git-ignored, personal). Each was checked
+before anything was merged; the checks are why some of it isn't:
+- *Keep:* Bourbon Culture matched its pages 40 of 40 (and the new harvest reads 826
+  reviews where Gemini had 242); Drinkhacker's 130 single-bottle reviews matched
+  20 of 20 pages checked (five that grade two products at once were dropped).
+- *Fixed:* its Fat Rum Pirate parser took the first "N stars" anywhere in a post —
+  text and links about other rums included — so a 4-star review that mentions a
+  5-star rum scored 5; it also stopped at 277 of ~900 reviews. `harvest
+  fatrumpirate` reads the review's own rating image instead. Its BevX rows
+  included 83 wines (BevX's pages run Wine, Spirits, Beer sections and it read
+  from "Spirits Reviews" to the end of the page, and its own intro links to
+  "Spirits Reviews" too): `harvest bevx` anchors on the section heading.
+- *Dropped:* the 18 hand-entered "curated" rows (several URLs don't exist, e.g. a
+  Ten To One review and a Smith & Cross post, both 404), three Rum Howler rows
+  (the site refuses scripted reads), and its source-registration SQL (it claims
+  a dozen critics' robots/terms status that wasn't checked, and rewires the
+  lookup function's search plan). Only the three critics actually used are
+  registered (setup SQL step 12).
+- *RumX's expert layer:* each critic score is RumX's own /10 conversion, and for
+  most critics the number isn't on the critic's page (images, widgets, or none).
+  Only the 16 rows whose number is on the critic's own page are kept; the Fat
+  Rum Pirate's come from its own harvest.
+- *Weights* come from how each critic's scores sit against the catalog's consensus
+  on bottles they share (Fat Rum Pirate −0.3, Bourbon Culture −0.5, like The Lone
+  Caner's −0.34; BevX +1.5 on the plain critic curve, +0.8 on the competition
+  curve, which is what it's read on). They are judgments, easy to change in
+  `rating_sources.default_weight`.
+- *Weight policy (decided 2026-11-13):* the weights above are approved — Fat Rum
+  Pirate 0.8, Bourbon Culture 0.7, BevX 0.6, Drinkhacker 1.0, Distiller 1.0, RumX
+  critics 0.5 — and every batch of a source uses that source's weight, so one
+  critic never counts differently from one import to the next. Each new source or
+  batch gets the same treatment before it's imported: run
+  `python3 ratings.py calibrate batches/<file>.json` to see how its scores sit
+  against the consensus on the bottles it shares (mean gap in points of 10; the
+  reference is Lone Caner −0.34, Whiskyfun −0.36, Bartender Spirits Awards −0.11),
+  then set the weight, register it in `rating_sources.default_weight`, and put the
+  same number in the batch. `import-batch` prints a NOTE if the batch's weight and
+  the registered one disagree.
+After the import, `ratings.py dupes` lists near-duplicates (about 40 are expected,
+mostly "…White Rum" labels and annual releases); a vintage year is *not* proof of
+the same bottle, so check those before merging.
+
+**RumX (`harvest rumx`).** RumX is a rum database with 310,000 community ratings
+and an expert layer of 33 rum blogs. Its robots.txt welcomes AI agents, and its
+`llms.txt` asks for a data-partnership email for bulk access, so the harvest
+reads only the pages of rums **already in the catalog** (plus RumX's own
+best-rums list), one request every 4 s, cached 30 days. A catalog bottle joins
+a RumX page only when the page's own facts agree: the words may differ by the
+distillery it names, a place or a filler word, and a stated age or strength has
+to match (so a bottler's cask-strength Smith & Cross isn't the standard bottle).
+A critic is used only when their own site's robots.txt keeps out neither the
+script nor ClaudeBot, Claude-User or anthropic-ai; The Lone Caner is skipped
+because it's harvested directly. `--catalog FILE` reads a snapshot of the
+catalog instead of the database, so the harvest needs no key. Each critic score
+is RumX's /10 conversion of the critic's own scale and links to their review.
+
+**Community medians** (RumX's median of its members' ratings, shown from 4
+ratings) are not a critic's score: they go in `spirit_community` (setup SQL step
+11), never into the consensus, and the score card shows them under the expert
+score as "RumX community median 7.8/10 (499 ratings)" with a link, and a note
+that they are members, not critics. That wording is how RumX asks to be cited.
 
 Matching rules a batch follows, on top of `same_bottle()`: categories must
 agree (amaro ≈ liqueur; a plain "whiskey" joins a bourbon only when its name

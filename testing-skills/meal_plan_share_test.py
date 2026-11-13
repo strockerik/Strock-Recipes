@@ -419,11 +419,19 @@ def serve():
     return httpd
 
 
-def chrome(url, budget, extra=()):
-    return subprocess.run(
-        [CHROME, "--headless=new", "--disable-gpu", "--no-sandbox", *extra,
-         f"--virtual-time-budget={budget}", "--dump-dom", url],
-        capture_output=True, text=True, timeout=180).stdout
+def chrome(url, budget, extra=(), marker=None):
+    """Chrome's virtual clock runs out if the machine is busy (its real HTTP
+    fetches of app.js crawl), which comes back as a page with no results. That's
+    the machine, not the app: with a `marker` (the results element) one retry."""
+    for attempt in (1, 2):
+        out = subprocess.run(
+            [CHROME, "--headless=new", "--disable-gpu", "--no-sandbox", *extra,
+             f"--virtual-time-budget={budget}", "--dump-dom", url],
+            capture_output=True, text=True, timeout=180).stdout
+        m = marker and re.search(marker, out, re.S)
+        if not marker or (m and m.group(1).strip()):
+            break
+    return out
 
 
 def unescape(s):
@@ -441,8 +449,8 @@ def main():
     httpd = serve()
     port = httpd.server_address[1]
     try:
-        out_a = chrome(f"http://127.0.0.1:{port}/{A_HTML.name}", 30000)
-        out_b = chrome(f"http://127.0.0.1:{port}/{B_FRAMES.name}", 40000, ("--window-size=1400,1000",))
+        out_a = chrome(f"http://127.0.0.1:{port}/{A_HTML.name}", 30000, marker=r'<pre id="smoke-results"[^>]*>(.*?)</pre>')
+        out_b = chrome(f"http://127.0.0.1:{port}/{B_FRAMES.name}", 40000, ("--window-size=1400,1000",), marker=r'<pre id="out"[^>]*>(.*?)</pre>')
     finally:
         httpd.shutdown()
         if not keep:

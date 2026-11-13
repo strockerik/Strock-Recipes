@@ -1067,6 +1067,11 @@ def cmd_import_batch(args):
     else:
         src = source_row(b["source_id"])       # exits if the source isn't in rating_sources yet
         ids = [b["source_id"]]
+        # One weight per source, everywhere: the batch's own may only differ on purpose.
+        if b.get("weight") is not None and src.get("default_weight") is not None \
+                and abs(float(b["weight"]) - float(src["default_weight"])) > 1e-9:
+            print(f"  NOTE: this batch's weight ({b['weight']}) differs from {b['source_id']}'s weight in rating_sources "
+                  f"({src['default_weight']}); the batch's is used. Change one so they agree.")
     products = sb_all("/rest/v1/spirit_products?select=id,canonical_name,name_norm,category,age_years,abv,batch&order=id")
     aliases = sb_all("/rest/v1/spirit_aliases?select=alias_norm,product_id&order=alias_norm")
     held = sb_all(f"/rest/v1/spirit_reviews?select=source_id,product_id,review_year,url&source_id=in.({','.join(q(i) for i in ids)})&order=id")
@@ -1077,6 +1082,8 @@ def cmd_import_batch(args):
           f" ({len(plan['new_rows'])} rows), {len(plan['reviews'])} scores to add")
     for why, n in sorted(plan["skipped"].items(), key=lambda kv: -kv[1]):
         print(f"  skipped {n}: {why}")
+    if b.get("community"):
+        print(f"  {len(b['community'])} community medians (spirit_community, shown beside the expert score)")
     for row, pid, how in plan["joined"][:12]:
         print(f"    = {row['name']}  ({row.get('year') or ''} {row.get('medal') or row.get('score_raw')})  [{how}]")
     for nk, p in list(plan["new"].items())[:8]:
@@ -1114,6 +1121,65 @@ def cmd_import_batch(args):
         sb("POST", "/rest/v1/spirit_reviews?on_conflict=source_id,source_ref", reviews[i:i + 500],
            prefer="resolution=ignore-duplicates,return=minimal")
     print(f"\nAdded {len(reviews)} {b['source_id']} scores ({len(made)} new bottles).")
+    if b.get("community"):
+        import_community(b["community"])
+
+
+def cmd_calibrate(args):
+    """How a batch's scores sit against what the catalog already says, on the bottles
+    both cover — the evidence for a new source's weight (or its scale). Reads only."""
+    b = read_batch(args.file)
+    products = sb_all("/rest/v1/spirit_products?select=id,canonical_name,name_norm,category,age_years,abv,batch&order=id")
+    aliases = sb_all("/rest/v1/spirit_aliases?select=alias_norm,product_id&order=alias_norm")
+    cons = {c["product_id"]: c for c in sb_all("/rest/v1/spirit_consensus?select=product_id,score_exact,n_reviews,confidence&order=product_id")}
+    for r in b["rows"]:
+        r.setdefault("weight", b.get("weight") or 0.5)
+    plan = plan_batch(b, products, aliases, set())
+    pairs = [(score, float(cons[pid]["score_exact"])) for _, pid, score in plan["reviews"]
+             if pid in cons and cons[pid]["n_reviews"] >= 2 and cons[pid]["confidence"] in ("medium", "high")]
+    print(f"{args.file}: {len(b['rows'])} rows, {len(plan['reviews'])} scores, {len(plan['joined'])} on bottles already in the catalog")
+    if len(pairs) < 2:
+        print("  Too few bottles with 2+ other reviews to compare against.")
+        return
+    diffs = [a - c for a, c in pairs]
+    mean = sum(diffs) / len(diffs)
+    sd = (sum((d - mean) ** 2 for d in diffs) / len(diffs)) ** 0.5
+    print(f"  against the catalog's consensus on {len(pairs)} shared bottles: mean {mean:+.2f}, spread {sd:.2f}")
+    print("  For reference, long-standing sources sit within about ±0.4 (The Lone Caner -0.34, Whiskyfun -0.36, BSA -0.11).")
+    if len(pairs) < 15:
+        print("  Only a few shared bottles: treat this as a hint, not a finding.")
+    if abs(mean) > 1.0:
+        print("  Far from consensus: a scale or curve problem more than a weight one. Try another scale before changing the weight.")
+    elif abs(mean) > 0.6:
+        print("  Noticeably " + ("generous" if mean > 0 else "harsh") + ": a lower weight, or a scale that fits better, would keep it from pulling scores.")
+    else:
+        print("  In line with the catalog: the source's default weight is fine.")
+
+
+def import_community(community):
+    """A batch's community medians -> spirit_community, one per bottle. These are
+    a crowd's opinion, not a critic's score: they never enter spirit_reviews or
+    the consensus, and the app shows them apart."""
+    products = sb_all("/rest/v1/spirit_products?select=id,name_norm&order=id")
+    aliases = sb_all("/rest/v1/spirit_aliases?select=alias_norm,product_id&order=alias_norm")
+    by_key = {p["name_norm"]: p["id"] for p in products if p.get("name_norm")}
+    for a in aliases:
+        by_key.setdefault(a["alias_norm"], a["product_id"])
+    rows = {}
+    for c in community:
+        pid = by_key.get(N.norm_name(match_name(c["name"])))
+        if pid and c.get("median") is not None and c.get("n_ratings", 0) >= 4:
+            rows[pid] = {"product_id": pid, "source": "rumx", "median": c["median"], "n_ratings": c["n_ratings"], "url": c["url"]}
+    if not rows:
+        return
+    try:
+        for i in range(0, len(rows), 500):
+            sb("POST", "/rest/v1/spirit_community?on_conflict=product_id", list(rows.values())[i:i + 500],
+               prefer="resolution=merge-duplicates,return=minimal")
+    except SystemExit:
+        print("\nspirit_community isn't in this database yet: run the README Bottles setup SQL step 11, then re-run this import.")
+        return
+    print(f"Saved {len(rows)} community medians.")
 
 
 # --- Harvesters --------------------------------------------------------------
@@ -1606,8 +1672,382 @@ def harvest_whiskyfun(args):
 # "Checking your browser" challenge, the same as IWSC's — lookups and `score` only.
 
 
+# --- Three critics' own sites, through their public WordPress feeds -----------
+# (2026-11-12.) robots.txt on all three lets Claude's agents in. A first version,
+# written by Gemini, took the first "N stars" anywhere in a post: a Fat Rum Pirate
+# review that mentions another rum's 5 stars got 5, and BevX's wine sections got
+# filed as spirits. These read only what a review itself carries.
+FRP_VALID = {1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0}
+FRP_SKIP = re.compile(r"^(rum of the year|top \d+|best \d+|\d+ (great|best|top)|how |why |what |guide|thoughts|rumfest|update|summary|roundup)"
+                      r"|\b(news|awards?|vs\.?|comparison|podcast|festival|shortlist|winner|interview|giveaway)\b", re.I)
+
+
+def frp_stars(content):
+    """The review's own rating image (".../3.5-stars1.jpg"): one value, or None.
+    Text and links in a post talk about other rums' stars; only the image counts."""
+    vals = set()
+    for src in re.findall(r'<img[^>]+src="([^"]+)"', content or "", re.I):
+        m = re.search(r"/(\d(?:[._]\d)?)[-_]?stars?\d*\.(?:jpe?g|png|gif|webp)", src, re.I)
+        if m and float(m.group(1).replace("_", ".")) in FRP_VALID:
+            vals.add(float(m.group(1).replace("_", ".")))
+    return vals.pop() if len(vals) == 1 else None
+
+
+def harvest_fatrumpirate(args):
+    posts = wp_api_all("https://thefatrumpirate.com/wp-json/wp/v2/posts", {"_fields": "link,date,title,content"})
+    rows = []
+    for p in posts:
+        title = text_of(p["title"]["rendered"])
+        name = match_name(title)
+        if not name or FRP_SKIP.search(title) or SKIP_NAME.search(title) or is_cocktail(title):
+            continue
+        stars = frp_stars(p["content"]["rendered"])
+        if stars is None:
+            continue
+        rows.append({"name": name, "printed": title, "category": "rum", "join_only": bool(RUM_LIMITED.search(name)),
+                     "year": int(p["date"][:4]), "score_raw": stars, "url": p["link"],
+                     "reviewer": "Wes Burgin (The Fat Rum Pirate)"})
+    print(f"  {len(posts)} posts, {len(rows)} star-rated rum reviews")
+    return "fatrumpirate", {"source_id": "fat_rum_pirate", "scale": "stars5", "weight": 0.8, "origin": "bulk", "ref": "url",
+                            "note": "The Fat Rum Pirate (Wes Burgin): 0.5-5 stars read from each review's own rating image, via its WordPress feed."}, rows
+
+
+def harvest_bourbonculture(args):
+    posts = wp_api_all("https://thebourbonculture.com/wp-json/wp/v2/posts", {"_fields": "link,date,title,content"})
+    rows = []
+    for p in posts:
+        title = text_of(p["title"]["rendered"])
+        if not title or SKIP_NAME.search(title) or re.search(r"\b(vs\.?|comparison|showdown|blind|top \d+|list|ranking|best)\b", title, re.I):
+            continue
+        scores = {float(h) for h in re.findall(r"\bScore\s*[:\-]?\s*(\d{1,2}(?:\.\d)?)\s*/\s*10\b", text_of(p["content"]["rendered"]), re.I) if 0 < float(h) <= 10}
+        if len(scores) != 1:                    # none, or several (a comparison): no single score to read
+            continue
+        name = re.sub(r"\s+review\s*$", "", match_name(title), flags=re.I).strip()
+        cat = refine_category(name, N.guess_category(name))
+        rows.append({"name": name, "printed": title, "category": cat if cat != "other" else "whiskey",
+                     "join_only": bool(WF_LIMITED.search(name)), "year": int(p["date"][:4]), "score_raw": scores.pop(),
+                     "url": p["link"], "reviewer": "The Bourbon Culture"})
+    print(f"  {len(posts)} posts, {len(rows)} scored reviews")
+    return "bourbonculture", {"source_id": "bourbon_culture", "scale": "ten", "weight": 0.7, "origin": "bulk", "ref": "url",
+                              "note": "The Bourbon Culture: its own x/10 score, from its WordPress feed."}, rows
+
+
+# BevX's stars run on its wine-style points: its entries that show both pair 3 stars
+# with ~85 points, 3.5 with 88, 4 with 92, 4.5 with 95, 5 with 97 (2026-11-12, 1,000+
+# entries). Under 3 stars it publishes no points, so those use a plain star scale.
+BEVX_POINTS = {3.0: 85, 3.5: 88, 4.0: 92, 4.5: 95, 5.0: 97}
+BEVX_HEADING = re.compile(r"<(?:strong|b|h[1-6])[^>]*>\s*(?:<[^>]+>\s*)*([A-Za-z&;, ]+?\s*Reviews)\s*(?:<[^>]+>\s*)*</(?:strong|b|h[1-6])>", re.I)
+
+
+def bevx_spirit_blocks(html_body):
+    """The <p> blocks under a BevX post's "Spirits Reviews" HEADING, up to the next
+    section heading — the wine, beer and mixer sections are other products. (The
+    words also appear as a link in the post's intro, which isn't a section.)"""
+    heads = list(BEVX_HEADING.finditer(html_body))
+    out = []
+    for i, h in enumerate(heads):
+        if not h.group(1).strip().lower().startswith("spirits"):
+            continue
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(html_body)
+        out += re.findall(r"<p\b[^>]*>(.*?)</p>", html_body[h.end():end], re.S | re.I)
+    return out
+
+
+def harvest_bevx(args):
+    posts = wp_api_all("https://bevx.com/wp-json/wp/v2/posts", {"_fields": "link,date,title,content"})
+    rows = []
+    for p in posts:
+        for block in bevx_spirit_blocks(p["content"]["rendered"]):
+            b = re.search(r"<b>(.*?)</b>", block, re.S | re.I)
+            if not b:
+                continue
+            raw_name = text_of(b.group(1))
+            if not raw_name or SKIP_NAME.search(raw_name) or is_cocktail(raw_name):
+                continue
+            m = re.search(r"(\d(?:\.\d)?)\s*Stars?(?:\s*/\s*(\d{2,3})\s*points?)?", text_of(block), re.I)
+            if not m:
+                continue
+            stars, pts = float(m.group(1)), (int(m.group(2)) if m.group(2) else None)
+            if pts and 50 <= pts <= 100:
+                scale, raw = "competition100", pts
+            elif stars in BEVX_POINTS:
+                scale, raw = "competition100", BEVX_POINTS[stars]
+            elif 1.0 <= stars < 3.0:
+                scale, raw = "stars5", stars
+            else:
+                continue
+            name = match_name(raw_name)
+            cat = refine_category(name, N.guess_category(name))
+            if cat in ("wine", "mixer", "other"):      # BevX's spirit section holds a few things we can't place
+                continue
+            link = re.search(r'href="(https?://bevx\.com/spirit-detail/[^"]+)"', block, re.I)
+            rows.append({"name": name, "printed": raw_name, "category": cat, "year": int(p["date"][:4]), "score_raw": raw, "scale": scale,
+                         "url": link.group(1) if link else p["link"], "reviewer": "Sean Ludford (BevX)"})
+    print(f"  {len(posts)} posts, {len(rows)} scored spirit reviews")
+    return "bevx", {"source_id": "bevx", "scale": "competition100", "weight": 0.6, "origin": "bulk", "ref": "url",
+                    "note": "BevX (Sean Ludford), spirits sections only. Stars are read through BevX's own stars-to-points pairing; "
+                            "its points run generous (on the 31 bottles it shares with the catalog the plain critic curve sat 1.5 "
+                            "above consensus, the competition-points curve 0.8), so they're read as a competition's."}, rows
+
+
+# --- RumX (rumx.com) ---------------------------------------------------------
+# A rum database: 26,000 rums, 310,000 community ratings (a median per rum, shown
+# from 4 ratings), and an "expert layer" of 33 blog critics. Each rum's page
+# lists those critics' reviews as schema.org CriticReview: the critic, a link to
+# the review on the critic's own site, and the rating already on /10.
+# robots.txt welcomes AI agents and llms.txt asks for a data-partnership email
+# for bulk access, so this reads only the pages of rums ALREADY in the catalog
+# (plus RumX's own best-rums list), one request every 4 s, cached 30 days.
+# The community median is not a critic's score and never enters the consensus
+# (a median has no weight in it); it goes in spirit_community and shows beside
+# the expert score, cited the way RumX asks: "RumX community median X/10 (N ratings)".
+RUMX = "https://rumx.com"
+RUMX_DIRECT = {"the-lone-caner"}          # harvested straight from its own site (lone_caner)
+RUMX_AGENTS = ("ClaudeBot", "Claude-User", "anthropic-ai")
+RUM_PLACES = {"jamaica", "jamaican", "barbados", "barbadian", "guyana", "guyanese", "demerara", "trinidad", "martinique",
+              "haiti", "haitian", "cuba", "cuban", "dominican", "venezuela", "venezuelan", "panama", "guatemala", "nicaragua",
+              "mexico", "mexican", "france", "french", "guadeloupe", "reunion", "mauritius", "philippines", "australian", "caribbean"}
+
+
+def rumx_index():
+    """[{rxid, slug, name}] for every rum on RumX, from its crawlable A-Z index."""
+    rows, n = [], 1
+    while True:
+        try:
+            body = fetch(f"{RUMX}/en/sitemap-rums/" + ("" if n == 1 else f"page/{n}/"))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:            # one past the last page
+                return rows
+            raise
+        found = re.findall(r'<a [^>]*href=["\']?/en/rums/(\d+)/([^"\'\s>/]+)/?["\']?[^>]*>(.*?)</a>', body or "", re.S)
+        if not found:
+            return rows
+        rows += [{"rxid": a, "slug": s, "name": text_of(t)} for a, s, t in found]
+        n += 1
+
+
+def rumx_facts(body):
+    """One RumX rum page -> its name, age, ABV, brand, distillery, community median
+    and the critics' reviews, or None if the page has no Product data."""
+    node = None
+    for blob in re.findall(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', body or "", re.S):
+        try:
+            d = json.loads(blob)
+        except ValueError:
+            continue
+        for n in (d.get("@graph", [d]) if isinstance(d, dict) else d):
+            if isinstance(n, dict) and n.get("@type") == "Product":
+                node = n
+    if not node:
+        return None
+    props = {p.get("name"): p.get("value") for p in node.get("additionalProperty") or [] if isinstance(p, dict)}
+    age = re.search(r"\d+", str(props.get("Age Statement") or ""))
+    abv = re.search(r"\d+(?:\.\d+)?", str(props.get("Alcohol Content") or ""))
+    ar = node.get("aggregateRating") or {}
+    critics = []
+    for x in node.get("subjectOf") or []:
+        if not isinstance(x, dict) or x.get("@type") != "CriticReview":
+            continue
+        a = x.get("author") or {}
+        try:
+            score = float((x.get("reviewRating") or {}).get("ratingValue"))
+        except (TypeError, ValueError):
+            continue
+        slug = re.search(r"/experts/([^/]+)/", a.get("@id") or "")
+        critics.append({"critic": a.get("name"), "slug": slug.group(1) if slug else None,
+                        "url": x.get("url"), "score": score})
+    try:
+        median, n_ratings = float(ar.get("ratingValue")), int(ar.get("ratingCount"))
+    except (TypeError, ValueError):
+        median, n_ratings = None, 0
+    return {"name": node.get("name") or "", "age_years": int(age.group()) if age else None,
+            "abv": float(abv.group()) if abv else None,
+            "brand": ((node.get("brand") or {}).get("name") or ""), "maker": ((node.get("manufacturer") or {}).get("name") or ""),
+            "median": median, "n_ratings": n_ratings, "critics": critics}
+
+
+def rumx_candidates(products, index, per_bottle=3):
+    """{rxid: [catalog products]} — RumX pages whose name differs from a catalog
+    rum by a few words. Only a shortlist: the page's own facts decide (rumx_same)."""
+    words = lambda s: frozenset(N.bottle_words(N.norm_name(s)))
+    inv = {}
+    for e in index:
+        e["w"] = words(e["name"])
+        for w in e["w"]:
+            inv.setdefault(w, []).append(e)
+    out = {}
+    for p in products:
+        bw = words(p["canonical_name"])
+        if len(bw) < 1:
+            continue
+        rare = min(bw, key=lambda w: len(inv.get(w, [])) or 10 ** 9)
+        scored = []
+        for e in inv.get(rare, []):
+            ew = e["w"]
+            if bw <= ew and len(ew - bw) <= 3 or ew < bw and len(bw - ew) <= 2 and len(ew) >= 2:
+                scored.append((len(ew ^ bw), e))
+        for _, e in sorted(scored, key=lambda t: (t[0], t[1]["name"]))[:per_bottle]:
+            out.setdefault(e["rxid"], {"entry": e, "products": []})["products"].append(p)
+    return out
+
+
+def rumx_same(product, facts):
+    """Does this RumX page describe this catalog bottle? Its words may differ only
+    by the distillery or brand it names, a place, or a filler word, and a stated
+    age or strength has to agree."""
+    words = lambda s: frozenset(N.bottle_words(N.norm_name(s)))
+    bw, fw = words(product["canonical_name"]), words(facts["name"])
+    ok = WEAK_WORDS | RUM_PLACES | words(facts["brand"]) | words(facts["maker"]) | {"rum", "rhum", "ron", "year", "old", "yo"}
+    if not ((fw - bw) <= ok and (bw - fw) <= ok):
+        return False
+    return N.attrs_compatible(_prod_attrs(product), {"age_years": facts["age_years"], "abv": facts["abv"], "batch": None})
+
+
+def rumx_critic_ok(url):
+    """May this critic's work be used? Its own site's robots.txt must not keep
+    out the script or any of Claude's agents (the catalog's rule: never a site
+    that blocks AI)."""
+    if not url or blocked_reason(url):
+        return False
+    rp = _robots.get(_base(url))
+    return bool(rp) and all(rp.can_fetch(a, url) for a in RUMX_AGENTS)
+
+
+def harvest_rumx(args):
+    if args.catalog:                      # a snapshot, so the harvest needs no database key
+        with open(args.catalog, encoding="utf-8") as f:
+            products = [p for p in json.load(f)["prods"] if p.get("category") == "rum"]
+    else:
+        products = sb_all("/rest/v1/spirit_products?select=id,canonical_name,name_norm,category,age_years,abv,batch&category=eq.rum&order=id")
+    print(f"  {len(products)} rums in the catalog; reading RumX's index…")
+    index = rumx_index()
+    print(f"  {len(index)} rums on RumX")
+    cands = rumx_candidates(products, index)
+    best = []
+    body = fetch(f"{RUMX}/en/best-rums/")
+    for rxid, slug in dict.fromkeys(re.findall(r'href=["\']?/en/rums/(\d+)/([^"\'\s>/]+)/?["\' >]', body or "")):
+        if rxid not in cands:
+            best.append(rxid)
+    print(f"  {len(cands)} pages could match a catalog rum; {len(best)} more from RumX's best-rums list")
+    rows, community, matched, seen_names = [], [], {}, set()
+    todo = list(cands.items()) + [(r, {"entry": next((e for e in index if e["rxid"] == r), {"rxid": r, "slug": "", "name": ""}), "products": []}) for r in best]
+    if args.limit:
+        todo = todo[:args.limit]
+    for i, (rxid, c) in enumerate(todo, 1):
+        e = c["entry"]
+        page = fetch(f"{RUMX}/en/rums/{rxid}/{e['slug']}/")
+        facts = rumx_facts(page)
+        if not facts:
+            continue
+        mine = [p for p in c["products"] if rumx_same(p, facts)]
+        if len(mine) > 1:                 # two catalog bottles claim the page: not sure whose it is
+            continue
+        if mine:
+            name, category = mine[0]["canonical_name"], mine[0]["category"]
+        elif rxid in best:                # RumX's own best-rated rums join as new bottles
+            name, category = facts["name"], "rum"
+        else:
+            continue
+        if name in matched and matched[name] != rxid:   # the catalog bottle already has its page
+            continue
+        matched[name] = rxid
+        url = f"{RUMX}/en/rums/{rxid}/{e['slug']}/"
+        if facts["median"] is not None and facts["n_ratings"] >= 4:
+            community.append({"name": name, "median": facts["median"], "n_ratings": facts["n_ratings"], "url": url})
+        for cr in facts["critics"]:
+            if cr["slug"] in RUMX_DIRECT or not rumx_critic_ok(cr["url"]):
+                continue
+            rows.append({"name": name, "category": category, "source_id": "other_critic", "scale": "ten", "score_raw": cr["score"],
+                         "abv": facts["abv"], "age_years": facts["age_years"],
+                         "url": cr["url"], "reviewer": cr["critic"], "quote": f"RumX expert layer: {cr['critic']} {cr['score']}/10"})
+        if i % 50 == 0:
+            print(f"  {i}/{len(todo)} pages, {len(rows)} critic scores, {len(community)} community medians", flush=True)
+    print(f"  {len(matched)} rums matched, {len(rows)} critic scores, {len(community)} community medians")
+    return "rumx", {"source_id": "*", "ref": "url", "origin": "bulk", "community": community,
+                    "note": "RumX expert layer (33 rum blogs; each score is RumX's /10 conversion and links to the critic's own review) and "
+                            "RumX community medians, for rums already in the catalog plus RumX's best-rums list."}, rows
+
+
+# --- Distiller (expert scores the user collected into a local SQLite file) ----
+# The user keeps Distiller's expert score (0-100) per bottle in data/Distiller/
+# distiller_top_<spirit>.db — a table with the bottle's page URL, its name (as
+# the page printed it, with the score and rating around it), the expert score
+# and the community rating. This reads such a file; it never touches Distiller.
+# Distiller's terms ban scraping and database building, and the catalog's source
+# row says "manual entry only": using the user's file is their decision (2026-11-13).
+# The community rating is not a critic's score and isn't read.
+DISTILLER_SPIRITS = {"rums": "rum", "gins": "gin", "whiskeys": "whiskey", "whiskies": "whiskey", "bourbons": "bourbon",
+                     "ryes": "rye", "scotches": "scotch", "tequilas": "tequila", "mezcals": "mezcal", "vodkas": "vodka",
+                     "brandies": "brandy", "cognacs": "brandy", "liqueurs": "liqueur", "amari": "amaro"}
+
+
+# Distiller's rum lists carry a few other spirits. A name that says vodka, whiskey
+# or gin is filed as that (the catalog's own category rules); these three give no
+# such word and aren't rums — an aperitif wine, a Canadian whisky, a genever — so
+# they're left out of a rum file and wait for their own spirit's file.
+DISTILLER_NOT_RUM = {"lillet blanc", "lot no. 40 dark oak", "rutte old simon genever"}
+DISTILLER_FILED_AS = {"vodka", "whiskey", "gin", "bourbon", "rye", "scotch", "tequila", "mezcal", "brandy", "liqueur"}
+
+
+def distiller_row(style, url, blob, score):
+    """One saved row -> {name, country, style, score_raw, url}, or None. The saved
+    name is the whole list card: score, community rating, name, 'Style,', country."""
+    try:
+        points = float(score)
+    except (TypeError, ValueError):
+        return None
+    lines = [l.strip() for l in (blob or "").splitlines() if l.strip()]
+    rest = [l for l in lines if not re.fullmatch(r"\d+(?:\.\d+)?", l)]
+    if not rest or not url:
+        return None
+    name = html.unescape(rest[0])
+    country = rest[2].strip(" ,") if len(rest) > 2 else ""
+    return {"name": name, "printed": name, "country": country or None, "style": style, "score_raw": points, "url": url,
+            "reviewer": "Distiller"}
+
+
+def harvest_distiller(args):
+    import sqlite3
+    if not args.db:
+        sys.exit("harvest distiller needs --db FILE (e.g. data/Distiller/distiller_top_rums.db)")
+    m = re.search(r"distiller_top_([a-z]+)\.db$", args.db)
+    category = args.category or (DISTILLER_SPIRITS.get(m.group(1)) if m else None)
+    if category not in BAR_CATEGORIES:
+        sys.exit("Which spirit is this file? Name it distiller_top_<spirit>.db (rums, gins, whiskeys…) or pass --category.")
+    conn = sqlite3.connect(args.db)
+    tables = [t for (t,) in conn.execute("select name from sqlite_master where type='table'")
+              if "distiller_score" in [c[1] for c in conn.execute(f"pragma table_info({t})")]]
+    if not tables:
+        sys.exit(f"{args.db}: no table with a distiller_score column")
+    rows, odd, left_out, refiled = [], 0, [], []
+    for style, url, blob, score in conn.execute(f"select style_category, url, name, distiller_score from {tables[0]} order by id"):
+        r = distiller_row(style, url, blob, score)
+        if not r:
+            odd += 1
+            continue
+        if category == "rum" and r["name"].lower() in DISTILLER_NOT_RUM:
+            left_out.append(r["name"])
+            continue
+        r["category"] = category
+        if category == "rum":
+            guess = N.guess_category(r["name"])
+            if guess in DISTILLER_FILED_AS:
+                r["category"] = guess
+                refiled.append(f"{r['name']} → {guess}")
+        rows.append(r)
+    print(f"  {len(rows)} scored bottles in {os.path.basename(args.db)}" + (f" ({odd} rows without a score or page, left out)" if odd else ""))
+    if refiled:
+        print("  named for another spirit, filed as that: " + "; ".join(refiled))
+    if left_out:
+        print("  not rums, left out: " + "; ".join(left_out))
+    return f"distiller-{category}", {"source_id": "distiller", "scale": "critic100", "weight": 1.0, "origin": "curated", "ref": "url",
+                                     "note": "Distiller expert scores (0-100) from the user's own local file; each row links to its Distiller page."}, rows
+
+
 HARVESTERS = {"bsa": harvest_bsa, "lonecaner": harvest_lonecaner, "ginisin": harvest_ginisin,
-              "ssel": harvest_ssel, "disc": harvest_disc, "whiskyfun": harvest_whiskyfun}
+              "ssel": harvest_ssel, "disc": harvest_disc, "whiskyfun": harvest_whiskyfun, "rumx": harvest_rumx,
+              "distiller": harvest_distiller, "fatrumpirate": harvest_fatrumpirate,
+              "bourbonculture": harvest_bourbonculture, "bevx": harvest_bevx}
 
 
 def cmd_harvest(args):
@@ -1836,6 +2276,9 @@ def main(argv=None):
     s.add_argument("--years", type=int, nargs="*", help="competition years (default: all published)")
     s.add_argument("--limit", type=int, help="stop after this many reviews (a quick test run)")
     s.add_argument("--refresh", action="store_true", help="ignore the page cache")
+    s.add_argument("--catalog", help="rumx: a JSON snapshot of the catalog ({'prods': [...]}) instead of reading the database")
+    s.add_argument("--db", help="distiller: the SQLite file of scores (data/Distiller/distiller_top_rums.db)")
+    s.add_argument("--category", help="distiller: the spirit, if the file isn't named distiller_top_<spirit>.db")
     s.set_defaults(fn=cmd_harvest)
 
     s = sub.add_parser("import-batch")
@@ -1843,6 +2286,10 @@ def main(argv=None):
     s.add_argument("--join-only", action="store_true", help="only add scores to bottles already in the catalog")
     s.add_argument("--apply", action="store_true")
     s.set_defaults(fn=cmd_import_batch)
+
+    s = sub.add_parser("calibrate")
+    s.add_argument("file")
+    s.set_defaults(fn=cmd_calibrate)
 
     s = sub.add_parser("dupes")
     s.add_argument("--show", type=int, default=25, help="how many pairs to print (all go to batches/dupes.csv)")
