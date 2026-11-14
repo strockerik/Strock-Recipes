@@ -1279,6 +1279,7 @@ bash build_catalog.sh            # every batch, in order (preview); --apply to w
 bash catalog_pass.sh             # the 2026-11-12 review pass (preview); --apply to write
 python3 ratings.py dupes         # bottles one word apart → batches/dupes.csv
 python3 ratings.py merge KEEP_ID DROP_ID --apply                # fold a duplicate into its twin
+python3 ratings.py drop-reviews ID [ID ...] --apply            # delete reviews attached to the wrong bottle
 ```
 
 `dupes` only proposes; a person decides. Its "likely same" verdict is a word
@@ -1357,6 +1358,17 @@ before anything was merged; the checks are why some of it isn't:
   then set the weight, register it in `rating_sources.default_weight`, and put the
   same number in the batch. `import-batch` prints a NOTE if the batch's weight and
   the registered one disagree.
+- *Two importer bugs found after the first run (2026-11-13, fixed):* (1) A review page
+  that covers several bottles (BevX's weekly roundups) got the key `bevx:<url>` for every
+  bottle, so the write's ignore-duplicates kept the first and silently dropped the rest
+  (217 of BevX's 575 never landed). A page shared by several rows now gets one key per
+  bottle; a page with one bottle keeps its old key, so nothing already in changes.
+  (2) A critic's year in a title ("Old Forester Birthday Bourbon (2022) Review") was
+  stripped like a competition's entry year, folding 2020–2025 into one bottle with five
+  reviews. Now a row naming a different year than the bottle it would join becomes its own
+  bottle; competition entries ("Sazerac 18-Year-Old Rye-2025") still join. Re-run
+  `expert_pass.sh --apply` to land what was dropped; `drop-reviews` removes reviews
+  already on the wrong bottle.
 After the import, `ratings.py dupes` lists near-duplicates (about 40 are expected,
 mostly "…White Rum" labels and annual releases); a vintage year is *not* proof of
 the same bottle, so check those before merging.

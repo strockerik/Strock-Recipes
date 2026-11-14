@@ -629,9 +629,91 @@ with contextlib.redirect_stdout(io.StringIO()):
 R.sb = saved
 eq("merge: the review both bottles hold is deleted, not doubled", ("DELETE", "/rest/v1/spirit_reviews?id=eq.r2", None) in calls, True)
 eq("merge: the other reviews move to the kept bottle", any(m == "PATCH" and p_.startswith("/rest/v1/spirit_reviews?product_id=eq.b") and b_ == {"product_id": "a"} for m, p_, b_ in calls), True)
+eq("merge: the dropped bottle's community median moves when the kept one has none", ("PATCH", "/rest/v1/spirit_community?product_id=eq.b", {"product_id": "a"}) in calls, True)
 eq("merge: bar bottles follow", any(m == "PATCH" and p_.startswith("/rest/v1/inventory_items?product_id=eq.b") for m, p_, b_ in calls), True)
 eq("merge: a missing optional table doesn't stop it; the bottle is deleted last", calls[-2][:2] == ("DELETE", "/rest/v1/spirit_products?id=eq.b") and calls[-1][0] == "POST", True)
 eq("merge: the dropped name becomes an alias of the kept bottle", calls[-1][2]["alias_norm"] == "plantation 3 stars white rum" and calls[-1][2]["product_id"] == "a", True)
+
+# A page reviewing several bottles must give each its own source_ref (the 2026-11-13 BevX loss).
+PU = {"source_id": "bevx", "scale": "competition100", "weight": 0.6, "ref": "url", "rows": [
+    {"name": "Talisker 10 Year Old", "url": "https://bevx.com/a/", "year": 2026, "score_raw": 92},
+    {"name": "Oban 14 Year Old", "url": "https://bevx.com/a/", "year": 2026, "score_raw": 90},
+    {"name": "Lone Page Rye", "url": "https://bevx.com/b/", "year": 2026, "score_raw": 88}]}
+refs = [R.review_row(PU, r, "p", 8.0)["source_ref"] for r in PU["rows"]]
+eq("per-url batch: two bottles on one page get different keys", refs[0] != refs[1], True)
+eq("per-url batch: a page with one bottle keeps the url-only key", refs[2], "bevx:https://bevx.com/b/")
+eq("per-url batch: every key in the batch is unique", len(set(refs)), 3)
+
+# Another year's release must not fold into the bottle that holds a different year (2026-11-13:
+# Bourbon Culture's Old Forester Birthday 2020-2025 became one bottle with five reviews).
+OF = [{"id": "p-of25", "canonical_name": "Old Forester Birthday Bourbon 2025", "name_norm": "old forester birthday bourbon",
+       "category": "bourbon", "age_years": None, "abv": None, "batch": None},
+      {"id": "p-sz", "canonical_name": "Sazerac 18 Year Old Rye", "name_norm": "sazerac 18 year old rye",
+       "category": "rye", "age_years": 18, "abv": None, "batch": None},
+      {"id": "p-wj", "canonical_name": "Widow Jane Decadence Bourbon", "name_norm": "widow jane decadence bourbon",
+       "category": "bourbon", "age_years": None, "abv": None, "batch": None}]
+def crit(name, year, url):
+    return {"name": name, "category": "bourbon", "year": year, "score_raw": 8.5, "url": url}
+PY = R.plan_batch({"source_id": "bourbon_culture", "scale": "ten", "ref": "url", "rows": [
+    crit("Old Forester Birthday Bourbon 2025", 2026, "https://bc/of25"),
+    crit("Old Forester Birthday Bourbon 2022", 2023, "https://bc/of22"),
+    crit("Old Forester Birthday Bourbon 2020", 2020, "https://bc/of20"),
+    crit("Widow Jane Decadence Bourbon 2024", 2025, "https://bc/wj24")]}, OF, [], set())
+eq("annual release: the same year joins the bottle", [(r["url"], pid) for r, pid, _ in PY["joined"] if "of25" in r["url"]], [("https://bc/of25", "p-of25")])
+eq("annual release: other years become their own bottles, one each",
+   sorted(p["canonical_name"] for p in PY["new"].values()), ["Old Forester Birthday Bourbon 2020", "Old Forester Birthday Bourbon 2022"])
+eq("annual release: none of them lands on the 2025 bottle", [pid for _, pid, _ in PY["reviews"]].count("p-of25"), 1)
+eq("annual release: a bottle with no year in its name still takes a dated review", ("p-wj" in [pid for _, pid, _ in PY["reviews"]]), True)
+PS = R.plan_batch({"source_id": "bartender_spirits_awards", "scale": "competition100", "rows": [
+    {"name": "Sazerac 18-Year-Old Rye-2025", "category": "rye", "year": 2025, "score_raw": 90}]}, OF, [], set())
+eq("competition entry labelled with its year still joins the bottle", ([pid for _, pid, _ in PS["joined"]], len(PS["new"])), (["p-sz"], 0))
+
+# drop-reviews: preview changes nothing; --apply deletes and clears the stale summary
+dcalls = []
+def fake_sb4(method, path, body=None, prefer="return=representation"):
+    dcalls.append((method, path))
+    if method == "GET" and path.startswith("/rest/v1/spirit_reviews?select=id,product_id"):
+        return [{"id": "r1", "product_id": "pA", "source_id": "bourbon_culture", "source_name": "Old Forester Birthday Bourbon (2022) Review", "review_year": 2023, "url": "u"}]
+    if method == "GET" and "spirit_products" in path:
+        return [{"id": "pA", "canonical_name": "Old Forester Birthday Bourbon 2025"}]
+    return None
+saved = R.sb; R.sb = fake_sb4
+with contextlib.redirect_stdout(io.StringIO()):
+    R.main(["drop-reviews", "r1", "r2"])
+eq("drop-reviews: the preview deletes nothing", any(m == "DELETE" for m, _ in dcalls), False)
+with contextlib.redirect_stdout(io.StringIO()):
+    R.main(["drop-reviews", "r1", "r2", "--apply"])
+R.sb = saved
+eq("drop-reviews: --apply deletes the review that exists, and its bottle's summary",
+   [p for m, p in dcalls if m == "DELETE"], ["/rest/v1/spirit_reviews?id=eq.r1", "/rest/v1/spirit_summaries?product_id=eq.pA"])
+
+# A read that times out is repeated; a write is not (2026-11-13: a timeout stopped the expert pass).
+import urllib.request as _ur, urllib.error as _ue, time as _time
+class _Resp:
+    def __init__(self, raw): self.raw = raw
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self): return self.raw
+_tries = []
+def _flaky(req, timeout=None, context=None):
+    _tries.append(req.get_method())
+    if len(_tries) < 3:
+        raise TimeoutError("The read operation timed out")
+    return _Resp(b'[{"id": 1}]')
+_save = (_ur.urlopen, _time.sleep, R.SB_URL, R.SB_KEY)
+_ur.urlopen, _time.sleep, R.SB_URL, R.SB_KEY = _flaky, (lambda s_: None), "http://stub", "k"
+with contextlib.redirect_stderr(io.StringIO()):
+    got = R.sb("GET", "/rest/v1/x")
+eq("sb: a GET that times out twice is retried and returns the rows", (got, len(_tries)), ([{"id": 1}], 3))
+_tries.clear()
+try:
+    with contextlib.redirect_stderr(io.StringIO()):
+        R.sb("POST", "/rest/v1/x", {"a": 1})
+    posted = "returned"
+except TimeoutError:
+    posted = "raised"
+eq("sb: a POST that times out is not repeated (it may have landed)", (posted, len(_tries)), ("raised", 1))
+_ur.urlopen, _time.sleep, R.SB_URL, R.SB_KEY = _save
 
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

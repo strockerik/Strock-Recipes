@@ -11,6 +11,9 @@
 # show more "new" bottles than an --apply run will actually create.
 cd "$(dirname "$0")" || exit 1
 APPLY="$1"
+if [ $# -gt 1 ] || { [ -n "$1" ] && [ "$1" != "--apply" ]; }; then
+  echo "Usage: bash build_catalog.sh   (preview)   |   bash build_catalog.sh --apply   (write)"; exit 1
+fi
 i() {
   [ -f "batches/$1.json" ] || { echo "=== $1: no batches/$1.json yet (python3 ratings.py harvest $1)"; return; }
   echo; echo "=== $1"

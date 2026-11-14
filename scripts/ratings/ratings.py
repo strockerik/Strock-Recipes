@@ -62,9 +62,11 @@ honest User-Agent, and every fetched page is cached in scripts/ratings/cache/
 Python 3.9+, standard library only.
 """
 import argparse
+import collections
 import datetime
 import hashlib
 import html
+import http.client
 import json
 import os
 import re
@@ -147,9 +149,17 @@ def sb(method, path, body=None, prefer="return=representation"):
     req = urllib.request.Request(SB_URL + path, method=method, headers=headers,
                                  data=json.dumps(body).encode() if body is not None else None)
     try:
-        with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as r:
-            raw = r.read()
-            return json.loads(raw) if raw else None
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as r:
+                    raw = r.read()
+                    return json.loads(raw) if raw else None
+            except (TimeoutError, ConnectionError, http.client.IncompleteRead, urllib.error.URLError) as e:
+                # A read can simply be repeated; a write can't be (it might have landed), so it stops here.
+                if isinstance(e, urllib.error.HTTPError) or method != "GET" or attempt == 3:
+                    raise
+                print(f"  (network hiccup on {path[:60]}: {type(e).__name__}; retrying)", file=sys.stderr)
+                time.sleep(2 * (attempt + 1))
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
         if "spirit_" in detail and ("does not exist" in detail or "schema cache" in detail):
@@ -969,11 +979,32 @@ def plan_batch(b, products, aliases, have, join_only=False):
     out = {"joined": [], "new_rows": [], "reviews": [], "aliases": [], "skipped": {}}
     def skip(why):
         out["skipped"][why] = out["skipped"].get(why, 0) + 1
+    def other_year_release(stripped, printed):
+        """True when the bottle `stripped` names is already another year's release
+        ("... 2025" when this row says 2022)."""
+        pid = by_key.get(stripped)
+        if pid and pid.startswith("new:"):
+            target = new.get(pid[4:])
+        elif pid:
+            target = by_id.get(pid)
+        else:
+            ws = frozenset(N.bottle_words(stripped))
+            hits = [i for i in by_words.get(ws, []) if N.same_bottle(stripped, by_id[i]["name_norm"])]
+            hits = [by_id[i] for i in hits] + [new[k] for k in new_words.get(ws, []) if N.same_bottle(stripped, new[k]["name_norm"])]
+            target = hits[0] if len(hits) == 1 else None
+        years = re.findall(r"(?<![\d%])(?:19[5-9]\d|20[0-4]\d)(?!\d)", (target or {}).get("canonical_name") or "")
+        return bool(years) and str(printed) not in years
     for row in b["rows"]:
         name = (row.get("name") or "").strip()
         key = N.norm_name(match_name(name))
+        # A competition prints its own year on the entry ("Sazerac 18-Year-Old Rye-2025"): that
+        # year's entry of the bottle. A critic naming a year ("Old Forester Birthday Bourbon (2022)
+        # Review") may be naming a different annual release: if the bottle it would join is
+        # another year's, the year stays and the row becomes its own bottle. Without this,
+        # Bourbon Culture's 2020-2025 reviews folded into one bottle (2026-11-13).
         if row.get("year") and re.search(r"\s(%d|%d)$" % (row["year"], row["year"] - 1), key):
-            key = key.rsplit(" ", 1)[0]   # "Sazerac 18-Year-Old Rye-2025": that year's release of the bottle
+            stripped, printed = key.rsplit(" ", 1)
+            key = stripped if not other_year_release(stripped, int(printed)) else key
         if not key:
             skip("no name"); continue
         score = row_score(b, row)
@@ -1043,7 +1074,14 @@ def review_row(b, row, pid, score):
     per_url = b.get("ref") == "url"
     src_id = row.get("source_id") or b["source_id"]
     key = N.norm_name(match_name(row["name"]))
-    ref = row.get("ref") or (f"{src_id}:{row.get('url')}#{key}" if per_url and b["source_id"] == "*"
+    # A page that reviews several bottles (BevX's weekly roundups) needs one key per bottle:
+    # with only the page's url, the write's ignore-duplicates kept the first bottle per page
+    # and silently dropped the rest (217 of BevX's 575 on 2026-11-13). A page with one bottle
+    # keeps the url-only key, so everything already imported still matches.
+    if per_url and "_url_count" not in b:
+        b["_url_count"] = collections.Counter(r.get("url") for r in b["rows"])
+    shared = per_url and b["_url_count"][row.get("url")] > 1
+    ref = row.get("ref") or (f"{src_id}:{row.get('url')}#{key}" if per_url and (b["source_id"] == "*" or shared)
                              else f"{src_id}:{row.get('url')}" if per_url else f"{src_id}:{row.get('year')}:{key}")
     return {"source_id": src_id, "source_ref": ref[:500], "product_id": pid,
             "source_name": (row.get("printed") or row["name"])[:200], "source_producer": row.get("producer") or None,
@@ -2148,11 +2186,39 @@ def cmd_merge(args):
             sb("PATCH", f"/rest/v1/{t}?product_id=eq.{q(drop)}", {"product_id": keep}, prefer="return=minimal")
         except SystemExit:               # a table this project never created (barcodes, the queue)
             print(f"  ({t} skipped: not in this database)")
+    try:   # RumX's community median: one per bottle, so it moves only if the kept bottle has none
+        if not sb("GET", f"/rest/v1/spirit_community?select=product_id&product_id=eq.{q(keep)}"):
+            sb("PATCH", f"/rest/v1/spirit_community?product_id=eq.{q(drop)}", {"product_id": keep}, prefer="return=minimal")
+    except SystemExit:
+        pass                             # the table isn't in this database yet
     sb("PATCH", f"/rest/v1/spirit_products?parent_id=eq.{q(drop)}", {"parent_id": keep}, prefer="return=minimal")
     sb("DELETE", f"/rest/v1/spirit_summaries?product_id=eq.{q(keep)}", prefer="return=minimal")   # regenerated later
     sb("DELETE", f"/rest/v1/spirit_products?id=eq.{q(drop)}", prefer="return=minimal")
     add_alias(keep, by[drop]["canonical_name"], None)
     print("Merged.")
+
+
+def cmd_drop_reviews(args):
+    """Delete reviews that sit on the wrong bottle (an import put another year's release
+    on this one). Name them by id; the importer then re-adds them to the right bottle."""
+    rows = sb("GET", "/rest/v1/spirit_reviews?select=id,product_id,source_id,source_name,review_year,url"
+                     f"&id=in.({','.join(q(i) for i in args.ids)})") or []
+    found = {r["id"]: r for r in rows}
+    names = _names([r["product_id"] for r in rows])
+    gone = [i for i in args.ids if i not in found]
+    for r in rows:
+        print(f"  [{r['source_id']}] {r['source_name']}  on  {names.get(r['product_id'], r['product_id'])}")
+    if gone:
+        print(f"  ({len(gone)} already gone)")
+    print(f"{len(rows)} review(s) to delete.")
+    if not args.apply:
+        print("\nDry run — add --apply to write.")
+        return
+    for r in rows:
+        sb("DELETE", f"/rest/v1/spirit_reviews?id=eq.{q(r['id'])}", prefer="return=minimal")
+    for pid in {r["product_id"] for r in rows}:
+        sb("DELETE", f"/rest/v1/spirit_summaries?product_id=eq.{q(pid)}", prefer="return=minimal")   # regenerated later
+    print("Deleted.")
 
 
 # =============================================================================
@@ -2300,6 +2366,11 @@ def main(argv=None):
     s.add_argument("drop")
     s.add_argument("--apply", action="store_true")
     s.set_defaults(fn=cmd_merge)
+
+    s = sub.add_parser("drop-reviews")
+    s.add_argument("ids", nargs="+")
+    s.add_argument("--apply", action="store_true")
+    s.set_defaults(fn=cmd_drop_reviews)
 
     s = sub.add_parser("field")
     s.set_defaults(fn=cmd_field)
