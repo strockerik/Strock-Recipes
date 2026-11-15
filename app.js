@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "1.9";
+  const APP_VERSION = "1.9.1";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -417,7 +417,9 @@
   function ingLine(ing, useScaled, system, isBar) {
     const rawAmt = useScaled ? ing.scaled : ing.amount;
     const conv = convertForDisplay(rawAmt, ing.unit, system || "original", isBar);
-    const amtStr = conv.amount == null ? "\u2014" : fmtAmount(conv.amount) + (conv.unit ? " " + conv.unit : "");
+    // Metric reads as decimals ("2.5 ml", "1.4 kg"); a "2 ½ ml" fraction is a US habit.
+    const num = conv.amount == null ? null : conv.metric ? String(conv.amount) : fmtAmount(conv.amount);
+    const amtStr = num == null ? "\u2014" : num + (conv.unit ? " " + conv.unit : "");
     return { amtStr, item: ing.item };
   }
 
@@ -599,29 +601,36 @@
   // Units that are neither weight nor volume (cloves, cans, slices, plain
   // counts) and blank "to taste" amounts pass through unchanged — there's no
   // sensible metric form of "2 cloves garlic".
+  // Metric amounts as a cook would write them, never "946 ⅓ ml" or "907.18 g":
+  // under 10 to the half (2.5 ml, 7.5 g), under 100 to 5 (5 ml ≈ 1 tsp, 15 ml ≈
+  // 1 tbsp, 30 g ≈ 1 oz), then to 10 (240 ml ≈ 1 cup, 450 g ≈ 1 lb); litres and
+  // kilograms to one decimal (1.4 kg). A cocktail's ounces round to 2.5 ml below
+  // 100, so ¾ oz stays 22.5 ml and the drink's ratios hold.
+  function tidyMetric(value, small, big, fine) {
+    const step = value < 10 ? 0.5 : value < 100 ? (fine ? 2.5 : 5) : 10;
+    const t = Math.max(0.5, Math.round(value / step) * step);
+    if (t >= 1000) return { amount: Math.round(value / 100) / 10, unit: big, metric: true };
+    return { amount: Math.round(t * 10) / 10, unit: small, metric: true };
+  }
+
   function convertForDisplay(amount, unit, system, isBar) {
     if (system === "original" || amount == null || !unit) return { amount, unit: displayUnit(unit) };
     if (isFluidOunce(unit, isBar)) {
       if (system !== "metric") return { amount, unit: displayUnit(unit) }; // oz is already the US bar measure
-      const ml = amount * ML_PER_FL_OZ;
-      return ml >= 1000 ? { amount: ml / 1000, unit: "l" } : { amount: ml, unit: "ml" };
+      return tidyMetric(amount * ML_PER_FL_OZ, "ml", "l", true);
     }
     const u = unit.trim().toLowerCase();
     const gramsPer = WEIGHT_TO_G[u];
     if (gramsPer != null) {
       const g = amount * gramsPer;
-      if (system === "metric") {
-        return g >= 1000 ? { amount: g / 1000, unit: "kg" } : { amount: g, unit: "g" };
-      }
+      if (system === "metric") return tidyMetric(g, "g", "kg");
       const oz = g / G_PER_OZ;
       return oz >= 16 ? { amount: oz / 16, unit: "lb" } : { amount: oz, unit: "oz" };
     }
     const mlPer = VOLUME_TO_ML[u];
     if (mlPer != null) {
       const ml = amount * mlPer;
-      if (system === "metric") {
-        return ml >= 1000 ? { amount: ml / 1000, unit: "l" } : { amount: ml, unit: "ml" };
-      }
+      if (system === "metric") return tidyMetric(ml, "ml", "l");
       if (ml / ML_PER_CUP >= 0.25) return { amount: ml / ML_PER_CUP, unit: "cup" };
       if (ml / ML_PER_TBSP >= 1) return { amount: ml / ML_PER_TBSP, unit: "tbsp" };
       return { amount: ml / ML_PER_TSP, unit: "tsp" };

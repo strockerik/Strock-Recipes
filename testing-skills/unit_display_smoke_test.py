@@ -103,6 +103,13 @@ function runTests() {
     var tm = amtText();
     assert("Metric view renders", !!tm, tm);
     assert("Metric: no verbose unit anywhere", noVerbose(tm), tm);
+    // Tidy figures (v1.9): a cocktail's ¾ fl oz is 22.5 ml, 2 tbsp is 30 ml (not 29.57),
+    // and no metric amount carries a fraction glyph or more than one decimal.
+    assert("Metric: ¾ fl oz reads 22.5 ml", /22\.5\s*ml/.test(tm), tm);
+    assert("Metric: 2 tbsp reads 30 ml", /(^|[^\d.])30\s*ml/.test(tm), tm);
+    assert("Metric: 120 ml stays 120 ml", /120\s*ml/.test(tm), tm);
+    assert("Metric: no fractions or long decimals on metric amounts",
+      !/[¼⅓½⅔¾⅛⅜⅝⅞]\s*(ml|l|g|kg)\b/.test(tm) && !/\d\.\d{2,}\s*(ml|l|g|kg)\b/.test(tm), tm);
   } catch (e) { assert("no exception", false, String(e && e.stack || e)); }
   finish();
 }

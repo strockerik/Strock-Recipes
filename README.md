@@ -247,7 +247,14 @@ and volumes to tsp/tbsp/cup; *Metric* converts weights to g/kg and volumes to
 ml/l — so a recipe written in 700 g of beef can be read as 1½ lb. Counts that
 aren't weights or volumes (e.g. "2 cloves garlic") and blank "to taste" amounts
 are left untouched. The toggle only changes the on-screen display; the saved
-recipe and the grocery list are unaffected.
+recipe and the grocery list are unaffected. It carries into cook mode and sent
+recipes (since v1.9).
+
+Metric amounts are rounded the way a cook would write them (v1.9.1): under 10 to
+the half (2.5 ml), under 100 to 5 (1 tsp → 5 ml, 1 tbsp → 15 ml, 1 oz → 30 g),
+then to 10 (1 cup → 240 ml, 2 lb → 910 g), and litres and kilograms to one decimal
+(3 lb → 1.4 kg) — never "946 ⅓ ml" or "907.18 g", and as decimals, not fractions.
+A cocktail's ounces round to 2.5 ml, so ¾ oz stays 22.5 ml and the ratios hold.
 
 ### Recipe sections (sub-recipes)
 

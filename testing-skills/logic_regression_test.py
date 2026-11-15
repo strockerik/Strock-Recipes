@@ -106,8 +106,8 @@ async function runTests(){
   // ---------- convertForDisplay ----------
   var c=function(a,u,s){var r=T.convertForDisplay(a,u,s);return [Math.round(r.amount*100)/100,r.unit];};
   eq("US 200 g",c(200,"g","us"),[7.05,"oz"]); eq("US 700 g",c(700,"g","us"),[1.54,"lb"]);
-  eq("US 250 ml",c(250,"ml","us"),[1.06,"cup"]); eq("metric 1 lb",c(1,"lb","metric"),[453.59,"g"]);
-  eq("metric 2 cup",c(2,"cup","metric"),[473.18,"ml"]); eq("clove passthrough",c(3,"clove","metric"),[3,"clove"]);
+  eq("US 250 ml",c(250,"ml","us"),[1.06,"cup"]); eq("metric 1 lb (tidy: to 10 above 100)",c(1,"lb","metric"),[450,"g"]);
+  eq("metric 2 cup (tidy: to 10 above 100)",c(2,"cup","metric"),[470,"ml"]); eq("clove passthrough",c(3,"clove","metric"),[3,"clove"]);
   eq("original passthrough",c(2,"cups","original"),[2,"cups"]);
   // ---------- canonical / shoppable ----------
   var sh=function(a,u){var q=T.canonicalQuantity(a,u);var r=T.shoppableQuantity(q.amount,q.family,q.unit);return [r.amount,r.unit];};
@@ -150,10 +150,10 @@ async function runTests(){
   eq("PROBE timer '½ hour' = 1800s",pd("Rest ½ hour"),[1800]);
   eq("PROBE shoppable 0.3 g saffron never rounds to 0",sh(0.3,"g")[0]>0,true);
   var cb=function(a,u,sys,bar){var r=T.convertForDisplay(a,u,sys,bar);return [Math.round(r.amount*100)/100,r.unit];};
-  eq("PROBE bar 'oz' -> metric ml (not grams)",cb(2,"oz","metric",true),[59.15,"ml"]);
+  eq("PROBE bar 'oz' -> metric ml (not grams), tidy",cb(2,"oz","metric",true),[60,"ml"]);
   eq("bar 'oz' stays oz in US",cb(2,"oz","us",true),[2,"oz"]);
-  eq("kitchen 'oz' is still a weight",cb(2,"oz","metric",false),[56.7,"g"]);
-  eq("'fl oz' -> metric ml anywhere",cb(1.5,"fl oz","metric",false),[44.36,"ml"]);
+  eq("kitchen 'oz' is still a weight (tidy: to 5 under 100)",cb(2,"oz","metric",false),[55,"g"]);
+  eq("'fl oz' -> metric ml anywhere, tidy",cb(1.5,"fl oz","metric",false),[45,"ml"]);
 
   // ---------- Phase 7: XSS payloads render as text ----------
   await openDetail("r3"); await later(80);
