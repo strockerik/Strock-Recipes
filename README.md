@@ -1419,7 +1419,11 @@ other sources as "RumX community · 7.8/10 · 499 members", linked to the rum's 
 page; a median not yet imported as a review still shows on its own line, marked as not
 part of the score. Refresh: `harvest rumx --catalog SNAPSHOT`, then import
 `batches/rumx-community.json` (the community medians only — RumX's critic layer stays
-the 16 hand-verified rows in `rumx-verified.json`).
+the 16 hand-verified rows in `rumx-verified.json`). `batches/rumx-top.json` (2026-11-15)
+added seven well-known rums from RumX's best-rums list that weren't in the catalog —
+Doorly's 14, Black Tot, Zacapa XO, Eminente 7, A.H. Riise Black Edition, El Dorado
+AN 2004 and SWR 2000 — as new bottles with their median; the list's five small limited
+bottlings were left out, like any one-off release. 225 rums count a RumX median.
 
 Matching rules a batch follows, on top of `same_bottle()`: categories must
 agree (amaro ≈ liqueur; a plain "whiskey" joins a bourbon only when its name
