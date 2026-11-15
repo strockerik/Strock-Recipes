@@ -373,14 +373,23 @@ def fake_sb_com(method, path, body=None, prefer="return=representation"):
     if method == "GET":
         if path.startswith("/rest/v1/spirit_products"): return [{"id": "p-sc", "name_norm": "smith and cross"}]
         return []
-    com_posts.append((path, body)); return None
+    com_posts.append((path, body, prefer)); return None
 saved = R.sb; R.sb = fake_sb_com
 with contextlib.redirect_stdout(io.StringIO()):
     R.import_community(meta["community"] + [{"name": "Nobody Rum", "median": 8.0, "n_ratings": 90, "url": "u"}, {"name": "Smith & Cross", "median": 9.9, "n_ratings": 2, "url": "u"}])
 R.sb = saved
 eq("import_community: one row per known bottle, with RumX as source; unknown bottles and <4 ratings are left out",
-   [(p, [(r["product_id"], r["source"], r["median"], r["n_ratings"]) for r in b]) for p, b in com_posts],
+   [(p, [(r["product_id"], r["source"], r["median"], r["n_ratings"]) for r in b]) for p, b, _ in com_posts[:1]],
    [("/rest/v1/spirit_community?on_conflict=product_id", [("p-sc", "rumx", 7.8, 499)])])
+# Since 2026-11-15 the median also counts in the score, as a rumx_community review.
+rv_path, rv_body, rv_prefer = com_posts[1]
+eq("import_community: the median becomes one scored review per bottle, from the RumX community source",
+   [(r["product_id"], r["source_id"], r["score_10"], r["weight"], r["reviewer"], r["source_ref"]) for r in rv_body],
+   [("p-sc", "rumx_community", 7.8, 0.7, "499 members", "rumx:https://rumx.com/en/rums/43/s/")])
+eq("import_community: a newer harvest updates the median in place (merge, not ignore)",
+   (rv_path, "merge-duplicates" in rv_prefer), ("/rest/v1/spirit_reviews?on_conflict=source_id,source_ref", True))
+eq("community_weight: grows with the number of ratings, full at 25",
+   [R.community_weight(n) for n in (4, 10, 25, 1619)], [0.11, 0.28, 0.7, 0.7])
 
 # Distiller: the user's own SQLite file of expert scores
 import sqlite3

@@ -1125,7 +1125,7 @@ def cmd_import_batch(args):
     for why, n in sorted(plan["skipped"].items(), key=lambda kv: -kv[1]):
         print(f"  skipped {n}: {why}")
     if b.get("community"):
-        print(f"  {len(b['community'])} community medians (spirit_community, shown beside the expert score)")
+        print(f"  {len(b['community'])} community medians (spirit_community, and counted in the score as RumX community)")
     for row, pid, how in plan["joined"][:12]:
         print(f"    = {row['name']}  ({row.get('year') or ''} {row.get('medal') or row.get('score_raw')})  [{how}]")
     for nk, p in list(plan["new"].items())[:8]:
@@ -1198,20 +1198,46 @@ def cmd_calibrate(args):
         print("  In line with the catalog: the source's default weight is fine.")
 
 
+# RumX's community medians count in the score (user decision 2026-11-15: "I trust
+# RumX"; RumX is the only community source used). Calibrated on the ~50 rums that
+# also have 2+ expert reviews: RumX sits +0.22 above the consensus (sd ~1.0), as
+# close as the critics we use, so its 0-10 median is read as-is. A median counts
+# more the more members rated it: full weight at COMMUNITY_FULL_AT ratings,
+# proportionally less below (a median of 4 counts 0.11).
+COMMUNITY_SOURCE = "rumx_community"
+COMMUNITY_WEIGHT = 0.7
+COMMUNITY_FULL_AT = 25
+
+
+def community_weight(n_ratings):
+    return round(COMMUNITY_WEIGHT * min(1.0, n_ratings / COMMUNITY_FULL_AT), 2)
+
+
+def community_review(pid, c, year):
+    """A community median as a scored review. One per bottle (the key is the RumX
+    page), updated in place when a later harvest finds a new median."""
+    return {"source_id": COMMUNITY_SOURCE, "source_ref": f"rumx:{c['url']}"[:500], "product_id": pid,
+            "source_name": str(c["name"])[:200], "url": c["url"], "review_year": year,
+            "reviewer": f"{int(c['n_ratings']):,} members", "score_raw": c["median"],
+            "score_10": round(float(c["median"]), 2), "weight": community_weight(int(c["n_ratings"])),
+            "match_status": "auto", "match_score": 1, "origin": "bulk"}
+
+
 def import_community(community):
-    """A batch's community medians -> spirit_community, one per bottle. These are
-    a crowd's opinion, not a critic's score: they never enter spirit_reviews or
-    the consensus, and the app shows them apart."""
+    """A batch's community medians -> spirit_community (one per bottle, the raw
+    median and count) and, since 2026-11-15, a rumx_community review per bottle that
+    counts in the score at a weight that grows with the number of ratings."""
     products = sb_all("/rest/v1/spirit_products?select=id,name_norm&order=id")
     aliases = sb_all("/rest/v1/spirit_aliases?select=alias_norm,product_id&order=alias_norm")
     by_key = {p["name_norm"]: p["id"] for p in products if p.get("name_norm")}
     for a in aliases:
         by_key.setdefault(a["alias_norm"], a["product_id"])
-    rows = {}
+    rows, picked = {}, {}
     for c in community:
         pid = by_key.get(N.norm_name(match_name(c["name"])))
         if pid and c.get("median") is not None and c.get("n_ratings", 0) >= 4:
             rows[pid] = {"product_id": pid, "source": "rumx", "median": c["median"], "n_ratings": c["n_ratings"], "url": c["url"]}
+            picked[pid] = c
     if not rows:
         return
     try:
@@ -1222,6 +1248,20 @@ def import_community(community):
         print("\nspirit_community isn't in this database yet: run the README Bottles setup SQL step 11, then re-run this import.")
         return
     print(f"Saved {len(rows)} community medians.")
+    year = datetime.date.today().year
+    reviews = [community_review(pid, c, year) for pid, c in picked.items()]
+    try:
+        for i in range(0, len(reviews), 500):
+            # merge-duplicates, not ignore: a newer harvest replaces the old median.
+            sb("POST", "/rest/v1/spirit_reviews?on_conflict=source_id,source_ref", reviews[i:i + 500],
+               prefer="resolution=merge-duplicates,return=minimal")
+    except SystemExit as e:
+        if "rumx_community" in str(e) or "foreign key" in str(e).lower():
+            print("\nThe rumx_community source isn't registered yet: run supabase/sql/rumx-community-score.sql, then re-run this import.")
+            return
+        raise
+    full = sum(1 for r in reviews if r["weight"] >= COMMUNITY_WEIGHT)
+    print(f"Counted {len(reviews)} community medians in the score ({full} at full weight, from {COMMUNITY_FULL_AT}+ ratings).")
 
 
 # --- Harvesters --------------------------------------------------------------

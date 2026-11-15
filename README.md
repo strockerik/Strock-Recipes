@@ -1367,7 +1367,7 @@ before anything was merged; the checks are why some of it isn't:
   `rating_sources.default_weight`.
 - *Weight policy (decided 2026-11-13):* the weights above are approved — Fat Rum
   Pirate 0.8, Bourbon Culture 0.7, BevX 0.6, Drinkhacker 1.0, Distiller 1.0, RumX
-  critics 0.5 — and every batch of a source uses that source's weight, so one
+  critics 0.5, RumX community up to 0.7 by number of ratings (2026-11-15) — and every batch of a source uses that source's weight, so one
   critic never counts differently from one import to the next. Each new source or
   batch gets the same treatment before it's imported: run
   `python3 ratings.py calibrate batches/<file>.json` to see how its scores sit
@@ -1405,11 +1405,21 @@ because it's harvested directly. `--catalog FILE` reads a snapshot of the
 catalog instead of the database, so the harvest needs no key. Each critic score
 is RumX's /10 conversion of the critic's own scale and links to their review.
 
-**Community medians** (RumX's median of its members' ratings, shown from 4
-ratings) are not a critic's score: they go in `spirit_community` (setup SQL step
-11), never into the consensus, and the score card shows them under the expert
-score as "RumX community median 7.8/10 (499 ratings)" with a link, and a note
-that they are members, not critics. That wording is how RumX asks to be cited.
+**Community medians** (RumX's median of its members' ratings, from 4 ratings) are
+stored raw in `spirit_community` (setup SQL step 11) and, since 2026-11-15, **count in
+the score** — RumX is the only community source used ("I trust RumX"). Each becomes a
+`rumx_community` review (`supabase/sql/rumx-community-score.sql` registers the source),
+read as-is on the 0–10 scale: on the ~50 rums that also have 2+ expert reviews the
+median sits +0.22 above the consensus (sd ~1.0), as close as the critics already used.
+Its weight grows with the number of members who rated it — the full 0.70 at 25+
+ratings, proportionally less below (4 ratings count 0.11) — and a later harvest
+updates the median in place. Like any review it counts toward confidence, so a rum
+with one expert review and a RumX median is "medium". The score card lists it with the
+other sources as "RumX community · 7.8/10 · 499 members", linked to the rum's RumX
+page; a median not yet imported as a review still shows on its own line, marked as not
+part of the score. Refresh: `harvest rumx --catalog SNAPSHOT`, then import
+`batches/rumx-community.json` (the community medians only — RumX's critic layer stays
+the 16 hand-verified rows in `rumx-verified.json`).
 
 Matching rules a batch follows, on top of `same_bottle()`: categories must
 agree (amaro ≈ liqueur; a plain "whiskey" joins a bourbon only when its name

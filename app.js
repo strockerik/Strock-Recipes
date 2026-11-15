@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "1.9.1";
+  const APP_VERSION = "1.9.2";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -2094,7 +2094,7 @@
   }
   async function btSources() {
     if (bottles.sources) return bottles.sources;
-    const { data } = await supabaseClient.from("rating_sources").select("id,name,scale");
+    const { data } = await supabaseClient.from("rating_sources").select("id,name,scale,kind");
     bottles.sources = new Map((data || []).map((s) => [s.id, s]));
     return bottles.sources;
   }
@@ -2408,8 +2408,9 @@
       supabaseClient.from("spirit_consensus").select("product_id,n_reviews,n_sources,score_10,confidence").eq("product_id", pid).maybeSingle(),
       supabaseClient.from("spirit_reviews").select("id,source_id,score_raw,score_10,medal,review_year,url,reviewer,origin,verified").eq("product_id", pid),
       btSources(),
-      // RumX's community median, shown beside the expert score and never in it.
-      // The table arrives with SQL step 11; until then this read just comes back empty.
+      // RumX's community median. Since 2026-11-15 it counts in the score as a
+      // rumx_community review (listed under "Where the score comes from"); this raw
+      // copy is only shown for a bottle whose median hasn't been imported that way yet.
       supabaseClient.from("spirit_community").select("median,n_ratings,url").eq("product_id", pid).maybeSingle()
     ]);
     if (token !== btToken || bottlePanel.hidden) return;
@@ -2460,6 +2461,8 @@
     const raw = r.score_raw != null ? Number(r.score_raw) : null;
     const scale = src ? src.scale : "";
     let what = r.medal || "";
+    // RumX's community median: its score and how many members rated it, not a year.
+    if (src && src.kind === "community" && raw != null) return [`${raw}/10`, r.reviewer].filter(Boolean).join(" · ");
     if (!what && raw != null) {
       if (scale === "drinkhacker" || (scale === "ten" && raw <= 10)) what = `${raw}/10`;
       else if (scale === "stars5") what = `${raw} of 5 stars`;
@@ -2496,9 +2499,12 @@
           <button type="button" class="solid-btn bt-wide" data-bt="research-product">Look it up</button>
         </div>`;
     // "RumX community median 7.8/10 (499 ratings)" — worded the way RumX asks to be
-    // cited. Members' opinions, so it sits under the expert score and says so.
+    // cited. Once the median counts in the score it's a row in the list below (as
+    // "RumX community · 7.8/10 · 499 members"), so this line only stands in for a
+    // bottle whose median hasn't been imported as a review yet.
     const com = opts.community;
-    const communityLine = com && Number(com.n_ratings) >= 4
+    const counted = reviews.some((r) => r.source_id === "rumx_community");
+    const communityLine = com && !counted && Number(com.n_ratings) >= 4
       ? `<p class="bt-community"><a href="${esc(com.url)}" target="_blank" rel="noopener noreferrer">RumX community median ${esc(scoreText(com.median))}/10 (${Number(com.n_ratings).toLocaleString()} ratings) <span aria-hidden="true">\u2197</span></a>
           <span class="bt-community-note">Members, not critics \u2014 not part of the score above.</span></p>` : "";
     btSet("result", `
@@ -2526,7 +2532,7 @@
           <span class="bt-src-ten">${scoreText(r.score_10)}</span>`;
         return `<li>${r.url ? `<a class="bt-src" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${inner}<span class="bt-src-go" aria-hidden="true">↗</span></a>` : `<span class="bt-src">${inner}</span>`}</li>`;
       }).join("")}</ul>
-      <p class="bt-note">Every review is put on the same 10-point scale. A competition medal counts for less than a critic’s review, and older reviews count less.${anyField ? " Scores an in-app lookup found count a little less until they’re confirmed." : ""}</p>` : ""}
+      <p class="bt-note">Every review is put on the same 10-point scale. A competition medal counts for less than a critic’s review, older reviews count less, and RumX’s community median counts more the more members rated it.${anyField ? " Scores an in-app lookup found count a little less until they’re confirmed." : ""}</p>` : ""}
       <button type="button" class="link-inline bt-report" data-bt="report">Wrong bottle?</button>`, { prod, ctx });
   }
 

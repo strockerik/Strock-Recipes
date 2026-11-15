@@ -75,11 +75,15 @@ var T = {
     { id:"v1", product_id:"p-green", source_id:"wine_enthusiast", score_raw:93, score_10:8.25, medal:null, review_year:2016, url:"https://www.wineenthusiast.com/buying-guide/chartreuse-green/", reviewer:null, origin:"curated", verified:true },
     { id:"v2", product_id:"p-green", source_id:"drinkhacker", score_raw:9.5, score_10:8.75, medal:null, review_year:2019, url:"https://www.drinkhacker.com/2019/05/20/review-yellow-chartreuse-and-green-chartreuse/", reviewer:null, origin:"curated", verified:true },
     { id:"v3", product_id:"p-green", source_id:"other_critic", score_raw:90, score_10:7.5, medal:null, review_year:2020, url:"https://blog.example/green", reviewer:"Some Liqueur Blog", origin:"field", verified:false },
+    { id:"v-rx", product_id:"p-sc", source_id:"rumx_community", score_raw:7.8, score_10:7.8, medal:null, review_year:2026, url:"https://rumx.com/en/rums/43/hampden-smith-cross-traditional-jamaican-rum/", reviewer:"499 members", origin:"bulk", verified:true },
     { id:"v4", product_id:"p-ec", source_id:"sfwsc", score_raw:null, score_10:8.5, medal:"Double Gold", review_year:2022, url:"https://elijahcraig.com/small-batch", reviewer:null, origin:"curated", verified:true }],
   rating_sources: [{ id:"wine_enthusiast", name:"Wine Enthusiast", scale:"wine_enthusiast" }, { id:"drinkhacker", name:"Drinkhacker", scale:"drinkhacker" },
-    { id:"other_critic", name:"Other critic", scale:"critic100" }, { id:"sfwsc", name:"San Francisco World Spirits Competition", scale:"sfwsc" }],
-  // RumX's community median for one bottle (shown beside the expert score, never in it).
-  spirit_community: [{ product_id:"p-green", median:7.8, n_ratings:499, url:"https://rumx.com/en/rums/43/hampden-smith-cross-traditional-jamaican-rum/" }],
+    { id:"other_critic", name:"Other critic", scale:"critic100" }, { id:"sfwsc", name:"San Francisco World Spirits Competition", scale:"sfwsc" },
+    { id:"rumx_community", name:"RumX community", scale:"ten", kind:"community" }],
+  // RumX community medians. Green Chartreuse's hasn't been imported as a review (the
+  // standalone line stands in); Smith & Cross's has (it's listed with the sources).
+  spirit_community: [{ product_id:"p-green", median:7.8, n_ratings:499, url:"https://rumx.com/en/rums/43/hampden-smith-cross-traditional-jamaican-rum/" },
+    { product_id:"p-sc", median:7.8, n_ratings:499, url:"https://rumx.com/en/rums/43/hampden-smith-cross-traditional-jamaican-rum/" }],
   bottle_usage: [{ user_id:USER_ID, usage_date:new Date().toISOString().slice(0,10), kind:"lookup", count:2 }],
   spirit_lookups: [], spirit_reports: []
 };
@@ -434,6 +438,10 @@ async function runTests() {
     click(ta && ta.querySelector("button"));
     await resultFor("Smith & Cross");
     assert("View opens the score card", !$("#bottle-panel").hidden && txt($(".bt-result-name")) === "Smith & Cross", txt($(".bt-result-name")));
+    var rx = $$(".bt-sources a.bt-src").filter(function (a) { return /RumX community/.test(txt(a)); })[0];
+    assert("a RumX median that counts in the score is listed with the sources, with its member count and page",
+      !!rx && /7\.8\/10 · 499 members/.test(txt(rx)) && /rumx\.com\/en\/rums\/43\//.test(rx.href), rx ? txt(rx) : txt($(".bt-sources")));
+    assert("…so the separate 'not part of the score' line isn't shown for it", !$(".bt-community"), $(".bt-community") ? txt($(".bt-community")) : "");
     FN["research-bottle"] = DEFAULT_RESEARCH;
 
     // ---- a label photo ----
