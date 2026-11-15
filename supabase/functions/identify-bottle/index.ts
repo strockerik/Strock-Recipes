@@ -8,8 +8,8 @@
 //
 // Mirrors the other functions: forced tool_choice with a strict schema, the
 // Anthropic key stays server-side, the caller's JWT is verified, and a per-user
-// daily cap (increment_bottle_usage 'scan') is checked before the paid call. It
-// fails open if the cap RPC isn't set up yet, like the others.
+// daily cap (increment_bottle_usage 'scan') is checked before the paid call; if
+// the cap can't be checked, the call is refused.
 //
 // Request body (JSON): { image: base64 (no data: prefix), media_type?: "image/jpeg" }
 // Response: always HTTP 200 — { label: {...} } | { error }
@@ -23,16 +23,24 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DAILY_SCAN_LIMIT = 40;
+// A daily cap that can't be checked refuses the paid call rather than letting it
+// through (the cap tables exist; an error here means something is wrong).
+const LIMIT_CHECK_FAILED = "Couldn’t check today’s limit — try again in a minute.";
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+// The project's publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed
+// by name, which Supabase provides to every function). It is only the "apikey";
+// the caller's own JWT in the Authorization header is what RLS sees. The legacy
+// anon key was retired 2026-11-15.
 function supabaseClientKey(): string {
   try {
     const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
     const key = typeof keys.default === "string" ? keys.default : Object.values(keys).find((v) => typeof v === "string");
     if (key) return key as string;
-  } catch { /* unset or not JSON — use the legacy key */ }
-  return Deno.env.get("SUPABASE_ANON_KEY")!;
+  } catch { /* not JSON */ }
+  console.error("SUPABASE_PUBLISHABLE_KEYS is missing — database calls will fail.");
+  return "";
 }
 const SUPABASE_CLIENT_KEY = supabaseClientKey();
 
@@ -83,7 +91,8 @@ function strictify(node: any): any {
 }
 
 // deno-lint-ignore no-explicit-any
-async function readLabel(image: string, mediaType: string): Promise<{ input?: any; error?: string }> {
+async function readLabel(image: string, mediaType: string, client: any): Promise<{ input?: any; error?: string }> {
+  const started = Date.now();
   const send = (strict: boolean) => fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": ANTHROPIC_API_KEY!, "anthropic-version": ANTHROPIC_VERSION },
@@ -111,12 +120,40 @@ async function readLabel(image: string, mediaType: string): Promise<{ input?: an
   }
   if (!res.ok) {
     console.error("Anthropic API error:", res.status, await res.text());
+    await logAiCall(client, "bottle:read-label", MODEL, false, Date.now() - started);
     return { error: res.status === 429 ? "Rate limit or usage limit reached — try again later." : "Couldn’t read that label. Please try again." };
   }
   const data = await res.json();
+  const toolInput = data.content?.find((c: { type: string }) => c.type === "tool_use")?.input;
+  await logAiCall(client, "bottle:read-label", MODEL, !!toolInput, Date.now() - started, { usage: data.usage });
   if (data.stop_reason === "refusal") return { error: "The AI declined that photo — try another." };
-  const toolBlock = data.content?.find((c: { type: string }) => c.type === "tool_use");
-  return { input: toolBlock?.input };
+  return { input: toolInput };
+}
+
+// One ai_calls row per paid model call — model, outcome, latency, tokens — via
+// the log_ai_call RPC (supabase/sql/v1.9-part1.sql). Never throws: logging must
+// not break the feature. `usage` is the API's own usage block (Anthropic or
+// OpenAI-style); userId only counts when the caller runs on the secret key.
+// deno-lint-ignore no-explicit-any
+type LogExtra = { escalated?: boolean; usage?: any; webSearches?: number | null; userId?: string };
+// deno-lint-ignore no-explicit-any
+async function logAiCall(client: any, task: string, model: string, valid: boolean, latencyMs: number, extra: LogExtra = {}) {
+  const u = extra.usage || {};
+  const input = u.input_tokens ?? u.prompt_tokens;
+  try {
+    const { error } = await client.rpc("log_ai_call", {
+      p_task: task, p_model: model, p_valid: valid, p_latency_ms: Math.round(latencyMs),
+      p_escalated: !!extra.escalated,
+      p_input_tokens: input == null ? null : input + (u.cache_creation_input_tokens ?? 0),
+      p_output_tokens: u.output_tokens ?? u.completion_tokens ?? null,
+      p_cache_read_tokens: u.cache_read_input_tokens ?? null,
+      p_web_searches: extra.webSearches ?? u.server_tool_use?.web_search_requests ?? null,
+      p_user_id: extra.userId ?? null
+    });
+    if (error) console.error("log_ai_call failed:", error.message ?? error);
+  } catch (e) {
+    console.error("log_ai_call failed:", e);
+  }
 }
 
 Deno.serve(async (req) => {
@@ -141,9 +178,9 @@ Deno.serve(async (req) => {
     if (!usageError && usage === -1) {
       return json({ error: `You’ve read today’s ${DAILY_SCAN_LIMIT} labels — it resets at midnight UTC. Type the name instead; that’s always free.` });
     }
-    if (usageError) console.error("bottle_usage check failed:", usageError);
+    if (usageError) { console.error("bottle_usage check failed:", usageError); return json({ error: LIMIT_CHECK_FAILED }); }
 
-    const { input, error } = await readLabel(image, mediaType);
+    const { input, error } = await readLabel(image, mediaType, supabaseClient);
     if (error) return json({ error });
     if (!input || typeof input !== "object") return json({ error: "Couldn’t read that label. Please try again." });
     if (!input.readable || !String(input.full_name || "").trim()) {

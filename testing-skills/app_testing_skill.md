@@ -65,7 +65,16 @@ harness can see: the real page **head** (its Content Security Policy — any
 violation fails), the real `sw.js` against a local server switched "offline", and
 the app's offline session + queued grocery check-offs. It runs Chrome in real time
 (service-worker installs never resolve under `--virtual-time-budget`) and has the
-pages POST results back. `testing-skills/meal_plan_share_test.py` taps 📤 Send plan with the share sheet stubbed and checks the sent page (content, fallbacks, and 360/390/430px layout; `--save FILE` writes it out to look at). `testing-skills/tiktok_embed_test.py` runs
+pages POST results back. `testing-skills/v19_behaviour_test.py` boots the app on an
+in-memory Supabase that keeps table state and logs every call: sign-in only, names
+from `my_people()`, the meal plan adding to (never wiping) the grocery list with
+Undo, Clear list and recipe delete with complete Undo (shares, plans and list entry
+come back), cook mode in the chosen units, and coach history kept per account.
+`testing-skills/edge_function_policy_test.py` reads all seven Edge Functions:
+every daily cap refuses the call if it can't be checked, recipe ideas and cocktail
+options are capped before their model call, every paid function logs its calls,
+no legacy key is read, and link import goes through the size cap and the DNS
+check. `testing-skills/meal_plan_share_test.py` taps 📤 Send plan with the share sheet stubbed and checks the sent page (content, fallbacks, and 360/390/430px layout; `--save FILE` writes it out to look at). `testing-skills/tiktok_embed_test.py` runs
 extract-recipe's TikTok embed-page parser and its retry-on-429 (stubbed fetch, no network). `testing-skills/structured_steps_test.py` runs extract-recipe's real `parseInstructions` (the no-AI structured tier): step lists, HowToSection groups, and HowToTip entries going to notes instead of the method. **Bottles** has three: `testing-skills/bottles_view_test.py` walks Bar → 🥃 Bottles and the lookup sheet against a *filtering* Supabase stub (eq/in/single/count) with identify-bottle and research-bottle replies scripted — sure match, pick-one, look-it-up polled to a result, closing mid-lookup → View toast, label photo, Add to my bar, Wrong bottle?, Bar & Pantry score chips and auto-linking — plus 360/390/430px layout; `testing-skills/research_bottle_test.py` pulls research-bottle's real code above `Deno.serve`, strips the TypeScript, and runs it against a scripted Anthropic API and an in-memory database (every vet() rule, pause_turn, the forced record call, and the writes: unverified field rows, confirm-not-duplicate, aliases, none/failed); `testing-skills/bottle_normalize_parity_test.py` checks that app.js's and research-bottle's ports of `scripts/ratings/normalize.py` agree with it on an awkward-name corpus. The ratings scripts' own checks are `testing-skills/ratings_normalize_test.py`. **Never** loop over `testing-skills/*.py`
 blindly: `extraction_compare.py` and `bottle_model_compare.py` make paid calls (both refuse without `--yes`; the
 bottle one also needs the `ALLOW_MODEL_OVERRIDE` secret on research-bottle, removed after). It's the **template** for booting the full app headless — the
@@ -88,8 +97,9 @@ Architecture recap (so you test the right boundary):
   and `recipe_shared_with_me` live in the non-exposed `private` schema; the
   `recipes` ↔ `recipe_shares` policies must not recurse.
 - **Schema/data changes** — applied by hand in the dashboard SQL editor (no
-  CLI). One-time data migrations live in `scripts/` (e.g.
-  `migrate_ingredients.py`) and are **user-run only** — see Phase 2.
+  CLI). Each release's SQL lives in `supabase/sql/` (v1.9-part1/2), and
+  `supabase/sql/export_schema.sql` prints the live schema for `supabase/schema.sql`.
+  Admin scripts in `scripts/` are **user-run only** — see Phase 2.
 - **Per-user client persistence** — everything not in Postgres lives in
   `localStorage` under `hi:{userId|"anon"}:{name}` via `userKey()` /
   `loadLocal()` / `saveLocal()`; restored **once per real sign-in** by
@@ -212,15 +222,12 @@ A human reviewer's job — be systematic, don't eyeball:
 - **Duplication:** repeated literal lists (tag taxonomy, unit tables) should
   have one source of truth. The tag list exists in both `index.html` (checkbox
   UI) and the Edge Function schema by necessity — note it, but verify they match.
-  The prep-word / vague-amount rules are deliberately mirrored in two places —
-  `app.js` (`PREP_WORDS`, `displayGroceryName`) and `scripts/migrate_ingredients.py`
-  (`PREP_WORDS`, `strip_prep`) — because one runs in the browser and the other
-  is a one-time DB migration; if you change one, change the other.
-- **One-off scripts:** `scripts/migrate_ingredients.py` is **user-run only**
-  (it needs the service-role key from the gitignored `notes.md` and writes to
-  production — the sandbox blocks prod writes). Never invoke it from here. It is
-  idempotent and dry-run by default; `scripts/__pycache__/` is build cruft and
-  should be gitignored, not committed.
+  The prep-word rules live in `app.js` (`PREP_WORDS`, `displayGroceryName`); the
+  one-time `migrate_ingredients.py` that mirrored them was retired in v1.9.
+- **Admin scripts** (`scripts/backup_recipes.py`, `scripts/ratings/`): **user-run
+  only** — they need the secret key from the gitignored `notes.md`, and the ratings
+  ones write to production. Never invoke them from here; `scripts/__pycache__/` is
+  build cruft and should be gitignored, not committed.
 
 ### Circular references & runaway loops
 

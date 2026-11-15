@@ -52,7 +52,8 @@ supabase/functions/extract-recipe/      Edge Function source (Deno/TS) for AI ex
 supabase/functions/recipe-coach/        Edge Function source (Deno/TS) for the AI recipe coach
 supabase/functions/identify-bottle/     Edge Function: reads a bottle label photo (Bottles)
 supabase/functions/research-bottle/     Edge Function: looks a bottle's scores up on the web, grows the catalog
-data/recipes.js, data/cocktails.js      pre-migration backup of the original static data (unused)
+supabase/sql/                           SQL to run in the dashboard, per release (v1.9-part1/2) + export_schema.sql
+scripts/backup_recipes.py               backup / restore (scripts/launchd/ schedules it weekly)
 scripts/ratings/                        spirits ratings catalog builder (see Spirits ratings catalog)
 testing-skills/*.py                     headless Chrome harnesses (no backend, no spend)
 ```
@@ -72,18 +73,21 @@ loads the real page head and fails on any violation.
 
 ## Accounts
 
-The sign-in screen shows **one action at a time**: it opens in **Sign in** mode,
-and a **"New here? Create an account"** link flips it to sign-up (and back). The
-password field has a **Show/Hide** toggle, and the primary button shows a spinner
-while a request is in flight.
+Accounts are **by invitation** (since v1.9). The sign-in screen only signs in;
+there is no "Create an account" link, and the Supabase project should refuse new
+sign-ups too (**Authentication → Sign In / Providers → "Allow new users to sign
+up" → off**), because every account gets its own daily allowance on the paid AI
+features and the publishable key in `config.js` is public. To add a household
+member: **Authentication → Users → Add user → Create new user** (email + a
+starting password, "Auto Confirm User" on), then they can change the password
+from **Account ▾** or with **Forgot password?**.
 
-- **Sign in** with your email + password.
-- **Create an account** (via the switch link) makes a new private recipe book for
-  a new email.
-- **Forgot password?** (sign-in mode) emails a link that returns to the app and
-  drops you straight into a **set-a-new-password** form — new password + confirm,
-  with its own Show/Hide (also how you set a password the first time on an account
-  originally created via magic link). No browser pop-up.
+- **Sign in** with your email + password. The password field has a
+  **Show/Hide** toggle, and the button shows a spinner while a request is in flight.
+- **Forgot password?** emails a link that returns to the app and drops you
+  straight into a **set-a-new-password** form — new password + confirm, with its
+  own Show/Hide (also how you set a password the first time on an account
+  originally created via magic link or invite). No browser pop-up.
 - **Account ▾** (top-right, once signed in) opens a small menu with your email,
   **Change password** (the same inline form), **⬇ Back up recipes**, and
   **Sign out**.
@@ -93,14 +97,9 @@ while a request is in flight.
 
 Errors are mapped to plain, recoverable guidance instead of raw Supabase strings:
 a wrong password points you at "reset your password"; an **unconfirmed email**
-shows a one-tap **"Resend confirmation email"** button; signing up with an email
-that already exists auto-switches you to Sign in.
-
-New-account behavior depends on the Supabase **Authentication → Providers →
-Email → "Confirm email"** setting: ON sends one confirmation email at signup;
-OFF signs the new account in immediately. The app handles both. To avoid tripping
-Supabase's rate limit, the submit / forgot / switch controls disable themselves
-while a request is in flight (one request per tap).
+shows a one-tap **"Resend confirmation email"** button. To avoid tripping
+Supabase's rate limit, the submit and forgot controls disable themselves while a
+request is in flight (one request per tap).
 
 ### ⚠️ Required URL configuration (or confirmation/reset links 404)
 
@@ -117,7 +116,7 @@ Configuration**:
   — plus `http://localhost:*/**` for local `python3 -m http.server` testing.
 
 Confirmation links already sent before fixing this keep the old (bad) redirect
-baked in — sign up again (or resend) after correcting the config.
+baked in — resend after correcting the config.
 
 ## Adding recipes
 
@@ -455,17 +454,20 @@ for planning" pill or Plan a night button (its second view is 🥃 Bottles).
   - **Upcoming 7 days** (middle) — with a recipe armed, tap a day's
     Breakfast / Lunch / Dinner **+** to schedule it there. A slot can hold more
     than one recipe; tap a meal's **×** to unschedule it.
-  - **History — last 7 days** (bottom) — past days you've shopped for; tap a
+  - **History — last 7 days** (bottom) — past days you planned; tap a
     meal to jump straight into that recipe's Cook mode.
-- Tap **🛒 Create grocery list** to roll every upcoming planned meal into the
-  normal grocery list — a recipe planned on two days has its servings summed,
-  and those days are marked "✓ purchased."
+- Tap **🛒 Add to grocery list** to add every upcoming planned meal to the
+  normal grocery list — a recipe planned on two days has its servings summed.
+  It adds: recipes already on the list, items you typed and check-offs stay, and
+  a recipe already there keeps the larger serving count (so tapping twice never
+  doubles anything). An **Undo** puts the list back as it was. Those days are
+  marked "✓ listed."
 - Tap **📤 Send plan** to send the coming week to the household as one
   self-contained page (through the share sheet, like a recipe's 📤 Send).
   It has three parts, with jump links between them:
   - **The week**: each day's meals, today first. Empty nights show as
     "Nothing planned", and each meal links to its recipe below.
-  - **Shopping list**: the same merged list "Create grocery list" would build,
+  - **Shopping list**: the same merged list "Add to grocery list" would add,
     in your aisle order with checkboxes. Staples you skip are left off, and
     pantry stock is listed as "already at home". It never touches your actual
     grocery list.
@@ -495,7 +497,7 @@ create table public.meal_plan_entries (
   plan_date date not null,
   slot text not null check (slot in ('breakfast','lunch','dinner')),
   servings int,                       -- null = use the recipe's base servings
-  purchased_at timestamptz,           -- set when a grocery list is generated for it
+  purchased_at timestamptz,           -- set when the plan is added to the grocery list ("listed")
   created_at timestamptz not null default now()
 );
 alter table public.meal_plan_entries enable row level security;
@@ -590,6 +592,15 @@ catalog of bottles and their expert scores lives in Supabase, built up over
 time from your Mac with `scripts/ratings/ratings.py`, and the
 `spirit_consensus` view blends each bottle's scores into one **0–10 score in
 0.5 steps**.
+
+Since v1.9 (`supabase/sql/v1.9-part2.sql`) `spirit_consensus` is a
+**materialized** view: the same columns and formula, computed ahead rather than on
+every read (Best rated across all categories took ~0.55 s as a live view, and the
+cost grew with the catalog). It is refreshed by `ratings.py` at the end of any run
+that wrote reviews or bottles, by `research-bottle` after a lookup writes scores
+(before it reports "found", so the app reads the new score), and hourly by
+`pg_cron` as a safety net. A materialized view has no RLS: signed-in users read it
+by grant, as before; anonymous visitors can't.
 
 **How a score is built.** Each source's raw score is converted to 0–10 through
 that source's own anchor table in `scripts/ratings/normalize.py`, because
@@ -1691,8 +1702,12 @@ Claude. Responses carry `extracted_via`: `"structured"` (JSON-LD tier-1, free),
 
 ### Observability — the `ai_calls` log
 
-One row per extraction records which provider handled it, so you can measure the
-cheap model's real-world success rate. Run once in the SQL editor:
+One row per paid model call. It started with link and text imports (which provider
+handled each, to measure the cheap model's success rate); since v1.9 every function
+that calls a model logs here — recipe ideas and recipes, pairings, the coach, label
+reads and bottle lookups — with its tokens (and web searches for lookups), so spend
+can be measured. `supabase/sql/v1.9-part1.sql` adds the token columns. The
+original setup, run once in the SQL editor:
 
 ```sql
 create table public.ai_calls (
@@ -1727,8 +1742,8 @@ revoke execute on function public.log_ai_call(text, text, boolean, int, boolean)
 grant execute on function public.log_ai_call(text, text, boolean, int, boolean) to authenticated;
 ```
 
-Like the caps, `extract-recipe` fails open if this hasn't been run — logging is
-skipped, extraction still works. Inspect the cheap-tier success rate with:
+Logging never blocks a feature: if the log can't be written, the call still
+succeeds. Inspect the cheap-tier success rate with:
 
 ```sql
 select
@@ -1739,6 +1754,26 @@ select
         / nullif(count(*) filter (where model = 'openai/gpt-oss-20b' or escalated), 0), 1) as groq_success_pct,
   round(avg(latency_ms)) as avg_ms
 from public.ai_calls;
+```
+
+What each feature costs, month by month (prices per million tokens as of
+2026-11 — update the `price` rows when they change; web searches are $0.01 each,
+the Groq tier runs on its free plan):
+
+```sql
+with price(model, inp, outp) as (values
+  ('claude-haiku-4-5-20251001', 1.0, 5.0), ('claude-sonnet-4-6', 3.0, 15.0),
+  ('claude-haiku-5-5', 0.10, 0.50), ('claude-sonnet-5-5', 2.0, 10.0),
+  ('openai/gpt-oss-20b', 0.0, 0.0))
+select date_trunc('month', c.created_at)::date as month,
+       split_part(replace(c.task, '_', ':'), ':', 1) as feature,   -- extract_url, generate:ideas, pair:wine …
+       count(*) as calls,
+       round(sum(coalesce(c.input_tokens, 0) * p.inp
+               + coalesce(c.cache_read_tokens, 0) * p.inp * 0.1
+               + coalesce(c.output_tokens, 0) * p.outp) / 1e6
+             + sum(coalesce(c.web_searches, 0)) * 0.01, 2) as usd
+from public.ai_calls c left join price p on p.model = c.model
+group by 1, 2 order by 1 desc, usd desc;
 ```
 
 ## King Soopers ordering (Kroger)
@@ -2078,9 +2113,10 @@ copies and doesn't need to change with each release.
 
 Your recipes live only in Supabase, so keep an off-Supabase copy — especially of
 anything you'd hate to lose (the handwritten family recipes you photographed).
-There are two paths; the scope of a backup is **your own recipes, kitchen + bar**
+There are two paths. The in-app backup covers **your own recipes, kitchen + bar**
 (recipes others shared with you, your meal plan, and grocery picks are not
-included — they're reconstructable).
+included — they're reconstructable); the script on your Mac (below) covers every
+recipe and, since v1.9, the rest of the household's data and the spirits catalog.
 
 **Everyday, from the app (phone-friendly).** Sign in, open **Account ▾** in the
 header, and tap **⬇ Back up recipes**. It exports your recipes as a single JSON
@@ -2095,12 +2131,20 @@ file with three options:
 **Archival + restore, from your Mac (the disaster-recovery path).**
 `scripts/backup_recipes.py` reads `SUPABASE_URL` and the **secret** key from the
 environment (`SUPABASE_SECRET_KEY`) or a `Secret Key: sb_secret_…` line in the
-gitignored `notes.md` — falling back to the legacy service-role key until Supabase
-retires it (same as `migrate_ingredients.py`).
+gitignored `notes.md` (the legacy service-role key was retired 2026-11-15).
+
+Each run writes two files to `backups/` and keeps the newest 8 of each:
+`house-index-YYYY-MM-DD.json` — every recipe, plus the household's other data
+under `"tables"` (pantry and bar, meal plan, grocery list, shares, profile
+settings) — and `catalog-YYYY-MM-DD.json.gz`, the spirits catalog (bottles,
+aliases, reviews, community medians, reports, lookups).
 
 ```bash
-# Write a faithful, timestamped snapshot to backups/house-index-YYYY-MM-DD.json
+# Write a faithful, timestamped snapshot (both files)
 python3 scripts/backup_recipes.py
+
+# Run it every Sunday at 09:00 on this Mac (launchd; logs to ~/Library/Logs/house-index-backup.log)
+bash scripts/launchd/install_backup_job.sh
 
 # Put a snapshot back. Dry-run first (prints what it would do), then --apply.
 python3 scripts/backup_recipes.py --restore backups/house-index-2026-06-22.json
@@ -2111,8 +2155,19 @@ The script snapshot keeps each recipe's `id` and owner, so a restore is exact an
 **idempotent** — a recipe whose `id` already exists is skipped, so re-running
 never duplicates. To restore an **in-app export** instead (those files carry no
 ids), add `--owner <your-user-uuid>` (find it in `notes.md`); those rows are
-inserted as new recipes owned by you and deduped by name + section. The
-`backups/` folder is gitignored — keep at least one copy somewhere off this Mac.
+inserted as new recipes owned by you and deduped by name + section. `--restore`
+puts back recipes only; the other tables in a snapshot (and the catalog file) are
+there to read, or to re-insert by hand in the SQL editor. The `backups/` folder is
+gitignored — keep at least one copy somewhere off this Mac. If the weekly job's log
+says "Operation not permitted", macOS is keeping launchd out of `~/Desktop`: allow
+that `python3` under System Settings → Privacy & Security → Full Disk Access.
+
+**The schema, in version control.** `supabase/sql/export_schema.sql` is a
+read-only query: run it in the SQL editor and save its one cell as
+`supabase/schema.sql`. That file rebuilds the database on an empty project
+(extensions, tables, RLS, functions, views, indexes, foreign keys, policies,
+triggers, grants); the numbered steps in this README stay as the history of how
+it got there. Re-export after each SQL change and commit the diff.
 
 ## Data maintenance (optional)
 

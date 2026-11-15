@@ -38,6 +38,9 @@ const MODEL_COACH = "claude-sonnet-4-6";
 // Each conversational turn — including an "emphasize this in the recipe" request —
 // counts as one. A typical troubleshooting session is a few turns.
 const DAILY_COACH_LIMIT = 20;
+// A daily cap that can't be checked refuses the paid call rather than letting it
+// through (the cap tables exist; an error here means something is wrong).
+const LIMIT_CHECK_FAILED = "Couldn’t check today’s limit — try again in a minute.";
 const ANTHROPIC_VERSION = "2023-06-01";
 // Defensive caps on conversational input so a runaway client can't send a novel.
 const MAX_MESSAGES = 24;
@@ -50,18 +53,18 @@ const MAX_RECIPE_LOOKUPS = 2;      // get_recipe calls per cook message
 const MAX_LOOKUP_CHARS = 8000;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-// Supabase is retiring the legacy anon key (by end of 2026). Prefer the new
-// publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed by name) and
-// fall back to the legacy SUPABASE_ANON_KEY, so this works before, during and
-// after the switch. Either one is only the "apikey"; the caller's own JWT in
-// the Authorization header is what RLS sees.
+// The project's publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed
+// by name, which Supabase provides to every function). It is only the "apikey";
+// the caller's own JWT in the Authorization header is what RLS sees. The legacy
+// anon key was retired 2026-11-15.
 function supabaseClientKey(): string {
   try {
     const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
     const key = typeof keys.default === "string" ? keys.default : Object.values(keys).find((v) => typeof v === "string");
     if (key) return key as string;
-  } catch { /* unset or not JSON — use the legacy key */ }
-  return Deno.env.get("SUPABASE_ANON_KEY")!;
+  } catch { /* not JSON */ }
+  console.error("SUPABASE_PUBLISHABLE_KEYS is missing — database calls will fail.");
+  return "";
 }
 const SUPABASE_CLIENT_KEY = supabaseClientKey();
 
@@ -287,6 +290,32 @@ function sanitizeMessages(raw: unknown): { role: string; content: string }[] | n
   return out;
 }
 
+// One ai_calls row per paid model call — model, outcome, latency, tokens — via
+// the log_ai_call RPC (supabase/sql/v1.9-part1.sql). Never throws: logging must
+// not break the feature. `usage` is the API's own usage block (Anthropic or
+// OpenAI-style); userId only counts when the caller runs on the secret key.
+// deno-lint-ignore no-explicit-any
+type LogExtra = { escalated?: boolean; usage?: any; webSearches?: number | null; userId?: string };
+// deno-lint-ignore no-explicit-any
+async function logAiCall(client: any, task: string, model: string, valid: boolean, latencyMs: number, extra: LogExtra = {}) {
+  const u = extra.usage || {};
+  const input = u.input_tokens ?? u.prompt_tokens;
+  try {
+    const { error } = await client.rpc("log_ai_call", {
+      p_task: task, p_model: model, p_valid: valid, p_latency_ms: Math.round(latencyMs),
+      p_escalated: !!extra.escalated,
+      p_input_tokens: input == null ? null : input + (u.cache_creation_input_tokens ?? 0),
+      p_output_tokens: u.output_tokens ?? u.completion_tokens ?? null,
+      p_cache_read_tokens: u.cache_read_input_tokens ?? null,
+      p_web_searches: extra.webSearches ?? u.server_tool_use?.web_search_requests ?? null,
+      p_user_id: extra.userId ?? null
+    });
+    if (error) console.error("log_ai_call failed:", error.message ?? error);
+  } catch (e) {
+    console.error("log_ai_call failed:", e);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -316,13 +345,12 @@ Deno.serve(async (req) => {
     const canLookup = !!kitchen?.recipes.length;
 
     // Enforce the coach's own per-user daily cap right before the paid call.
-    // Fails open (logs and proceeds) if the SQL migration hasn't been run yet.
     const { data: usageResult, error: usageError } = await supabaseClient
       .rpc("increment_coach_usage", { daily_limit: DAILY_COACH_LIMIT });
     if (!usageError && usageResult === -1) {
       return json({ error: `You’ve used today’s ${DAILY_COACH_LIMIT} AI coaching requests — it resets at midnight UTC. Try again tomorrow.` });
     }
-    if (usageError) console.error("coach_usage check failed:", usageError);
+    if (usageError) { console.error("coach_usage check failed:", usageError); return json({ error: LIMIT_CHECK_FAILED }); }
 
     // Cache the system prefix (mode prompt + the recipe JSON + the kitchen
     // context, all constant across a session's turns) together with the tool
@@ -347,6 +375,7 @@ Deno.serve(async (req) => {
     let result: any = null;
     for (let lookups = 0; ; lookups++) {
       const mayLookup = canLookup && lookups < MAX_RECIPE_LOOKUPS;
+      const started = Date.now();
       const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -369,6 +398,7 @@ Deno.serve(async (req) => {
       if (!anthropicRes.ok) {
         const errText = await anthropicRes.text();
         console.error("Anthropic API error:", anthropicRes.status, errText);
+        await logAiCall(supabaseClient, `coach:${mode}`, MODEL_COACH, false, Date.now() - started);
         const friendly = anthropicRes.status === 429
           ? "Rate limit or usage limit reached — try again later."
           : "The AI coach failed. Please try again.";
@@ -376,11 +406,14 @@ Deno.serve(async (req) => {
       }
 
       const anthropicData = await anthropicRes.json();
+      const toolBlock = anthropicData.content?.find((c: { type: string }) => c.type === "tool_use");
+      // One row per model round: a lookup round is valid when it asked for a recipe.
+      await logAiCall(supabaseClient, `coach:${mode}${toolBlock?.name === "get_recipe" ? "-lookup" : ""}`, MODEL_COACH,
+        !!toolBlock && anthropicData.stop_reason !== "max_tokens", Date.now() - started, { usage: anthropicData.usage });
       if (anthropicData.stop_reason === "max_tokens") {
         console.error("recipe-coach: response truncated at max_tokens");
         return json({ error: "That answer got too long — try narrowing the question." });
       }
-      const toolBlock = anthropicData.content?.find((c: { type: string }) => c.type === "tool_use");
       if (mayLookup && toolBlock?.name === "get_recipe") {
         const found = await lookupRecipe(supabaseClient, toolBlock.input?.name);
         convo.push({ role: "assistant", content: anthropicData.content });

@@ -64,6 +64,9 @@ const MODEL = "claude-haiku-5-5";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DAILY_LOOKUP_LIMIT = 20;
 const SITE_DAILY_LOOKUP_LIMIT = 200;
+// A daily cap that can't be checked refuses the paid call rather than letting it
+// through (the cap tables exist; an error here means something is wrong).
+const LIMIT_CHECK_FAILED = "Couldn’t check today’s limit — try again in a minute.";
 const NONE_REMEMBER_DAYS = 30;
 // A bottle checked this recently isn't checked again (0 = check on every lookup).
 const VERIFY_FRESH_DAYS = 7;
@@ -102,20 +105,22 @@ const REJECT_HOST = /(^|\.)(distiller|tastings|tequilamatchmaker|agavematchmaker
 const REJECT_SOURCE = /distiller|tastings\.com|beverage testing|tequila matchmaker|whiskybase|rum ?ratings|vivino|customer|community/i;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-// Same key handling as the other functions: the new publishable/secret keys
-// (JSON objects keyed by name) first, the legacy ones as the fallback.
-function envKey(newName: string, legacyName: string): string {
+// The project's publishable and secret keys, which Supabase provides to every
+// function as JSON objects keyed by name. The legacy anon/service-role keys were
+// retired 2026-11-15.
+function envKey(name: string): string {
   try {
-    const keys = JSON.parse(Deno.env.get(newName) || "{}");
+    const keys = JSON.parse(Deno.env.get(name) || "{}");
     const key = typeof keys.default === "string" ? keys.default : Object.values(keys).find((v) => typeof v === "string");
     if (key) return key as string;
-  } catch { /* unset or not JSON — use the legacy key */ }
-  return Deno.env.get(legacyName)!;
+  } catch { /* not JSON */ }
+  console.error(`${name} is missing — database calls will fail.`);
+  return "";
 }
-const SUPABASE_CLIENT_KEY = envKey("SUPABASE_PUBLISHABLE_KEYS", "SUPABASE_ANON_KEY");
+const SUPABASE_CLIENT_KEY = envKey("SUPABASE_PUBLISHABLE_KEYS");
 // The catalog is read-only to signed-in users; this function writes it with
-// the service key Supabase provides to every Edge Function.
-const SUPABASE_SERVICE_KEY = envKey("SUPABASE_SECRET_KEYS", "SUPABASE_SERVICE_ROLE_KEY");
+// the secret key Supabase provides to every Edge Function.
+const SUPABASE_SERVICE_KEY = envKey("SUPABASE_SECRET_KEYS");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -783,6 +788,23 @@ function vetChecks(found: Research, known: Known[]): { confirmed: string[]; chan
 // deno-lint-ignore no-explicit-any
 type Db = any;
 
+// spirit_consensus is a materialized view (supabase/sql/v1.9-part2.sql): refresh
+// it once a lookup's scores are written and before the lookup reports "found",
+// so the app reads the new score. Until part 2 runs it is a plain view and the
+// RPC doesn't exist yet, which is fine.
+async function refreshScores(admin: Db) {
+  try {
+    const { error } = await admin.rpc("refresh_spirit_consensus");
+    if (error && !/refresh_spirit_consensus|schema cache|does not exist/i.test(error.message || "")) {
+      console.error("research-bottle: couldn't refresh bottle scores", error.message);
+    }
+  } catch (e) {
+    // The reviews are already saved; a missed refresh only delays the score until
+    // the hourly one, so it never fails the lookup.
+    console.error("research-bottle: couldn't refresh bottle scores", e);
+  }
+}
+
 async function finishLookup(admin: Db, lookupId: string, patch: Record<string, unknown>) {
   const { error } = await admin.from("spirit_lookups").update({ ...patch, finished_at: new Date().toISOString() }).eq("id", lookupId);
   if (error) console.error("research-bottle: couldn't close lookup", lookupId, error.message);
@@ -853,8 +875,13 @@ async function evaluate(admin: Db, name: string, label: Record<string, unknown>,
 // bottle (productId) it's also a check of the scores the catalog already holds.
 async function runLookup(admin: Db, lookupId: string, userId: string, name: string, label: Record<string, unknown>, productId: string | null) {
   try {
+    const started = Date.now();
     const ev = await evaluate(admin, name, label, productId);
     const { found, kept, checks, want } = ev;
+    // One ai_calls row for the whole lookup (its search rounds and the record call).
+    await logAiCall(admin, "bottle:research", found.model, !found.error, Date.now() - started, {
+      usage: { input_tokens: found.tokensIn, output_tokens: found.tokensOut }, webSearches: found.searches, userId
+    });
     let detail = ev.detail;
     if (found.error) {
       await finishLookup(admin, lookupId, { status: "failed", detail });
@@ -896,6 +923,7 @@ async function runLookup(admin: Db, lookupId: string, userId: string, name: stri
     if (!kept.length) {
       if (pid) {
         await admin.from("spirit_products").update({ researched_at: now }).eq("id", pid);
+        if (checks.confirmed.length) await refreshScores(admin);   // a confirmation can lift a score's weight
         await finishLookup(admin, lookupId, { status: "found", product_id: pid, added: 0, detail });
       } else {
         await finishLookup(admin, lookupId, { status: "none", product_id: null, detail });
@@ -970,10 +998,37 @@ async function runLookup(admin: Db, lookupId: string, userId: string, name: stri
       if (error) throw new Error("couldn't save reviews: " + error.message);
     }
     if (confirmed) detail += `; ${confirmed} re-found`;
+    if (fresh.length || confirmed || checks.confirmed.length) await refreshScores(admin);
     await finishLookup(admin, lookupId, { status: "found", product_id: pid, added: fresh.length, detail });
   } catch (err) {
     console.error("research-bottle: lookup failed", lookupId, err);
     await finishLookup(admin, lookupId, { status: "failed", detail: String(err).slice(0, 300) });
+  }
+}
+
+// One ai_calls row per paid model call — model, outcome, latency, tokens — via
+// the log_ai_call RPC (supabase/sql/v1.9-part1.sql). Never throws: logging must
+// not break the feature. `usage` is the API's own usage block (Anthropic or
+// OpenAI-style); userId only counts when the caller runs on the secret key.
+// deno-lint-ignore no-explicit-any
+type LogExtra = { escalated?: boolean; usage?: any; webSearches?: number | null; userId?: string };
+// deno-lint-ignore no-explicit-any
+async function logAiCall(client: any, task: string, model: string, valid: boolean, latencyMs: number, extra: LogExtra = {}) {
+  const u = extra.usage || {};
+  const input = u.input_tokens ?? u.prompt_tokens;
+  try {
+    const { error } = await client.rpc("log_ai_call", {
+      p_task: task, p_model: model, p_valid: valid, p_latency_ms: Math.round(latencyMs),
+      p_escalated: !!extra.escalated,
+      p_input_tokens: input == null ? null : input + (u.cache_creation_input_tokens ?? 0),
+      p_output_tokens: u.output_tokens ?? u.completion_tokens ?? null,
+      p_cache_read_tokens: u.cache_read_input_tokens ?? null,
+      p_web_searches: extra.webSearches ?? u.server_tool_use?.web_search_requests ?? null,
+      p_user_id: extra.userId ?? null
+    });
+    if (error) console.error("log_ai_call failed:", error.message ?? error);
+  } catch (e) {
+    console.error("log_ai_call failed:", e);
   }
 }
 
@@ -1050,7 +1105,7 @@ Deno.serve(async (req) => {
     if (!usageError && usage === -1) {
       return json({ error: `You’ve used today’s ${DAILY_LOOKUP_LIMIT} bottle lookups — it resets at midnight UTC. Try again tomorrow.` });
     }
-    if (usageError) console.error("bottle_usage check failed:", usageError);
+    if (usageError) { console.error("bottle_usage check failed:", usageError); return json({ error: LIMIT_CHECK_FAILED }); }
 
     // 4. Claim it: one running lookup per bottle (a unique index enforces it).
     const { data: claimed, error: claimError } = await admin.from("spirit_lookups")

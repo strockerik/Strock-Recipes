@@ -32,6 +32,9 @@ const MODEL_TEXT = "claude-haiku-4-5-20251001";
 const MODEL_VISION = "claude-sonnet-4-6";
 // Soft per-user cap on paid Anthropic calls, enforced via increment_extraction_usage().
 const DAILY_EXTRACTION_LIMIT = 20;
+// A daily cap that can't be checked refuses the paid call rather than letting it
+// through (the cap tables exist; an error here means something is wrong).
+const LIMIT_CHECK_FAILED = "Couldn’t check today’s limit — try again in a minute.";
 function pickModel(type: string) {
   return type === "image" ? MODEL_VISION : MODEL_TEXT;
 }
@@ -45,18 +48,18 @@ const MAX_IMAGE_NOTE_CHARS = 300;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-// Supabase is retiring the legacy anon key (by end of 2026). Prefer the new
-// publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed by name) and
-// fall back to the legacy SUPABASE_ANON_KEY, so this works before, during and
-// after the switch. Either one is only the "apikey"; the caller's own JWT in
-// the Authorization header is what RLS sees.
+// The project's publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed
+// by name, which Supabase provides to every function). It is only the "apikey";
+// the caller's own JWT in the Authorization header is what RLS sees. The legacy
+// anon key was retired 2026-11-15.
 function supabaseClientKey(): string {
   try {
     const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
     const key = typeof keys.default === "string" ? keys.default : Object.values(keys).find((v) => typeof v === "string");
     if (key) return key as string;
-  } catch { /* unset or not JSON — use the legacy key */ }
-  return Deno.env.get("SUPABASE_ANON_KEY")!;
+  } catch { /* not JSON */ }
+  console.error("SUPABASE_PUBLISHABLE_KEYS is missing — database calls will fail.");
+  return "";
 }
 const SUPABASE_CLIENT_KEY = supabaseClientKey();
 
@@ -234,11 +237,74 @@ function parseAllowedUrl(raw: string): URL | null {
   const ip = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
   if (ip) {
     const [a, b] = [Number(ip[1]), Number(ip[2])];
-    if (a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) {
+    if (a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)) {
       return null;
     }
   }
   return url;
+}
+
+// The literal check above can't see a hostname that RESOLVES to a private
+// address (a "rebinding" name like 169.254.169.254.nip.io). Resolve the name and
+// refuse private, loopback, link-local, carrier-grade-NAT and unique-local
+// answers. If the runtime can't resolve names, the literal check stands alone
+// (logged once). A name could still change between this check and the fetch;
+// that window is small and only exposes what the redirect re-check also guards.
+function isPrivateAddress(ip: string): boolean {
+  const v4 = ip.match(/^(?:::ffff:)?(\d+)\.(\d+)\.\d+\.\d+$/i);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
+  }
+  const v6 = ip.toLowerCase();
+  return v6 === "::1" || v6 === "::" || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6);
+}
+let dnsUnavailableLogged = false;
+async function resolvesPublic(host: string): Promise<boolean> {
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return true;   // a literal address: parseAllowedUrl judged it
+  // deno-lint-ignore no-explicit-any
+  const resolve = (Deno as any).resolveDns;
+  if (typeof resolve !== "function") {
+    if (!dnsUnavailableLogged) { console.error("extract-recipe: Deno.resolveDns unavailable — hostname check only"); dnsUnavailableLogged = true; }
+    return true;
+  }
+  const lookups = await Promise.allSettled([resolve(host, "A"), resolve(host, "AAAA")]);
+  const addrs = lookups.flatMap((r) => r.status === "fulfilled" ? r.value as string[] : []);
+  const failed = lookups.filter((r) => r.status === "rejected").map((r) => String((r as PromiseRejectedResult).reason));
+  if (!addrs.length && failed.some((e) => /permission|not ?supported|notcapable/i.test(e))) {
+    if (!dnsUnavailableLogged) { console.error("extract-recipe: DNS lookups not permitted — hostname check only", failed[0]); dnsUnavailableLogged = true; }
+    return true;
+  }
+  return addrs.every((a) => !isPrivateAddress(a));   // no answers at all: let the fetch fail on its own
+}
+
+// A page is read up to MAX_PAGE_BYTES and no further, so a link serving an
+// endless or enormous body can't run the function out of memory. Only the first
+// MAX_PAGE_CHARS of the page's text is ever used; a recipe's structured data
+// sits in the page head, well inside this.
+const MAX_PAGE_BYTES = 5_000_000;
+async function readCapped(res: Response, maxBytes = MAX_PAGE_BYTES): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  if (total >= maxBytes) await reader.cancel().catch(() => {});
+  const buf = new Uint8Array(Math.min(total, maxBytes));
+  let off = 0;
+  for (const c of chunks) {
+    const n = Math.min(c.byteLength, buf.length - off);
+    buf.set(c.subarray(0, n), off);
+    off += n;
+    if (off >= buf.length) break;
+  }
+  return new TextDecoder().decode(buf);
 }
 
 // Recipe sites almost always embed schema.org/Recipe JSON-LD; when present it
@@ -806,7 +872,7 @@ function isValidRecipe(r: any): boolean {
 // exact rapid-fire case where speed matters. Only a 5xx or network/timeout blip
 // gets one retry. Returns { recipe } or { error }; the caller decides to escalate.
 // deno-lint-ignore no-explicit-any
-async function runGroq(userText: string): Promise<{ recipe?: any; error?: string }> {
+async function runGroq(userText: string): Promise<{ recipe?: any; error?: string; usage?: any }> {
   if (!GROQ_API_KEY) return { error: "groq disabled" };
   const payload = JSON.stringify({
     model: GROQ.model,
@@ -838,8 +904,8 @@ async function runGroq(userText: string): Promise<{ recipe?: any; error?: string
       if (!res.ok) { console.error("Groq error:", res.status, await res.text()); return { error: `groq ${res.status}` }; }
       const data = await res.json();
       const content = data.choices?.[0]?.message?.content;
-      if (!content) return { error: "groq empty" };
-      return { recipe: JSON.parse(content) };
+      if (!content) return { error: "groq empty", usage: data.usage };
+      return { recipe: JSON.parse(content), usage: data.usage };
     } catch (e) {
       if (attempt === 0) continue;   // timeout / network — retry once
       console.error("Groq call failed:", e);
@@ -853,7 +919,7 @@ async function runGroq(userText: string): Promise<{ recipe?: any; error?: string
 // normal escalation target and the forced-provider comparison path. Returns
 // { recipe } or { error } (friendly, already input-specific via noRecipeMessage).
 // deno-lint-ignore no-explicit-any
-async function runClaude(model: string, userContent: unknown, noRecipeMessage: string): Promise<{ recipe?: any; error?: string }> {
+async function runClaude(model: string, userContent: unknown, noRecipeMessage: string): Promise<{ recipe?: any; error?: string; usage?: any }> {
   // Strict tool use guarantees a schema-valid recipe, but only Haiku 4.5 supports
   // it here — Sonnet 4.6 (photos) does not, so the vision path stays as it was.
   const send = (strict: boolean) => fetch("https://api.anthropic.com/v1/messages", {
@@ -888,28 +954,29 @@ async function runClaude(model: string, userContent: unknown, noRecipeMessage: s
     return { error: res.status === 429 ? "Rate limit or usage limit reached — try again later." : "AI extraction failed. Please try again." };
   }
   const data = await res.json();
+  const usage = data.usage;
   // Newer models (Haiku 5.5+) run safety classifiers that can decline a request:
   // HTTP 200, stop_reason "refusal", no tool call. Say so plainly instead of the
   // generic "couldn't make a recipe" (harmless on models that never refuse).
   if (data.stop_reason === "refusal") {
     console.error("extract-recipe: request declined by the model", data.stop_details?.category ?? "");
-    return { error: "The AI declined to read that — try a different photo, link, or the pasted text." };
+    return { error: "The AI declined to read that — try a different photo, link, or the pasted text.", usage };
   }
   if (data.stop_reason === "max_tokens") {
     console.error("extract-recipe: response truncated at max_tokens");
-    return { error: "That recipe was too long to read in one go — try fewer photos or split it." };
+    return { error: "That recipe was too long to read in one go — try fewer photos or split it.", usage };
   }
   const toolBlock = data.content?.find((c: { type: string }) => c.type === "tool_use");
   const recipe = toolBlock?.input;
   if (!recipe || !recipe.name || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
-    return { error: noRecipeMessage };
+    return { error: noRecipeMessage, usage };
   }
   // Save ingredient names in canonical, store-consistent form so grocery lists and
   // King Soopers matching "just work" — same table as app.js's canonicalizeItem.
   for (const ing of recipe.ingredients) {
     if (ing && typeof ing.item === "string") ing.item = canonicalizeItem(ing.item);
   }
-  return { recipe };
+  return { recipe, usage };
 }
 
 // ---- Generalized ingredient synonym database --------------------------------
@@ -946,14 +1013,27 @@ function canonicalizeItem(name: string): string {
     .replace(/,\s*,/g, ",").replace(/(^[\s,]+)|([\s,]+$)/g, "").trim();
 }
 
-// Fire-and-forget observability: one row per operation via the log_ai_call RPC.
-// Never blocks or throws — logging must not break an extraction.
+// One ai_calls row per paid model call — model, outcome, latency, tokens — via
+// the log_ai_call RPC (supabase/sql/v1.9-part1.sql). Never throws: logging must
+// not break the feature. `usage` is the API's own usage block (Anthropic or
+// OpenAI-style); userId only counts when the caller runs on the secret key.
 // deno-lint-ignore no-explicit-any
-async function logAiCall(client: any, task: string, model: string, valid: boolean, latencyMs: number, escalated: boolean) {
+type LogExtra = { escalated?: boolean; usage?: any; webSearches?: number | null; userId?: string };
+// deno-lint-ignore no-explicit-any
+async function logAiCall(client: any, task: string, model: string, valid: boolean, latencyMs: number, extra: LogExtra = {}) {
+  const u = extra.usage || {};
+  const input = u.input_tokens ?? u.prompt_tokens;
   try {
-    await client.rpc("log_ai_call", {
-      p_task: task, p_model: model, p_valid: valid, p_latency_ms: latencyMs, p_escalated: escalated
+    const { error } = await client.rpc("log_ai_call", {
+      p_task: task, p_model: model, p_valid: valid, p_latency_ms: Math.round(latencyMs),
+      p_escalated: !!extra.escalated,
+      p_input_tokens: input == null ? null : input + (u.cache_creation_input_tokens ?? 0),
+      p_output_tokens: u.output_tokens ?? u.completion_tokens ?? null,
+      p_cache_read_tokens: u.cache_read_input_tokens ?? null,
+      p_web_searches: extra.webSearches ?? u.server_tool_use?.web_search_requests ?? null,
+      p_user_id: extra.userId ?? null
     });
+    if (error) console.error("log_ai_call failed:", error.message ?? error);
   } catch (e) {
     console.error("log_ai_call failed:", e);
   }
@@ -1077,6 +1157,10 @@ Deno.serve(async (req) => {
         return json({ error: "Instagram doesn’t let servers read posts. Copy the post’s caption and paste it here — and if the steps are only spoken in the video, jot those in too." });
       }
       const onYouTube = isYouTube(url);
+      if (!onYouTube && !(await resolvesPublic(url.hostname))) {
+        console.error("URL resolves to a private address:", url.hostname);
+        return json({ error: "That doesn’t look like a valid link." });
+      }
       let html = "";
       try {
         const pageRes = await fetch(url, {
@@ -1096,12 +1180,13 @@ Deno.serve(async (req) => {
         // landed — a public URL can 302 to localhost or a private address. Re-check
         // the final URL before reading the body, so internal pages can never be
         // fed to the model and echoed back as a "recipe".
-        if (pageRes.redirected && !parseAllowedUrl(pageRes.url)) {
+        const landed = pageRes.redirected ? parseAllowedUrl(pageRes.url) : url;
+        if (!landed || (pageRes.redirected && !(await resolvesPublic(landed.hostname)))) {
           await pageRes.body?.cancel();
           console.error("URL redirected to a disallowed address:", url.href, "->", pageRes.url);
           return json({ error: "That link redirects somewhere we can’t read — copy the recipe text and paste it instead." });
         }
-        html = await pageRes.text();
+        html = await readCapped(pageRes);
         // A non-OK status is usually a real "couldn't load it" — unless the
         // body is a bot-challenge page, which the check below handles with a
         // more specific message regardless of status code.
@@ -1226,16 +1311,15 @@ Deno.serve(async (req) => {
     const groqEligible = body.type !== "image" && !!GROQ_API_KEY && userText.length <= GROQ.maxInputChars;
 
     // Enforce the per-user daily cap right before the paid call, so requests
-    // that fail validation above never consume quota. Fails open (logs and
-    // proceeds) if the SQL migration for this hasn't been run yet. Skipped in
-    // forced comparison mode (admin-only, not user traffic).
+    // that fail validation above never consume quota. Skipped in forced
+    // comparison mode (admin-only, not user traffic).
     if (!forced) {
       const { data: usageResult, error: usageError } = await supabaseClient
         .rpc("increment_extraction_usage", { daily_limit: DAILY_EXTRACTION_LIMIT });
       if (!usageError && usageResult === -1) {
         return json({ error: `You’ve used today’s ${DAILY_EXTRACTION_LIMIT} AI recipe extractions — it resets at midnight UTC. Try again tomorrow, or add this one manually.` });
       }
-      if (usageError) console.error("extraction_usage check failed:", usageError);
+      if (usageError) { console.error("extraction_usage check failed:", usageError); return json({ error: LIMIT_CHECK_FAILED }); }
     }
 
     // Comparison mode: return the pinned provider's RAW output (no escalation),
@@ -1244,14 +1328,14 @@ Deno.serve(async (req) => {
       if (!groqEligible) return json({ error: "Groq tier not available for this input." });
       const g = await runGroq(userText);
       const valid = !!g.recipe && isValidRecipe(g.recipe);
-      await logAiCall(supabaseClient, task, GROQ.model, valid, Date.now() - started, false);
+      await logAiCall(supabaseClient, task, GROQ.model, valid, Date.now() - started, { usage: g.usage });
       if (!g.recipe) return json({ error: g.error || noRecipeMessage });
       return json({ recipe: g.recipe, extracted_via: "groq", valid });
     }
     if (forced === "claude") {
       const c = await runClaude(pickModel(body.type), userContent, noRecipeMessage);
       const valid = !!c.recipe && isValidRecipe(c.recipe);
-      await logAiCall(supabaseClient, task, pickModel(body.type), valid, Date.now() - started, false);
+      await logAiCall(supabaseClient, task, pickModel(body.type), valid, Date.now() - started, { usage: c.usage });
       if (c.error) return json({ error: c.error });
       return json({ recipe: c.recipe, extracted_via: "ai", valid });
     }
@@ -1261,17 +1345,17 @@ Deno.serve(async (req) => {
     if (groqEligible) {
       const g = await runGroq(userText);
       if (g.recipe && isValidRecipe(g.recipe)) {
-        await logAiCall(supabaseClient, task, GROQ.model, true, Date.now() - started, false);
+        await logAiCall(supabaseClient, task, GROQ.model, true, Date.now() - started, { usage: g.usage });
         return json({ recipe: g.recipe, extracted_via: "groq" });
       }
       console.error(`extract-recipe: groq miss (${g.error || "invalid output"}), escalating to Claude`);
     }
     const c = await runClaude(pickModel(body.type), userContent, noRecipeMessage);
     if (c.error) {
-      await logAiCall(supabaseClient, task, pickModel(body.type), false, Date.now() - started, groqEligible);
+      await logAiCall(supabaseClient, task, pickModel(body.type), false, Date.now() - started, { escalated: groqEligible, usage: c.usage });
       return json({ error: c.error });
     }
-    await logAiCall(supabaseClient, task, pickModel(body.type), isValidRecipe(c.recipe), Date.now() - started, groqEligible);
+    await logAiCall(supabaseClient, task, pickModel(body.type), isValidRecipe(c.recipe), Date.now() - started, { escalated: groqEligible, usage: c.usage });
     return json({ recipe: c.recipe, extracted_via: "ai" });
   } catch (err) {
     console.error("extract-recipe error:", err);

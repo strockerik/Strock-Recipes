@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Back up and restore House Index recipes — a disaster-recovery safety net.
+"""Back up and restore House Index data — a disaster-recovery safety net.
 
 The recipes (including handwritten family ones extracted from photos) live only
 in Supabase. This script gives you an off-Supabase copy and a way to put it back.
 
   backup (default)
       Dump EVERY recipe row faithfully — ids, owners, tags, ingredients, method,
-      timestamps — to backups/house-index-YYYY-MM-DD.json. A true snapshot you
-      can restore exactly. Read-only on the database; safe to run any time.
+      timestamps — to backups/house-index-YYYY-MM-DD.json, together with the rest
+      of the household's data (pantry and bar, meal plan, grocery list, shares,
+      profile settings) under "tables". The spirits catalog goes to its own
+      compressed file, backups/catalog-YYYY-MM-DD.json.gz. The last 8 of each are
+      kept. Read-only on the database; safe to run any time (weekly via
+      scripts/launchd/, see README "Archival + restore").
 
   --restore FILE
       Re-insert recipes from a backup file. DRY RUN by default (prints what it
@@ -18,12 +22,14 @@ It also restores the app's in-app "Back up" export (rows that carry no id /
 user_id): those are inserted as NEW rows owned by --owner <user-uuid>, deduped
 by name+section so a second run is a no-op.
 
+--restore puts back recipes only; the other tables in a snapshot are there to
+read or to re-insert by hand in the SQL editor.
+
 Credentials are never hard-coded — they come from the environment or the
-gitignored notes.md, exactly like migrate_ingredients.py:
+gitignored notes.md:
   SUPABASE_URL                 e.g. https://xxxx.supabase.co
-  SUPABASE_SECRET_KEY          sb_secret_… key (bypasses RLS — admin only); the
-                               legacy SUPABASE_SERVICE_ROLE_KEY still works until
-                               Supabase retires it (end of 2026)
+  SUPABASE_SECRET_KEY          sb_secret_… key (bypasses RLS — admin only), or a
+                               "Secret Key: sb_secret_…" line in notes.md
 
 Usage:
   python3 scripts/backup_recipes.py                              # write a snapshot
@@ -32,9 +38,12 @@ Usage:
   python3 scripts/backup_recipes.py --restore EXPORT --owner <uuid> --apply
 """
 import datetime
+import glob
+import gzip
 import json
 import os
 import re
+import ssl
 import sys
 import urllib.request
 import urllib.error
@@ -47,7 +56,37 @@ SELECT_COLS = (
 )
 
 
-# --- credentials (same loader as migrate_ingredients.py) ---------------------
+# The household's own data (backed up beside the recipes) and the spirits
+# catalog (its own compressed file), each with a stable order for paging.
+HOUSEHOLD_TABLES = {
+    "profiles": "id", "recipe_shares": "recipe_id,shared_with_user_id",
+    "meal_plan_entries": "id", "grocery_basket_items": "user_id,recipe_id",
+    "grocery_manual_items": "id", "grocery_checked_items": "user_id,item_key",
+    "inventory_items": "id",
+}
+CATALOG_TABLES = {
+    "rating_sources": "id", "spirit_products": "id", "spirit_aliases": "alias_norm",
+    "spirit_reviews": "id", "spirit_community": "product_id", "spirit_reports": "id",
+    "spirit_lookups": "id",
+}
+KEEP = 8   # backups of each kind kept in backups/
+
+
+def _ssl_context():
+    """python.org's macOS Python ships no CA certificates until its 'Install
+    Certificates' step runs; fall back to the bundle macOS has (a scheduled run
+    may use any Python on the machine)."""
+    ctx = ssl.create_default_context()
+    paths = ssl.get_default_verify_paths()
+    if not (paths.cafile or paths.capath) and os.path.exists("/etc/ssl/cert.pem"):
+        ctx.load_verify_locations("/etc/ssl/cert.pem")
+    return ctx
+
+
+SSL_CTX = _ssl_context()
+
+
+# --- credentials --------------------------------------------------------------
 def load_notes():
     out = {}
     path = os.path.join(os.path.dirname(__file__), "..", "notes.md")
@@ -58,8 +97,8 @@ def load_notes():
     m = re.search(r"Project URL:\s*(\S+)", text)
     if m:
         out["url"] = m.group(1)
-    # Prefer the new secret key; the legacy service-role JWT is the fallback.
-    m = re.search(r"Secret Key:\s*(sb_secret_\S+)", text) or re.search(r"Service Role:\s*(\S+)", text)
+    # The secret key; the legacy service-role key was retired 2026-11-15.
+    m = re.search(r"Secret Key:\s*(sb_secret_\S+)", text)
     if m:
         out["key"] = m.group(1)
     return out
@@ -67,8 +106,7 @@ def load_notes():
 
 notes = load_notes()
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or notes.get("url")
-SERVICE_KEY = (os.environ.get("SUPABASE_SECRET_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-               or notes.get("key"))
+SERVICE_KEY = os.environ.get("SUPABASE_SECRET_KEY") or notes.get("key")
 
 args = sys.argv[1:]
 APPLY = "--apply" in args
@@ -91,15 +129,12 @@ def sb_request(method, path, body=None):
         data=json.dumps(body).encode() if body is not None else None,
         method=method,
         headers={
-            "apikey": SERVICE_KEY,
-            # A new sb_secret_ key is not a JWT and goes in "apikey" only; the
-            # legacy service-role JWT also needs it as the bearer token.
-            **({"Authorization": "Bearer " + SERVICE_KEY} if SERVICE_KEY.startswith("eyJ") else {}),
+            "apikey": SERVICE_KEY,   # an sb_secret_ key goes in "apikey" only
             "Content-Type": "application/json",
             "Prefer": "return=minimal",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=60, context=SSL_CTX) as r:
         raw = r.read()
         return json.loads(raw) if raw else None
 
@@ -108,24 +143,68 @@ def fetch_recipes():
     return sb_request("GET", f"/rest/v1/recipes?select={SELECT_COLS}&order=name") or []
 
 
+def fetch_all(table, order, page=1000):
+    """Every row of a table, a page at a time (Supabase caps a response at 1,000).
+    None if the table isn't in this database."""
+    rows, offset = [], 0
+    while True:
+        try:
+            chunk = sb_request("GET", f"/rest/v1/{table}?select=*&order={order}&limit={page}&offset={offset}") or []
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+        rows += chunk
+        if len(chunk) < page:
+            return rows
+        offset += page
+
+
+def prune(out_dir, pattern):
+    """Keep the newest KEEP files matching pattern (names sort by date)."""
+    for old in sorted(glob.glob(os.path.join(out_dir, pattern)))[:-KEEP]:
+        os.remove(old)
+
+
 # --- backup ------------------------------------------------------------------
 def backup():
     recipes = fetch_recipes()
+    tables, counts = {}, []
+    for t, order in HOUSEHOLD_TABLES.items():
+        rows = fetch_all(t, order)
+        if rows is not None:
+            tables[t] = rows
+            counts.append(f"{len(rows)} {t}")
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     envelope = {
         "app": "The House Index",
-        "version": 1,
+        "version": 2,                       # 2: adds "tables" (v1.9); "recipes" unchanged
         "kind": "snapshot",                 # faithful: rows keep id + user_id
-        "exportedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "exportedAt": now,
         "count": len(recipes),
         "recipes": recipes,
+        "tables": tables,
     }
     out_dir = os.path.join(os.path.dirname(__file__), "..", "backups")
     os.makedirs(out_dir, exist_ok=True)
-    fname = f"house-index-{datetime.date.today().isoformat()}.json"
-    path = os.path.join(out_dir, fname)
-    with open(path, "w") as f:
+    today = datetime.date.today().isoformat()
+    fname = f"house-index-{today}.json"
+    with open(os.path.join(out_dir, fname), "w") as f:
         json.dump(envelope, f, ensure_ascii=False, indent=2)
-    print(f"Backed up {len(recipes)} recipe(s) -> backups/{fname}")
+    print(f"Backed up {len(recipes)} recipe(s)" + (f" and {', '.join(counts)}" if counts else "") + f" -> backups/{fname}")
+
+    catalog, ccounts = {}, []
+    for t, order in CATALOG_TABLES.items():
+        rows = fetch_all(t, order)
+        if rows is not None:
+            catalog[t] = rows
+            ccounts.append(f"{len(rows)} {t}")
+    cname = f"catalog-{today}.json.gz"
+    with gzip.open(os.path.join(out_dir, cname), "wt", encoding="utf-8") as f:
+        json.dump({"app": "The House Index", "kind": "catalog", "exportedAt": now, "tables": catalog}, f, ensure_ascii=False)
+    print(f"Backed up the spirits catalog ({', '.join(ccounts)}) -> backups/{cname}")
+    prune(out_dir, "house-index-*.json")
+    prune(out_dir, "catalog-*.json.gz")
 
 
 # --- restore -----------------------------------------------------------------

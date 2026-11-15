@@ -11,8 +11,8 @@
 //     meal pairings. Any option may point at one of the user's OWN saved bar
 //     recipes (free to view) or be a new invented idea. This is a two-step
 //     flow, mirroring generate-recipe's concepts->full split: mode:"options"
-//     proposes the lightweight pairings (NOT capped — some or all may just
-//     point at an existing recipe, which costs nothing further to view);
+//     proposes the lightweight pairings (own roomier cap, 60/day — some or all
+//     may just point at an existing recipe, which costs nothing further to view);
 //     mode:"develop" turns a picked INVENTED concept into a full, saveable
 //     cocktail recipe (capped). Picking an EXISTING match needs no second
 //     call at all.
@@ -53,24 +53,29 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 // shows weak results. (Haiku 5.5: see generate-recipe's note — rolled back.)
 const MODEL = "claude-haiku-4-5-20251001";
 const ANTHROPIC_VERSION = "2023-06-01";
-// Soft per-user cap on paid Anthropic calls, enforced via increment_pairing_usage().
-// The cocktail "options" step is NOT capped (mirrors generate-recipe's concepts
-// step) — only "develop" and every wine/beer call count.
+// Soft per-user cap on paid Anthropic calls, enforced via increment_pairing_usage():
+// "develop" and every wine/beer call count. The cocktail "options" step has its
+// own roomier bucket (increment_ai_usage, kind "pair_options"), like
+// generate-recipe's ideas step — it used to be uncapped.
 const DAILY_PAIRING_LIMIT = 20;
+const DAILY_PAIR_OPTIONS_LIMIT = 60;
+// A daily cap that can't be checked refuses the paid call rather than letting it
+// through (the cap tables exist; an error here means something is wrong).
+const LIMIT_CHECK_FAILED = "Couldn’t check today’s limit — try again in a minute.";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-// Supabase is retiring the legacy anon key (by end of 2026). Prefer the new
-// publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed by name) and
-// fall back to the legacy SUPABASE_ANON_KEY, so this works before, during and
-// after the switch. Either one is only the "apikey"; the caller's own JWT in
-// the Authorization header is what RLS sees.
+// The project's publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed
+// by name, which Supabase provides to every function). It is only the "apikey";
+// the caller's own JWT in the Authorization header is what RLS sees. The legacy
+// anon key was retired 2026-11-15.
 function supabaseClientKey(): string {
   try {
     const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
     const key = typeof keys.default === "string" ? keys.default : Object.values(keys).find((v) => typeof v === "string");
     if (key) return key as string;
-  } catch { /* unset or not JSON — use the legacy key */ }
-  return Deno.env.get("SUPABASE_ANON_KEY")!;
+  } catch { /* not JSON */ }
+  console.error("SUPABASE_PUBLISHABLE_KEYS is missing — database calls will fail.");
+  return "";
 }
 const SUPABASE_CLIENT_KEY = supabaseClientKey();
 
@@ -520,7 +525,10 @@ function strictify(node: any): any {
   return node;
 }
 
-async function runTool(system: string, toolName: string, schema: unknown, userText: string): Promise<{ input?: any; error?: string }> {
+// deno-lint-ignore no-explicit-any
+type LogTo = { client: any; task: string };
+async function runTool(system: string, toolName: string, schema: unknown, userText: string, log: LogTo): Promise<{ input?: any; error?: string }> {
+  const started = Date.now();
   const send = (strict: boolean) => fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -549,9 +557,12 @@ async function runTool(system: string, toolName: string, schema: unknown, userTe
   if (!res.ok) {
     const errText = await res.text();
     console.error("Anthropic API error:", res.status, errText);
+    await logAiCall(log.client, log.task, MODEL, false, Date.now() - started);
     return { error: res.status === 429 ? "Rate limit or usage limit reached — try again later." : "AI pairing failed. Please try again." };
   }
   const data = await res.json();
+  const toolInput = data.content?.find((c: { type: string }) => c.type === "tool_use")?.input;
+  await logAiCall(log.client, log.task, MODEL, !!toolInput && data.stop_reason !== "max_tokens", Date.now() - started, { usage: data.usage });
   // Newer models (Haiku 5.5+) run safety classifiers that can decline a request:
   // HTTP 200, stop_reason "refusal", no tool call. Say so plainly instead of the
   // generic "couldn't make a recipe" (harmless on models that never refuse).
@@ -563,8 +574,33 @@ async function runTool(system: string, toolName: string, schema: unknown, userTe
     console.error("pair-drink: response truncated at max_tokens");
     return { error: "That came out too long — try again." };
   }
-  const toolBlock = data.content?.find((c: { type: string }) => c.type === "tool_use");
-  return { input: toolBlock?.input };
+  return { input: toolInput };
+}
+
+// One ai_calls row per paid model call — model, outcome, latency, tokens — via
+// the log_ai_call RPC (supabase/sql/v1.9-part1.sql). Never throws: logging must
+// not break the feature. `usage` is the API's own usage block (Anthropic or
+// OpenAI-style); userId only counts when the caller runs on the secret key.
+// deno-lint-ignore no-explicit-any
+type LogExtra = { escalated?: boolean; usage?: any; webSearches?: number | null; userId?: string };
+// deno-lint-ignore no-explicit-any
+async function logAiCall(client: any, task: string, model: string, valid: boolean, latencyMs: number, extra: LogExtra = {}) {
+  const u = extra.usage || {};
+  const input = u.input_tokens ?? u.prompt_tokens;
+  try {
+    const { error } = await client.rpc("log_ai_call", {
+      p_task: task, p_model: model, p_valid: valid, p_latency_ms: Math.round(latencyMs),
+      p_escalated: !!extra.escalated,
+      p_input_tokens: input == null ? null : input + (u.cache_creation_input_tokens ?? 0),
+      p_output_tokens: u.output_tokens ?? u.completion_tokens ?? null,
+      p_cache_read_tokens: u.cache_read_input_tokens ?? null,
+      p_web_searches: extra.webSearches ?? u.server_tool_use?.web_search_requests ?? null,
+      p_user_id: extra.userId ?? null
+    });
+    if (error) console.error("log_ai_call failed:", error.message ?? error);
+  } catch (e) {
+    console.error("log_ai_call failed:", e);
+  }
 }
 
 Deno.serve(async (req) => {
@@ -614,7 +650,7 @@ Deno.serve(async (req) => {
       if (!usageError && usageResult === -1) {
         return json({ error: `You’ve used today’s ${DAILY_PAIRING_LIMIT} AI pairings — it resets at midnight UTC. Try again tomorrow.` });
       }
-      if (usageError) console.error("pairing_usage check failed:", usageError);
+      if (usageError) { console.error("pairing_usage check failed:", usageError); return json({ error: LIMIT_CHECK_FAILED }); }
 
       // If this was the "from your bar" pick, keep the finished drink to
       // what's actually in stock (plus the always-on-hand staples).
@@ -636,7 +672,7 @@ Deno.serve(async (req) => {
         `Call save_recipe once with the finished recipe.`
       ].join("\n");
 
-      const first = await runTool(COCKTAIL_DEVELOP_PROMPT, "save_recipe", RECIPE_SCHEMA, userText);
+      const first = await runTool(COCKTAIL_DEVELOP_PROMPT, "save_recipe", RECIPE_SCHEMA, userText, { client: supabaseClient, task: "pair:cocktail-develop" });
       if (first.error) return json({ error: first.error });
       let cocktailRecipe = first.input;
       if (!isRecipe(cocktailRecipe)) {
@@ -646,7 +682,7 @@ Deno.serve(async (req) => {
       const hit = allergyHit(cocktailRecipe, allergies);
       if (hit) {
         console.error("pair-drink: allergen net tripped on", hit.label, "in", hit.item, "— repairing");
-        const retry = await runTool(COCKTAIL_DEVELOP_PROMPT, "save_recipe", RECIPE_SCHEMA, allergenRepairText(userText, hit));
+        const retry = await runTool(COCKTAIL_DEVELOP_PROMPT, "save_recipe", RECIPE_SCHEMA, allergenRepairText(userText, hit), { client: supabaseClient, task: "pair:cocktail-develop-repair" });
         if (!isRecipe(retry.input) || allergyHit(retry.input, allergies)) {
           return json({ error: `That cocktail ${allergenErrorText(hit)} — please try a different option.` });
         }
@@ -656,7 +692,7 @@ Deno.serve(async (req) => {
       return json({ recipe: cocktailRecipe, ...(hit ? { allergen_repaired: hit } : {}) });
     }
 
-    // ---- Cocktail, step 1: propose 2-3 pairings (NOT capped) ----
+    // ---- Cocktail, step 1: propose 2-3 pairings (own roomier cap) ----
     if (kind === "cocktail") {
       const barRecipes = Array.isArray(body.barRecipes) ? body.barRecipes.slice(0, 40) : [];
       const barInventory = Array.isArray(body.barInventory)
@@ -687,7 +723,13 @@ Deno.serve(async (req) => {
           : `Call propose_pairings with 2-3 distinct basis:"meal" cocktail pairing options.`
       ].join("\n");
 
-      const { input, error } = await runTool(buildCocktailOptionsPrompt(hasInventory), "propose_pairings", PAIR_OPTIONS_SCHEMA, userText);
+      const { data: optionsUsed, error: optionsError } = await supabaseClient
+        .rpc("increment_ai_usage", { usage_kind: "pair_options", daily_limit: DAILY_PAIR_OPTIONS_LIMIT });
+      if (!optionsError && optionsUsed === -1) {
+        return json({ error: `You’ve asked for ${DAILY_PAIR_OPTIONS_LIMIT} sets of cocktail ideas today — it resets at midnight UTC. Try again tomorrow.` });
+      }
+      if (optionsError) { console.error("ai_usage (pair_options) check failed:", optionsError); return json({ error: LIMIT_CHECK_FAILED }); }
+      const { input, error } = await runTool(buildCocktailOptionsPrompt(hasInventory), "propose_pairings", PAIR_OPTIONS_SCHEMA, userText, { client: supabaseClient, task: "pair:cocktail-options" });
       if (error) return json({ error });
       const options = Array.isArray(input?.options)
         ? input.options
@@ -705,7 +747,7 @@ Deno.serve(async (req) => {
     if (!usageError && usageResult === -1) {
       return json({ error: `You’ve used today’s ${DAILY_PAIRING_LIMIT} AI pairings — it resets at midnight UTC. Try again tomorrow.` });
     }
-    if (usageError) console.error("pairing_usage check failed:", usageError);
+    if (usageError) { console.error("pairing_usage check failed:", usageError); return json({ error: LIMIT_CHECK_FAILED }); }
 
     const userText = [
       dishContext,
@@ -713,7 +755,7 @@ Deno.serve(async (req) => {
       `Call propose_drink_styles with 2-3 distinct ${kind} pairing options for this dish.`
     ].join("\n");
 
-    const { input, error } = await runTool(buildStylePrompt(kind), "propose_drink_styles", STYLE_PAIR_SCHEMA, userText);
+    const { input, error } = await runTool(buildStylePrompt(kind), "propose_drink_styles", STYLE_PAIR_SCHEMA, userText, { client: supabaseClient, task: `pair:${kind}` });
     if (error) return json({ error });
     const options = Array.isArray(input?.options)
       ? input.options.filter((o: { recommendation?: string; blurb?: string }) => o?.recommendation && o?.blurb).slice(0, 3)

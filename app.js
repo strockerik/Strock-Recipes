@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "1.5";
+  const APP_VERSION = "1.9";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -89,7 +89,7 @@
     collapsedInvCats = new Set(loadLocal("invCollapsed", []));
     const pending = loadLocal("pendingChecks", {});
     pendingChecks = pending && typeof pending === "object" && !Array.isArray(pending) ? pending : {};
-    pruneCoachStore(); // one global sweep of expired coach:v1:* threads
+    pruneCoachStore(); // one global sweep of expired coach threads
   }
   function maybeShowIntro() {
     introCardEl.hidden = seenIntro;
@@ -171,9 +171,6 @@
   const authSubmitBtn = $("#auth-submit");
   const authForgotBtn = $("#auth-forgot");
   const authStatusEl = $("#auth-status");
-  const authSubEl = $("#auth-sub");
-  const authSwitchBtn = $("#auth-switch");
-  const authSwitchLabel = $("#auth-switch-label");
   const accountArea = $("#account-area");
   const accountBtn = $("#account-btn");
   const accountPanel = $("#account-panel");
@@ -882,8 +879,15 @@
     return it;
   }
 
+  // Names for "Shared by …": you, plus the people you share recipes with or who
+  // share with you — from my_people() (supabase/sql/v1.9-part1.sql), because a
+  // profile is otherwise private to its owner. Until that SQL runs, the old
+  // read of every profile's name keeps attribution working.
   async function loadProfiles() {
-    const { data, error } = await supabaseClient.from("profiles").select("id, display_name");
+    let res = null;
+    try { res = await supabaseClient.rpc("my_people"); } catch { res = null; }
+    if (!res || res.error) res = await supabaseClient.from("profiles").select("id, display_name");
+    const { data, error } = res;
     if (error) return; // attribution is cosmetic — don't block the rest of loadData
     profileNames = {};
     (data || []).forEach((p) => { profileNames[p.id] = p.display_name; });
@@ -904,10 +908,17 @@
     const arr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
     return { diets: arr(raw?.diets), allergies: arr(raw?.allergies), avoid: arr(raw?.avoid) };
   }
-  async function loadMyDietPrefs() {
+  // One read of your own profile row serves all three settings (diet, grocery,
+  // King Soopers); startup used to read the same row three times. Each loader
+  // still works on its own, reading the row itself when not handed one.
+  function loadMyPrefsRow() {
+    if (!session) return Promise.resolve({ data: null, error: null });
+    return supabaseClient.from("profiles")
+      .select("diet_prefs, grocery_prefs, kroger_prefs").eq("id", session.user.id).single();
+  }
+  async function loadMyDietPrefs(rowPromise) {
     if (!session) { dietPrefs = { diets: [], allergies: [], avoid: [] }; return; }
-    const { data, error } = await supabaseClient
-      .from("profiles").select("diet_prefs").eq("id", session.user.id).single();
+    const { data, error } = await (rowPromise || loadMyPrefsRow());
     // Missing row/column or any error → keep the empty default (fail open).
     dietPrefs = error ? { diets: [], allergies: [], avoid: [] } : normalizeDietPrefs(data?.diet_prefs);
   }
@@ -929,10 +940,9 @@
       aisleOrder: Array.isArray(raw?.aisleOrder) ? raw.aisleOrder : null
     };
   }
-  async function loadMyGroceryPrefs() {
+  async function loadMyGroceryPrefs(rowPromise) {
     if (!session) { skipPantryStaples = false; aisleOrder = mergeAisleOrder(null); return; }
-    const { data, error } = await supabaseClient
-      .from("profiles").select("grocery_prefs").eq("id", session.user.id).single();
+    const { data, error } = await (rowPromise || loadMyPrefsRow());
     const prefs = error ? { skipStaples: false, aisleOrder: null } : normalizeGroceryPrefs(data?.grocery_prefs);
     skipPantryStaples = prefs.skipStaples;
     aisleOrder = mergeAisleOrder(prefs.aisleOrder);
@@ -964,10 +974,9 @@
       modality
     };
   }
-  async function loadMyKrogerPrefs() {
+  async function loadMyKrogerPrefs(rowPromise) {
     if (!session) { krogerPrefs = normalizeKrogerPrefs(null); return; }
-    const { data, error } = await supabaseClient
-      .from("profiles").select("kroger_prefs").eq("id", session.user.id).single();
+    const { data, error } = await (rowPromise || loadMyPrefsRow());
     krogerPrefs = normalizeKrogerPrefs(error ? null : data?.kroger_prefs);
   }
   async function saveKrogerPrefs() {
@@ -988,9 +997,14 @@
       .from("inventory_items").select("*").order("section").order("category");
     inventory = error ? [] : (data || []).map(mapInventoryRow);
     loadOwnedScores();
-    // A bottle that wasn't in the catalog when it was added (a lookup that found
-    // nothing, a typed name) gets linked once the catalog has it — tried once
-    // per bottle per session; a free catalog search each, no AI.
+    if (section === "cocktails") linkBarBottles();
+  }
+  // A bottle that wasn't in the catalog when it was added (a lookup that found
+  // nothing, a typed name) gets linked once the catalog has it — tried once per
+  // bottle per session, a free catalog search each, no AI. Runs when the Bar or
+  // the inventory opens rather than at every startup, where up to 20 searches
+  // competed with the first paint even for a Kitchen-only visit.
+  function linkBarBottles() {
     inventory.filter((i) => i.section === "bar" && i.name && !i.product_id && i.category !== "mixer" && !bottles.linkTried.has(i.id))
       .slice(0, 20).forEach((i) => { bottles.linkTried.add(i.id); linkInventoryToCatalog(i); });
   }
@@ -1134,49 +1148,6 @@
     }
   }
 
-  // One-time per-browser migration from the old localStorage-only grocery
-  // list to the new synced tables, so shipping this doesn't silently drop
-  // whatever's currently on someone's list. Only acts if the server-side
-  // list is empty and a legacy local one isn't; sets the flag either way so
-  // it's never attempted twice.
-  async function migrateLegacyGroceryLocalStorage() {
-    if (!session || loadLocal("groceryMigratedV2", false)) return;
-    const legacyBasket = loadLocal("basket", []);
-    const legacyManual = loadLocal("manualItems", []);
-    const legacyChecked = new Set(loadLocal("checked", []));
-    const legacySkip = loadLocal("skipStaples", null);
-    const legacyAisle = loadLocal("aisleOrder", null);
-    const hasLegacy = legacyBasket.length > 0 || legacyManual.length > 0;
-    const serverEmpty = basket.size === 0 && manualGroceryItems.length === 0;
-    if (hasLegacy && serverEmpty) {
-      try {
-        const basketRows = legacyBasket.filter(([id]) => byId[id]).map(([id, v]) => ({ recipe_id: id, servings: v.servings }));
-        if (basketRows.length) await supabaseClient.from("grocery_basket_items").upsert(basketRows, { onConflict: "user_id,recipe_id" });
-        const checkedRows = [];
-        for (const m of legacyManual) {
-          const { data, error } = await supabaseClient.from("grocery_manual_items").insert({ name: m.name }).select().single();
-          if (!error && data && legacyChecked.has(m.key)) checkedRows.push({ item_key: data.id });
-        }
-        for (const key of legacyChecked) {
-          if (!key.startsWith("manual:")) checkedRows.push({ item_key: key }); // combined-item keys carry over as-is
-        }
-        if (checkedRows.length) await supabaseClient.from("grocery_checked_items").upsert(checkedRows, { onConflict: "user_id,item_key" });
-        if (legacySkip != null || legacyAisle != null) {
-          skipPantryStaples = !!legacySkip;
-          aisleOrder = mergeAisleOrder(legacyAisle);
-          await saveGroceryPrefs();
-        }
-        await loadGroceryList();
-      } catch (e) { /* best-effort — the flag below still prevents retrying every load */ }
-    }
-    saveLocal("groceryMigratedV2", true);
-    // These legacy keys are read once above and never written again — drop the
-    // dead bytes now that grocery data lives in Supabase.
-    ["basket", "manualItems", "checked", "skipStaples", "aisleOrder"].forEach((k) => {
-      try { localStorage.removeItem(userKey(k)); } catch {}
-    });
-  }
-
   // Re-render every view that depends on data / filters / basket state.
   function refreshViews() {
     if (sortSelect.value !== sortMode) sortSelect.value = sortMode; // restore the saved order
@@ -1236,13 +1207,14 @@
     // Inventory + dietary prefs are independent reads used by the generator and
     // the inventory panel — fetch alongside recipes, don't block the list render.
     const inventoryPromise = loadInventory();
-    const dietPrefsPromise = loadMyDietPrefs();
+    const prefsRowPromise = loadMyPrefsRow();     // one read for the three settings below
+    const dietPrefsPromise = loadMyDietPrefs(prefsRowPromise);
     // Grocery list needs to be ready as soon as the app loads (the grocery bar
     // shows a count on the main view), same urgency as inventory — unlike the
     // meal plan, which only loads lazily when its tab opens.
     const groceryPromise = loadGroceryList();
-    const groceryPrefsPromise = loadMyGroceryPrefs();
-    const krogerPrefsPromise = loadMyKrogerPrefs();
+    const groceryPrefsPromise = loadMyGroceryPrefs(prefsRowPromise);
+    const krogerPrefsPromise = loadMyKrogerPrefs(prefsRowPromise);
     // The meal plan used to load only when its tab was opened, which meant the
     // tab's badge was wrong until you went looking — and we now decide whether
     // to show that tab at all from this data, so it has to be here.
@@ -1296,7 +1268,6 @@
     await groceryPrefsPromise;
     await krogerPrefsPromise;
     await mealPlanPromise;
-    await migrateLegacyGroceryLocalStorage(); // one-time, no-ops after the first run
 
     // Note: we deliberately do NOT blanket-clear basket / activeTags / openItems
     // here, so adding/editing/deleting a recipe doesn't wipe the user's grocery
@@ -1535,17 +1506,14 @@
   const authRedirectTo = () => window.location.origin + window.location.pathname;
 
   // Turn a raw Supabase auth error into plain, recoverable guidance. Returns
-  // { text, resend?, switchToSignin? } — resend offers a "Resend confirmation"
-  // button; switchToSignin flips the form to sign-in mode.
-  function friendlyAuthError(error, ctx) {
+  // { text, resend? } — resend offers a "Resend confirmation" button.
+  function friendlyAuthError(error) {
     const raw = (error && error.message) || "Something went wrong — try again.";
     const m = raw.toLowerCase();
     if (m.includes("invalid login credentials"))
       return { text: "That email or password didn’t match. Check them, or reset your password." };
     if (m.includes("email not confirmed"))
       return { text: "Your email isn’t confirmed yet — check your inbox for the link.", resend: true };
-    if (ctx === "signup" && (m.includes("already registered") || m.includes("already been registered") || m.includes("user already")))
-      return { text: "You already have an account — switched you to Sign in.", switchToSignin: true };
     if (m.includes("rate limit") || m.includes("too many") || m.includes("for security purposes"))
       return { text: "Too many tries — wait a moment, then try again." };
     return { text: raw };
@@ -1563,7 +1531,6 @@
       btn.addEventListener("click", () => resendConfirmation(email, btn));
       authStatusEl.appendChild(btn);
     }
-    if (result.switchToSignin) setAuthMode("signin", true);
   }
 
   async function resendConfirmation(email, btn) {
@@ -1580,26 +1547,7 @@
     }
   }
 
-  // --- Sign in / Create account: one form, two modes ---
-  let authMode = "signin";
-  const AUTH_COPY = {
-    signin: { submit: "Sign in", busy: "Signing in…", sub: "Sign in to view your recipes.",
-              switchLabel: "New here?", switchBtn: "Create an account", pw: "current-password" },
-    signup: { submit: "Create account", busy: "Creating account…", sub: "Create an account to start your recipe book.",
-              switchLabel: "Have an account?", switchBtn: "Sign in", pw: "new-password" },
-  };
-
-  function setAuthMode(mode, keepStatus) {
-    authMode = mode === "signup" ? "signup" : "signin";
-    const c = AUTH_COPY[authMode];
-    authSubmitBtn.textContent = c.submit;
-    authSubEl.textContent = c.sub;
-    authSwitchLabel.textContent = c.switchLabel;
-    authSwitchBtn.textContent = c.switchBtn;
-    authPasswordEl.setAttribute("autocomplete", c.pw);
-    authForgotBtn.hidden = authMode !== "signin";
-    if (!keepStatus) authStatusEl.textContent = "";
-  }
+  // --- Sign in (accounts are by invitation; there is no sign-up) ---
 
   // One auth request at a time. Pressing Enter twice (or double-tapping) would
   // otherwise fire two requests and trip Supabase's rate limit, locking the user
@@ -1610,9 +1558,8 @@
     authBusy = busy;
     authSubmitBtn.disabled = busy;
     authForgotBtn.disabled = busy;
-    authSwitchBtn.disabled = busy;
-    if (busy) authSubmitBtn.innerHTML = '<span class="spinner btn-spin"></span>' + AUTH_COPY[authMode].busy;
-    else authSubmitBtn.textContent = AUTH_COPY[authMode].submit;
+    if (busy) authSubmitBtn.innerHTML = '<span class="spinner btn-spin"></span>Signing in…';
+    else authSubmitBtn.textContent = "Sign in";
   }
 
   // Password show/hide — works for every [data-pw-toggle] field (gate + reset)
@@ -1628,12 +1575,7 @@
     t.textContent = reveal ? "Hide" : "Show";
   });
 
-  authSwitchBtn.addEventListener("click", () => {
-    if (authBusy) return;
-    setAuthMode(authMode === "signin" ? "signup" : "signin");
-  });
-
-  // Submit → sign in or create account depending on the current mode
+  // Submit → sign in
   authForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (authBusy) return;
@@ -1643,25 +1585,12 @@
       authStatusEl.textContent = "Enter an email and password first.";
       return;
     }
-    if (authMode === "signup" && password.length < 8) {
-      authStatusEl.textContent = "Password must be at least 8 characters.";
-      return;
-    }
     setAuthBusy(true);
-    authStatusEl.textContent = AUTH_COPY[authMode].busy;
+    authStatusEl.textContent = "Signing in…";
     try {
-      if (authMode === "signup") {
-        const { data, error } = await supabaseClient.auth.signUp({
-          email, password, options: { emailRedirectTo: authRedirectTo() }
-        });
-        if (error) showAuthStatus(friendlyAuthError(error, "signup"), email);
-        else if (data.session) authStatusEl.textContent = "Account created!"; // confirmation off
-        else authStatusEl.textContent = `Account created — check ${email} to confirm, then sign in.`;
-      } else {
-        const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-        if (error) showAuthStatus(friendlyAuthError(error, "signin"), email);
-        // On success, onAuthStateChange takes over (hides the gate, loads data).
-      }
+      const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+      if (error) showAuthStatus(friendlyAuthError(error), email);
+      // On success, onAuthStateChange takes over (hides the gate, loads data).
     } finally {
       setAuthBusy(false);
     }
@@ -1901,7 +1830,7 @@
     const outCount = items.filter((i) => i.status === "out").length;
     invOutFilterBtn.hidden = !items.length;
     invOutFilterBtn.disabled = outCount === 0 && !invOutOnly;
-    invOutFilterBtn.textContent = `🛒 Only what's out${outCount ? ` · ${outCount}` : ""}`;
+    invOutFilterBtn.textContent = `Only what's out${outCount ? ` · ${outCount}` : ""}`;
     invOutFilterBtn.setAttribute("aria-pressed", String(invOutOnly));
     if (!items.length) {
       inventoryContent.innerHTML = `<p class="inv-empty">Nothing here yet — add what you have on hand above.</p>`;
@@ -1958,6 +1887,7 @@
   }
   function setInvSection(sec) { invSection = sec; renderInventoryPanel(); }
   function openInventoryPanel() {
+    linkBarBottles();
     invSection = section === "cocktails" ? "bar" : "pantry";
     invOutOnly = false; // always open on the full list — a sticky filter reads as "my inventory vanished"
     renderInventoryPanel();
@@ -2877,7 +2807,6 @@
   });
   modeBottlesBtn.addEventListener("click", () => setViewMode("bottles"));
 
-  setAuthMode("signin"); // default the gate to sign-in
 
   // ---------- Filtering ----------
   function activePool() {
@@ -3980,9 +3909,12 @@
   });
   $("#place-sheet-close").addEventListener("click", closePlaceSheet);
 
-  // Build a grocery list from the upcoming planned week: sum each recipe's
-  // servings across the days it appears, load that into the basket, and reuse
-  // the whole grocery engine. Mark those entries purchased.
+  // Add the coming week's plan to the grocery list: each recipe's servings summed
+  // across the days it appears. It ADDS — other recipes, items added by hand and
+  // check-offs stay as they are — and a recipe already on the list keeps the
+  // larger of its two serving counts, so pressing it twice never doubles
+  // anything. Undo puts the list back exactly as it was. The planned meals are
+  // marked as listed (the purchased_at column, shown as "listed").
   async function groceryFromPlan() {
     const start = isoDate(midnight());
     const end = isoDate(addDays(midnight(), 6));
@@ -3990,33 +3922,63 @@
     if (!upcoming.length) { toast("No upcoming meals planned yet."); return; }
     const totals = planServingTotals(upcoming);
     if (!totals.size) { toast("Those planned recipes aren't available."); return; }
-    // Full server-side replace: wipe the existing basket + check-offs, then
-    // write the new one — manual items are deliberately left untouched.
-    if (session) {
-      const [{ error: e1 }, { error: e2 }] = await Promise.all([
-        supabaseClient.from("grocery_basket_items").delete().eq("user_id", session.user.id),
-        supabaseClient.from("grocery_checked_items").delete().eq("user_id", session.user.id)
-      ]);
-      const rows = [...totals.entries()].map(([recipe_id, servings]) => ({ recipe_id, servings }));
-      const { error: e3 } = await supabaseClient.from("grocery_basket_items").insert(rows);
-      if (e1 || e2 || e3) { toast("Couldn't rebuild your grocery list — try again.", true); return; }
+    const before = new Map([...basket].map(([id, v]) => [id, { ...v }]));
+    const rows = [];
+    totals.forEach((servings, id) => {
+      const have = before.get(id);
+      if (!have || servings > (Number(have.servings) || 0)) rows.push({ recipe_id: id, servings });
+    });
+    if (session && rows.length) {
+      const { error } = await supabaseClient.from("grocery_basket_items")
+        .upsert(rows, { onConflict: "user_id,recipe_id" });
+      if (error) { toastError("Couldn\u2019t add the plan to your grocery list", error); return; }
     }
-    basket.clear();
-    checkedGroceryItems.clear();
-    totals.forEach((s, id) => basket.set(id, { servings: s }));
+    rows.forEach((r) => basket.set(r.recipe_id, { servings: r.servings }));
     const now = new Date().toISOString();
-    const ids = upcoming.map((e) => e.id);
-    await supabaseClient.from("meal_plan_entries").update({ purchased_at: now }).in("id", ids);
-    upcoming.forEach((e) => { e.purchasedAt = now; });
+    const marked = upcoming.filter((e) => !e.purchasedAt);
+    if (session && marked.length) {
+      const { error: markError } = await supabaseClient.from("meal_plan_entries")
+        .update({ purchased_at: now }).in("id", marked.map((e) => e.id));
+      if (markError) console.error("Couldn't mark the planned meals as listed:", markError.message);
+      else marked.forEach((e) => { e.purchasedAt = now; });
+    }
     setViewMode("recipes");
     renderList();
     renderGroceryCount();
     renderGroceryPanel();
     groceryPanel.hidden = false;
+    if (!rows.length) { toast("Everything planned is already on your grocery list."); return; }
+    const added = rows.filter((r) => !before.has(r.recipe_id)).length;
+    const raised = rows.length - added;
+    const msg = [added ? `Added ${added} recipe${added === 1 ? "" : "s"}` : "",
+      raised ? `${added ? "raised" : "Raised"} servings on ${raised}` : ""].filter(Boolean).join(", ") + " from the plan";
+    toastAction(msg, "Undo", () => undoGroceryFromPlan(rows, before, marked.filter((e) => e.purchasedAt === now)));
+  }
+
+  async function undoGroceryFromPlan(rows, before, marked) {
+    const removed = rows.filter((r) => !before.has(r.recipe_id)).map((r) => r.recipe_id);
+    const restored = rows.filter((r) => before.has(r.recipe_id))
+      .map((r) => ({ recipe_id: r.recipe_id, servings: before.get(r.recipe_id).servings }));
+    if (session) {
+      const results = await Promise.all([
+        removed.length ? supabaseClient.from("grocery_basket_items").delete().in("recipe_id", removed) : { error: null },
+        restored.length ? supabaseClient.from("grocery_basket_items").upsert(restored, { onConflict: "user_id,recipe_id" }) : { error: null },
+        marked.length ? supabaseClient.from("meal_plan_entries").update({ purchased_at: null }).in("id", marked.map((e) => e.id)) : { error: null }
+      ]);
+      const failed = results.find((r) => r.error);
+      if (failed) { toastError("Couldn\u2019t undo that", failed.error); await loadGroceryList(); }
+    }
+    removed.forEach((id) => basket.delete(id));
+    restored.forEach((r) => basket.set(r.recipe_id, { servings: r.servings }));
+    marked.forEach((e) => { e.purchasedAt = null; });
+    renderList();
+    renderGroceryCount();
+    renderGroceryPanel();
+    toast("Grocery list put back");
   }
 
   // ---------- Send the week's plan outside the app ----------
-  // The coming 7 days (the same window as Create grocery list) as one
+  // The coming 7 days (the same window as "Add to grocery list") as one
   // self-contained page for the household, in the same design language as a
   // sent recipe. It answers the three things a family asks of a plan:
   //   - what's on each night        -> the week at a glance (gaps shown, so
@@ -4395,7 +4357,7 @@
       </div>`;
     }).join("");
     return `<div class="mp-day">
-      <div class="mp-day-head"><span class="mp-day-wd">${wd}</span> <span class="mp-day-md">${md}</span>${dayPurchased ? `<span class="mp-purchased">\u2713 purchased</span>` : ""}</div>
+      <div class="mp-day-head"><span class="mp-day-wd">${wd}</span> <span class="mp-day-md">${md}</span>${dayPurchased ? `<span class="mp-purchased">\u2713 listed</span>` : ""}</div>
       ${slotsHtml}
     </div>`;
   }
@@ -4430,7 +4392,7 @@
           <h3 class="detail-h">Upcoming 7 days</h3>
           <div class="mp-head-actions">
             <button id="mp-send-plan" class="ghost-btn small" title="Send this week's plan as a page: the meals, one shopping list, and each recipe's ingredients"${upcomingCount ? "" : " disabled"}>\ud83d\udce4 Send plan</button>
-            <button id="mp-make-grocery" class="solid-btn small"${upcomingCount ? "" : " disabled"}>\ud83d\uded2 Create grocery list</button>
+            <button id="mp-make-grocery" class="solid-btn small"${upcomingCount ? "" : " disabled"}>\ud83d\uded2 Add to grocery list</button>
           </div>
         </div>
         <div class="mp-view-toggle" role="group" aria-label="Planner view">
@@ -4463,7 +4425,7 @@
     const serv = e.servings || chosenServings(it);
     const weekday = new Date().toLocaleDateString(undefined, { weekday: "long" });
     const meta = [it.subtitle, `${serv} ${it.servingsLabel}`,
-      basket.has(it.id) ? "on your grocery list" : e.purchasedAt ? "shopped for" : ""].filter(Boolean);
+      basket.has(it.id) ? "on your grocery list" : e.purchasedAt ? "on this week\u2019s list" : ""].filter(Boolean);
     const also = entries.slice(1).map((x) => byId[x.recipeId].name);
     tonightEl.innerHTML = `
       <p class="tonight-kicker">Tonight \u00B7 ${esc(weekday)}</p>
@@ -5318,40 +5280,64 @@
 
   // Some of these recipes exist nowhere else: photographed off a handwritten
   // card, typed out once from memory, pulled from a video that has since gone
-  // private. A native confirm() is the one dialog people dismiss on reflex, so
-  // the real protection is keeping the row in hand and offering it back. The
-  // confirm can then stop threatening and just say what's about to happen.
+  // private. So a delete keeps everything in hand and Undo puts ALL of it back:
+  // the recipe under its own id (so coach history and the plan tray, which are
+  // keyed by it, still match), who it was shared with, its planned meals and
+  // its grocery-list entry — the rows the database removes with it (on delete
+  // cascade). A complete undo replaces the old "Delete?" dialog, which people
+  // dismissed on reflex anyway. Other people's plans and lists that held a
+  // shared copy can't be read back, so those stay gone. The "save for
+  // planning" tray (this device) comes back too.
   async function deleteRecipe(item) {
-    if (!confirm(`Delete \u201c${item.name}\u201d? You\u2019ll have a few seconds to undo.`)) return;
-    // toBackupRow omits user_id (it's an export shape), and an insert needs it —
-    // copyToMyBook adds it the same way. created_at is carried over too, so an
-    // undo puts the recipe back where it was in a "Newest" sort rather than
-    // sending it to the top. The id is deliberately NOT reused: this is a fresh
-    // row, which is why the message says "restored".
-    const restoreRow = {
-      ...toBackupRow(item),
-      user_id: session.user.id,
-      created_at: item.createdAt || undefined
+    const id = item.id;
+    const [recipeRes, sharesRes, planRes, basketRes] = await Promise.all([
+      supabaseClient.from("recipes").select("*").eq("id", id).maybeSingle(),
+      supabaseClient.from("recipe_shares").select("*").eq("recipe_id", id),
+      supabaseClient.from("meal_plan_entries").select("*").eq("recipe_id", id),
+      supabaseClient.from("grocery_basket_items").select("*").eq("recipe_id", id)
+    ]);
+    const snapshot = {
+      recipe: recipeRes.data || null,
+      shares: sharesRes.error ? [] : (sharesRes.data || []),
+      plan: planRes.error ? [] : (planRes.data || []),
+      basket: basketRes.error ? [] : (basketRes.data || []),
+      inTray: mealPlanTray.has(id)
     };
-    const { error } = await supabaseClient.from("recipes").delete().eq("id", item.id);
+    const { error } = await supabaseClient.from("recipes").delete().eq("id", id);
     if (error) {
       toastError("Couldn\u2019t delete that recipe", error);
       return;
     }
-    openItems.delete(item.id);
-    basket.delete(item.id);
-    mealPlanTray.delete(item.id);
+    openItems.delete(id);
+    basket.delete(id);
+    mealPlanTray.delete(id);
     saveLocal("mealTray", [...mealPlanTray]);
     await loadData();
-    // Restoring re-inserts the recipe itself. Anything the database cascaded
-    // away with it (a grocery-basket entry, a planned meal) doesn't come back,
-    // which is why the message is "restored" rather than "undeleted".
-    toastAction(`\u201c${item.name}\u201d deleted`, "Undo", async () => {
-      const { error: reErr } = await supabaseClient.from("recipes").insert(restoreRow);
-      if (reErr) { toastError("Couldn\u2019t put that recipe back", reErr); return; }
-      toast("Recipe restored");
-      await loadData();
-    });
+    toastAction(`\u201c${item.name}\u201d deleted`, "Undo", () => undoDeleteRecipe(item, snapshot));
+  }
+
+  async function undoDeleteRecipe(item, snapshot) {
+    // The row exactly as it was; if the database won't take it back verbatim,
+    // the portable shape under the same id (toBackupRow omits id and user_id).
+    let { error } = snapshot.recipe
+      ? await supabaseClient.from("recipes").insert(snapshot.recipe)
+      : { error: { message: "no snapshot" } };
+    if (error) {
+      ({ error } = await supabaseClient.from("recipes").insert({
+        ...toBackupRow(item), id: item.id, user_id: session.user.id, created_at: item.createdAt || undefined
+      }));
+    }
+    if (error) { toastError("Couldn\u2019t put that recipe back", error); return; }
+    const followers = await Promise.all([
+      snapshot.shares.length ? supabaseClient.from("recipe_shares").insert(snapshot.shares) : { error: null },
+      snapshot.plan.length ? supabaseClient.from("meal_plan_entries").insert(snapshot.plan) : { error: null },
+      snapshot.basket.length ? supabaseClient.from("grocery_basket_items").insert(snapshot.basket) : { error: null }
+    ]);
+    const missed = followers.filter((r) => r.error).length;
+    if (snapshot.inTray) { mealPlanTray.add(item.id); saveLocal("mealTray", [...mealPlanTray]); }
+    await loadData();
+    if (missed) toast("Recipe restored \u2014 but its shares, plan or list entry didn\u2019t all come back", true);
+    else toast("Recipe restored");
   }
 
   // ---------- AI recipe import ----------
@@ -5980,19 +5966,26 @@
     tweak: "Change it, scale it, or do the math — e.g. “it’s too sweet”, “scale to 8 limes”, or “how much for 12 servings?”"
   };
 
-  // --- 24h conversation persistence (per recipe, per mode) ---
-  const COACH_STORE_PREFIX = "coach:v1:";
+  // --- 24h conversation persistence (per account, per recipe, per mode) ---
+  // Kept under the signed-in account (userKey → hi:<user>:coach:<recipe>), so on
+  // a shared device one person's coaching never shows up for another — a shared
+  // recipe has the same id for both. The pre-1.9 keys (coach:v1:<recipe>, tied to
+  // no account) are dropped by the sweep; they'd have expired within 24h anyway.
+  const LEGACY_COACH_PREFIX = "coach:v1:";
+  const COACH_KEY_RE = /^hi:[^:]+:coach:/;
   const COACH_TTL_MS = 24 * 60 * 60 * 1000;
   const COACH_MAX_STORED_MESSAGES = 40;
-  const coachStoreKey = (recipeId) => COACH_STORE_PREFIX + recipeId;
+  const coachStoreKey = (recipeId) => userKey("coach:" + recipeId);
 
   // Startup sweep: loadCoachStore only prunes a thread when its own recipe's
   // panel reopens, so a thread coached once and never revisited lingers past
-  // its 24h TTL. Walk every coach:v1:* key once at sign-in and drop expired
-  // modes (removing the key entirely when nothing survives).
+  // its 24h TTL. Walk every account's coach keys once at sign-in and drop
+  // expired modes (removing the key entirely when nothing survives).
   function pruneCoachStore() {
     try {
-      const keys = Object.keys(localStorage).filter((k) => k.startsWith(COACH_STORE_PREFIX));
+      Object.keys(localStorage).filter((k) => k.startsWith(LEGACY_COACH_PREFIX))
+        .forEach((k) => localStorage.removeItem(k));
+      const keys = Object.keys(localStorage).filter((k) => COACH_KEY_RE.test(k));
       for (const key of keys) {
         let store;
         try { store = JSON.parse(localStorage.getItem(key) || "") || {}; }
@@ -6558,6 +6551,7 @@
         b.setAttribute("aria-selected", on);
       });
       document.body.classList.toggle("section-cocktails", section === "cocktails");
+      if (section === "cocktails") linkBarBottles();
       activeTags.clear();
       if ((viewMode === "bottles" && section !== "cocktails") || (viewMode === "mealplan" && section === "cocktails")) setViewMode("recipes");
       refreshViews();
@@ -6857,7 +6851,8 @@
     cookStepIngredients.hidden = !matches.length;
     if (!matches.length) return;
     cookStepIngredients.innerHTML = matches.map((ing) => {
-      const amtStr = ing.scaled == null ? "" : fmtAmount(ing.scaled) + (ing.unit ? " " + displayUnit(ing.unit) : "");
+      const l = ingLine(ing, true, unitSystem, cookItem.section === "bar");   // the recipe's chosen units
+      const amtStr = ing.scaled == null ? "" : l.amtStr;
       return `<span class="cook-step-ing">${esc([amtStr, displayGroceryName(ing.item)].filter(Boolean).join(" "))}</span>`;
     }).join("");
   }
@@ -7015,7 +7010,9 @@
         ${run.group ? `<h4 class="sub-group">${esc(run.group)}</h4>` : ""}
         <ul class="ing-list">
           ${run.items.map((ing) => {
-            const l = ingLine(ing, true);
+            // Same units as the open recipe: the Original | US | Metric toggle
+            // carries into cook mode (it used to snap back to the original).
+            const l = ingLine(ing, true, unitSystem, cookItem.section === "bar");
             const key = normalizeItemName(ing.item);
             const checked = cookCheckedIngs.has(key);
             return `<li class="ing-row${checked ? " is-checked" : ""}" data-ing="${esc(key)}"><span class="ing-amt">${esc(l.amtStr)}</span><span>${esc(l.item)}</span></li>`;
@@ -7186,21 +7183,60 @@
   $("#clear-grocery").addEventListener("click", async () => {
     const n = basket.size + manualGroceryItems.length;
     if (!n) return;
-    if (!confirm("Clear your grocery list? This takes off every recipe and added item.")) return;
+    // No "are you sure?": the list is kept in hand and Undo puts all of it back,
+    // check-offs included.
+    let saved = null;
     if (session) {
+      const [b, m, c] = await Promise.all([
+        supabaseClient.from("grocery_basket_items").select("*").eq("user_id", session.user.id),
+        supabaseClient.from("grocery_manual_items").select("*").eq("user_id", session.user.id),
+        supabaseClient.from("grocery_checked_items").select("*").eq("user_id", session.user.id)
+      ]);
+      if (b.error || m.error || c.error) { toast("Couldn't clear the list — try again.", true); return; }
+      saved = { basket: b.data || [], manual: m.data || [], checked: c.data || [] };
       const [{ error: e1 }, { error: e2 }, { error: e3 }] = await Promise.all([
         supabaseClient.from("grocery_basket_items").delete().eq("user_id", session.user.id),
         supabaseClient.from("grocery_manual_items").delete().eq("user_id", session.user.id),
         supabaseClient.from("grocery_checked_items").delete().eq("user_id", session.user.id)
       ]);
-      if (e1 || e2 || e3) { toast("Couldn't clear the list — try again.", true); return; }
+      if (e1 || e2 || e3) { toast("Couldn't clear the list — try again.", true); await loadGroceryList(); return; }
     }
+    const local = {
+      basket: new Map([...basket].map(([id, v]) => [id, { ...v }])),
+      manual: manualGroceryItems.slice(),
+      checked: new Set(checkedGroceryItems)
+    };
     basket.clear();
     manualGroceryItems = [];
     checkedGroceryItems.clear();
     renderList();
     renderGroceryCount();
     if (!groceryPanel.hidden) renderGroceryPanel();
+    toastAction(`Grocery list cleared (${n} item${n === 1 ? "" : "s"})`, "Undo", async () => {
+      if (saved) {
+        const results = await Promise.all([
+          saved.basket.length ? supabaseClient.from("grocery_basket_items").insert(saved.basket) : { error: null },
+          saved.manual.length ? supabaseClient.from("grocery_manual_items").insert(saved.manual) : { error: null },
+          saved.checked.length ? supabaseClient.from("grocery_checked_items").insert(saved.checked) : { error: null }
+        ]);
+        const failed = results.find((r) => r.error);
+        if (failed) {
+          toastError("Couldn\u2019t put the whole list back", failed.error);
+          await loadGroceryList();
+          renderList();
+          renderGroceryCount();
+          if (!groceryPanel.hidden) renderGroceryPanel();
+          return;
+        }
+      }
+      local.basket.forEach((v, id) => basket.set(id, v));
+      manualGroceryItems = local.manual;
+      local.checked.forEach((k) => checkedGroceryItems.add(k));
+      renderList();
+      renderGroceryCount();
+      if (!groceryPanel.hidden) renderGroceryPanel();
+      toast("Grocery list put back");
+    });
   });
 
   // Grocery panel: manual item add/remove
@@ -7526,7 +7562,7 @@
     krogerReviewList.innerHTML = parts.join("");
 
     krogerSendCartBtn.hidden = sendable === 0;
-    krogerSendCartBtn.textContent = `🛒 Add ${sendable} item${sendable === 1 ? "" : "s"} to cart`;
+    krogerSendCartBtn.textContent = `Add ${sendable} item${sendable === 1 ? "" : "s"} to cart`;
     krogerSendCartBtn.disabled = false;
     krogerOpenStore.hidden = true;
     // The match report is a debugging artifact — hidden from the cook by default,
@@ -7925,9 +7961,16 @@
     return true;
   }
   // Reference-counted, so closing an inner sheet doesn't unlock the page while
-  // an outer one is still open.
+  // an outer one is still open. Everything behind the top sheet is also made
+  // inert — the page and any sheet underneath — so Tab, VoiceOver and taps stay
+  // in the sheet (aria-modal="true" alone doesn't stop a keyboard). Toasts live
+  // outside these regions, so an Undo can still be pressed.
+  const PAGE_REGIONS = [".site-header", "main", ".site-footer"].map((s) => document.querySelector(s)).filter(Boolean);
   function syncBodyScrollLock() {
     document.body.style.overflow = openSheets.length ? "hidden" : "";
+    const top = openSheets[openSheets.length - 1] || null;
+    PAGE_REGIONS.forEach((el) => { el.inert = !!top; });
+    SHEET_CLOSERS.forEach((_, el) => { el.inert = !!top && el !== top && openSheets.includes(el); });
   }
   function onSheetOpened(el) {
     if (openSheets.includes(el)) return;

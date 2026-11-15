@@ -51,8 +51,8 @@ Every command that writes is a DRY RUN unless you pass --apply.
   reports                    "Wrong bottle?" reports from the app's score card.
 
 Credentials (never hard-coded), first match wins:
-  SUPABASE_URL + SUPABASE_SECRET_KEY / SUPABASE_SERVICE_ROLE_KEY in the environment,
-  then the gitignored notes.md ("Project URL:", "Secret Key:" / "Service Role:"),
+  SUPABASE_URL + SUPABASE_SECRET_KEY in the environment,
+  then the gitignored notes.md ("Project URL:", "Secret Key: sb_secret_…"),
   then the gitignored .env.local.
 
 Politeness: robots.txt is honoured, at most one request every 4 s per host, an
@@ -111,13 +111,14 @@ SSL_CTX = _ssl_context()
 # Credentials + Supabase REST
 # =============================================================================
 def _load_creds():
+    # The secret key (sb_secret_…); the legacy service-role key was retired 2026-11-15.
     url = os.environ.get("SUPABASE_URL")
-    key = (os.environ.get("SUPABASE_SECRET_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY"))
+    key = os.environ.get("SUPABASE_SECRET_KEY")
     try:
         text = open(os.path.join(REPO, "notes.md")).read()
         m = re.search(r"Project URL:\s*(\S+)", text)
         url = url or (m.group(1) if m else None)
-        m = re.search(r"Secret Key:\s*(sb_secret_\S+)", text) or re.search(r"Service Role:\s*(\S+)", text)
+        m = re.search(r"Secret Key:\s*(sb_secret_\S+)", text)
         key = key or (m.group(1) if m else None)
     except OSError:
         pass
@@ -127,7 +128,7 @@ def _load_creds():
             v = v.strip().strip('"').strip("'")
             if k == "SUPABASE_URL":
                 url = url or v
-            elif k in ("SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY"):
+            elif k == "SUPABASE_SECRET_KEY":
                 key = key or v
     except OSError:
         pass
@@ -137,15 +138,18 @@ def _load_creds():
 
 
 SB_URL = SB_KEY = None
+# Set when a run writes reviews or bottles; main() then refreshes the precomputed
+# bottle scores once (spirit_consensus is a materialized view since v1.9).
+CATALOG_CHANGED = False
 
 
 def sb(method, path, body=None, prefer="return=representation"):
-    global SB_URL, SB_KEY
+    global SB_URL, SB_KEY, CATALOG_CHANGED
     if SB_URL is None:
         SB_URL, SB_KEY = _load_creds()
+    if method != "GET" and re.match(r"/rest/v1/spirit_(reviews|products)\b", path):
+        CATALOG_CHANGED = True
     headers = {"apikey": SB_KEY, "Content-Type": "application/json", "Prefer": prefer}
-    if SB_KEY.startswith("eyJ"):                       # legacy service-role JWT
-        headers["Authorization"] = "Bearer " + SB_KEY
     req = urllib.request.Request(SB_URL + path, method=method, headers=headers,
                                  data=json.dumps(body).encode() if body is not None else None)
     try:
@@ -2380,6 +2384,21 @@ def main(argv=None):
 
     args = ap.parse_args(argv)
     args.fn(args)
+    if CATALOG_CHANGED:
+        refresh_scores()
+
+
+def refresh_scores():
+    """Recompute the precomputed bottle scores after this run's writes. Before the
+    v1.9 SQL (part 2) runs, spirit_consensus is still a live view: nothing to do."""
+    try:
+        sb("POST", "/rest/v1/rpc/refresh_spirit_consensus", {}, prefer="return=minimal")
+        print("Bottle scores refreshed.")
+    except SystemExit as e:
+        if re.search(r"refresh_spirit_consensus|PGRST202|404", str(e)):
+            print("(Bottle scores are computed live until supabase/sql/v1.9-part2.sql runs.)")
+        else:
+            print(f"Couldn't refresh bottle scores ({e}); the hourly refresh will catch up.")
 
 
 if __name__ == "__main__":

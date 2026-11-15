@@ -58,7 +58,13 @@ var recipesReads = 0;
 var INSERTS = [];                   // {table, row} per .insert() call
 function makeBuilder(table) {
   var single = false;                 // set when .single()/.maybeSingle() is chained
+  var eqs = {};                       // .eq(column, value) filters, for a single-row read
   var val = function () {
+    if (table === "recipes" && single) {
+      // One recipe by id (delete reads the row it may have to put back).
+      var hit = FAKE_RECIPES.filter(function (r) { return r.id === eqs.id; })[0] || null;
+      return { data: hit, error: null };
+    }
     if (table === "recipes") {
       recipesReads++;
       if (recipesReads === 1) return { data: null, error: { message: "TypeError: Failed to fetch" } };
@@ -80,6 +86,7 @@ function makeBuilder(table) {
     return function () {
       if (k === "insert") INSERTS.push({ table: table, row: arguments[0] });
       if (k === "single" || k === "maybeSingle") single = true;
+      if (k === "eq") eqs[arguments[0]] = arguments[1];
       return p;
     };
   }});

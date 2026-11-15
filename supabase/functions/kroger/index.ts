@@ -32,18 +32,18 @@ const KROGER_REDIRECT_URI = Deno.env.get("KROGER_REDIRECT_URI"); // the deployed
 const KROGER_BASE = "https://api.kroger.com/v1";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-// Supabase is retiring the legacy anon key (by end of 2026). Prefer the new
-// publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed by name) and
-// fall back to the legacy SUPABASE_ANON_KEY, so this works before, during and
-// after the switch. Either one is only the "apikey"; the caller's own JWT in
-// the Authorization header is what RLS sees.
+// The project's publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed
+// by name, which Supabase provides to every function). It is only the "apikey";
+// the caller's own JWT in the Authorization header is what RLS sees. The legacy
+// anon key was retired 2026-11-15.
 function supabaseClientKey(): string {
   try {
     const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
     const key = typeof keys.default === "string" ? keys.default : Object.values(keys).find((v) => typeof v === "string");
     if (key) return key as string;
-  } catch { /* unset or not JSON — use the legacy key */ }
-  return Deno.env.get("SUPABASE_ANON_KEY")!;
+  } catch { /* not JSON */ }
+  console.error("SUPABASE_PUBLISHABLE_KEYS is missing — database calls will fail.");
+  return "";
 }
 const SUPABASE_CLIENT_KEY = supabaseClientKey();
 

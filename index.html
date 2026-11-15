@@ -7,7 +7,7 @@
        script, no eval), styles from itself + Google Fonts, and talks only to this
        Supabase project. data:/blob: images are the AI-import photo previews.
        Keep this in step with config.js if the Supabase project ever changes. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://olzmcwcybleulazvgxeq.supabase.co wss://olzmcwcybleulazvgxeq.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://olzmcwcybleulazvgxeq.supabase.co wss://olzmcwcybleulazvgxeq.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>The House Index — Recipes & Cocktails</title>
   <meta name="description" content="A personal index of kitchen recipes and house cocktails.">
 
@@ -20,9 +20,6 @@
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="manifest" href="manifest.json">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -33,7 +30,8 @@
       <h1 class="site-title">The House Index</h1>
       <p id="auth-sub" class="auth-sub">Sign in to view your recipes.</p>
 
-      <!-- Sign in / create account (one action; the switch link flips modes) -->
+      <!-- Sign in. Accounts are by invitation (README "Accounts"): there's no
+           sign-up here, and the project doesn't accept new sign-ups. -->
       <form id="auth-form" class="auth-form">
         <input id="auth-email" class="search" type="email" inputmode="email"
                autocomplete="email" placeholder="you@example.com" required
@@ -41,7 +39,7 @@
         <div class="pw-field">
           <input id="auth-password" class="search" type="password"
                  autocomplete="current-password" placeholder="Password" required
-                 minlength="8" aria-label="Password">
+                 aria-label="Password">
           <button type="button" class="pw-toggle" data-pw-toggle="auth-password"
                   aria-pressed="false" aria-label="Show password">Show</button>
         </div>
@@ -49,10 +47,7 @@
       </form>
       <button type="button" id="auth-forgot" class="auth-link">Forgot password?</button>
       <p id="auth-status" class="auth-status" aria-live="polite"></p>
-      <p class="auth-switch">
-        <span id="auth-switch-label">New here?</span>
-        <button type="button" id="auth-switch" class="auth-link">Create an account</button>
-      </p>
+      <p class="auth-switch">New here? Accounts are by invitation — ask whoever runs this House Index.</p>
     </div>
   </div>
 
@@ -64,11 +59,11 @@
         <button class="tab tab-bar" role="tab" aria-selected="false" data-section="cocktails">Bar</button>
       </nav>
       <div id="account-area" class="account-area" hidden>
-        <button id="open-grocery-top" class="icon-btn" title="Grocery list" aria-label="Open grocery list">🛒<span
+        <button id="open-grocery-top" class="icon-btn" data-label="List" title="Grocery list" aria-label="Open grocery list">🛒<span
           id="grocery-top-count" class="icon-btn-badge" aria-hidden="true" hidden></span></button>
-        <button id="open-inventory" class="icon-btn" title="Bar & pantry" aria-label="Open bar & pantry inventory">📦</button>
-        <button id="open-guide" class="icon-btn" title="Guide" aria-label="Open the feature guide">?</button>
-        <button id="account-btn" class="avatar-btn" aria-haspopup="dialog" aria-label="Account">•</button>
+        <button id="open-inventory" class="icon-btn" data-label="Pantry" title="Bar & pantry" aria-label="Open bar & pantry inventory">📦</button>
+        <button id="open-guide" class="icon-btn" data-label="Guide" title="Guide" aria-label="Open the feature guide">?</button>
+        <button id="account-btn" class="avatar-btn" data-label="You" aria-haspopup="dialog" aria-label="Account">•</button>
       </div>
     </div>
   </header>
@@ -124,7 +119,7 @@
           <div class="search-wrap">
             <span class="search-ico" aria-hidden="true">🔍</span>
             <input id="search" class="search" type="search"
-                   placeholder="Search by name, tag, or ingredient…"
+                   placeholder="Search name, tag or ingredient…"
                    aria-label="Search recipes and cocktails">
             <button id="toggle-filters" class="search-filter-btn" aria-expanded="false"
                     aria-controls="tag-filters" title="Filters" aria-label="Filters">🏷</button>
@@ -286,7 +281,7 @@
         </div>
 
         <div class="kroger-prefs">
-          <p class="diet-prefs-h">🛒 King Soopers ordering</p>
+          <p class="diet-prefs-h">King Soopers ordering</p>
           <p class="diet-prefs-sub">Set your store and how to pick products. You can also set your store the first time you tap <strong>Order for pickup</strong> on the grocery list.</p>
           <label class="diet-field" for="kroger-zip">
             <span>Your store</span>
@@ -339,7 +334,7 @@
   <div id="kroger-panel" class="grocery-panel" role="dialog" aria-modal="true" aria-label="Send to King Soopers" hidden>
     <div class="grocery-panel-inner wrap">
       <div class="grocery-panel-head">
-        <h2 class="panel-title" id="kroger-panel-title">🛒 Send to King Soopers</h2>
+        <h2 class="panel-title" id="kroger-panel-title">Send to King Soopers</h2>
         <button id="close-kroger" class="ghost-btn small" aria-label="Close">Close</button>
       </div>
       <p id="kroger-intro" class="kroger-intro">We'll fill your King Soopers cart — you'll review and check out in the Kroger app.</p>
@@ -359,7 +354,7 @@
       <p id="kroger-review-summary" class="g-progress" hidden></p>
       <div id="kroger-review-list" class="kroger-review-list"></div>
       <div class="grocery-actions kroger-review-actions">
-        <button id="kroger-send-cart" class="solid-btn" hidden>🛒 Add to cart</button>
+        <button id="kroger-send-cart" class="solid-btn" hidden>Add to cart</button>
         <a id="kroger-open-store" class="ghost-btn" href="https://www.kingsoopers.com/cart" target="_blank" rel="noopener noreferrer" hidden>Open King Soopers ↗</a>
         <button id="kroger-download-matches" class="ghost-btn" hidden>⬇ Download match report</button>
       </div>
@@ -894,7 +889,7 @@
         <button type="submit" class="solid-btn small">Add</button>
       </form>
       <div class="inv-filter">
-        <button type="button" id="inv-out-filter" class="ghost-btn small" aria-pressed="false">🛒 Only what's out</button>
+        <button type="button" id="inv-out-filter" class="ghost-btn small" aria-pressed="false">Only what's out</button>
       </div>
       <div id="inventory-content" class="inventory-content"></div>
       <button type="button" id="inv-generate" class="solid-btn gen-from-inv" hidden>🪄 Generate a cocktail from these</button>

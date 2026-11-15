@@ -1,10 +1,11 @@
 /* The House Index — service worker: open offline, with your last-synced data.
  *
  * Two caches, two jobs:
- *  - SHELL: the app's own files (page, script, styles, Supabase library, icons)
- *    and the Google Fonts. Network-first for our files, so an online visit always
- *    gets the latest deploy and nobody is stranded on an old version; the cached
- *    copy is only the fallback. Fonts never change, so they're cache-first.
+ *  - SHELL: the app's own files (page, script, styles, Supabase library, icons,
+ *    fonts). Network-first for our files, so an online visit always gets the
+ *    latest deploy and nobody is stranded on an old version; the cached copy is
+ *    only the fallback. Fonts (self-hosted since v1.9) never change, so they're
+ *    cache-first.
  *  - DATA: GET reads from the Supabase REST API (recipes, grocery list, plan,
  *    inventory, prefs). Network-first; the cached copy answers when the network
  *    is gone or too slow (lie-fi in a grocery store). Only a signed-in user's
@@ -16,7 +17,7 @@
  * Kill switch: if this ever misbehaves, replace this file with one whose
  * activate handler calls self.registration.unregister() and deploy.
  */
-const VERSION = "v1"; // bump to retire every old shell cache on the next visit
+const VERSION = "v2"; // bump to retire every old shell cache on the next visit (v2: v1.9, self-hosted fonts)
 const SHELL_CACHE = `shell-${VERSION}`;
 const DATA_CACHE = "data-v1";
 const META_KEY = "/__sw-meta/user"; // which user the DATA cache belongs to
@@ -33,6 +34,9 @@ async function shellUrls() {
     for (const m of html.matchAll(/<(?:script[^>]+src|link[^>]+rel="stylesheet"[^>]+href)="([^"]+)"/g)) {
       if (!/^https?:/.test(m[1])) urls.add(m[1]);
     }
+    // The font files style.css names, so a first visit already works offline.
+    const css = await (await fetch("style.css", { cache: "no-cache" })).text();
+    for (const m of css.matchAll(/url\((fonts\/[^)]+\.woff2)\)/g)) urls.add(m[1]);
   } catch { /* offline during install — the runtime cache fills in later */ }
   return [...urls];
 }
@@ -148,7 +152,7 @@ async function handleFont(event) {
   const cache = await caches.open(SHELL_CACHE);
   const cached = await cache.match(event.request);
   const network = fetch(event.request).then((response) => {
-    if (response.ok || response.type === "opaque") event.waitUntil(cache.put(event.request, response.clone()));
+    if (response.ok) event.waitUntil(cache.put(event.request, response.clone()));
     return response;
   });
   if (cached) { event.waitUntil(network.catch(() => {})); return cached; }
@@ -160,7 +164,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.pathname.includes("/rest/v1/")) { event.respondWith(handleData(event)); return; }
-  if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") { event.respondWith(handleFont(event)); return; }
+  if (url.origin === self.location.origin && url.pathname.includes("/fonts/")) { event.respondWith(handleFont(event)); return; }
   if (url.origin === self.location.origin && !url.pathname.endsWith("/sw.js")) event.respondWith(handleShell(event));
   // Anything else (auth, Edge Functions, other hosts) goes to the network untouched.
 });

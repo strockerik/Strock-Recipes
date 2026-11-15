@@ -59,6 +59,7 @@ def strip_ts(ts):
     ts = re.sub(r"(\w+)\s*:\s*[A-Z]\w*\[\](?=[,)])", r"\1", ts)
     ts = re.sub(r"(\w+)\s*:\s*(?:Known|PlanSource|SourceRow|FoundCheck|FoundReview|Research)(?=[,)])", r"\1", ts)
     ts = re.sub(r"(\w+)\s*:\s*number \| null(?=[,)])", r"\1", ts)
+    ts = re.sub(r"(\w+)\s*:\s*LogExtra\s*=", r"\1 =", ts)                     # logAiCall(…, extra: LogExtra = {})
     ts = re.sub(r"\b(const|let) (\w+)\s*:\s*[^=\n]+?\s=(?!>)", r"\1 \2 =", ts)
     ts = re.sub(r"(\w+)\s*:\s*(?:number|string) \| null\s*=", r"\1 =", ts)
     ts = re.sub(r"new (Map|Set)<.*?>\(", r"new \1(", ts)
@@ -135,7 +136,11 @@ function makeDb(tables) {
     };
     return b;
   };
-  return { from, tables };
+  // rpc: records the call, and when it happened relative to the lookup rows
+  // (a score refresh must land before the lookup reports "found").
+  const calls = [];
+  const rpc = (fn, args) => { calls.push({ fn, args, lookups: JSON.parse(JSON.stringify(tables.spirit_lookups || [])) }); return Promise.resolve({ data: null, error: null }); };
+  return { from, rpc, calls, tables };
 }
 const SOURCES = [
   { id: "wine_enthusiast", name: "Wine Enthusiast", scale: "wine_enthusiast", default_weight: 1.0 }, { id: "drinkhacker", name: "Drinkhacker", scale: "drinkhacker", default_weight: 1.0 },
@@ -321,6 +326,10 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     ok("source_ref is url#product:year:reviewer", T.spirit_reviews.some((x) => x.source_ref === __WE__ + "#" + prod.id + ":2022:"), T.spirit_reviews.map((x) => x.source_ref));
     ok("both spellings point at the bottle", ["buffalo trace", "buffalo trace bourbon"].every((k) => T.spirit_aliases.some((a) => a.alias_norm === k && a.product_id === prod.id)), T.spirit_aliases);
     const L1 = T.spirit_lookups.find((l) => l.id === "L1");
+    const refresh = db.calls.filter((c) => c.fn === "refresh_spirit_consensus");
+    ok("new scores refresh the bottle scores, before the lookup says found", refresh.length === 1 && refresh[0].lookups.find((l) => l.id === "L1").status === "running", refresh);
+    const logged = db.calls.filter((c) => c.fn === "log_ai_call");
+    ok("the lookup is logged once, for this user, with its searches", logged.length === 1 && logged[0].args.p_user_id === "user-1" && logged[0].args.p_task === "bottle:research" && logged[0].args.p_web_searches >= 0, logged.map((c) => c.args));
     ok("the lookup closes as found with the count and a detail line", L1.status === "found" && L1.added === 2 && L1.product_id === prod.id && /1 url not in search results/.test(L1.detail) && !!L1.finished_at, L1);
 
     // A second, independent lookup of the same bottle confirms instead of copying.

@@ -182,7 +182,7 @@ async function runTests() {
     assert("the Meal plan tab shows for a scheduled week", !$(".mode-tabs").hidden, "");
     await openPlan();
     var btn = $("#mp-send-plan");
-    assert("Send plan sits next to Create grocery list",
+    assert("Send plan sits next to Add to grocery list",
       !!btn && btn.parentElement === $("#mp-make-grocery").parentElement, btn ? btn.outerHTML.slice(0, 120) : "missing");
     assert("Send plan is enabled when meals are planned", btn && !btn.disabled, "");
     assert("its visible text is its accessible name (no aria-label override)",
