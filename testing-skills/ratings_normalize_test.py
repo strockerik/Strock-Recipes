@@ -34,24 +34,25 @@ def eq(label, got, want):
 
 # --- normalization: score -> /10 (rounded to 0.5) ----------------------------
 r = lambda scale, raw: N.round_half(N.to_10(scale, raw))
-eq("critic 92 -> 8.0", r("critic100", 92), 8.0)
-eq("critic 95 -> 9.0 (8.75 rounds up)", r("critic100", 95), 9.0)
-eq("critic 88 -> 7.0", r("critic100", 88), 7.0)
+# A score means what its source says (2026-11-21); credibility is the weight's job.
+eq("the owner's examples: Drinkhacker 8/10 is 8.0", N.to_10("drinkhacker", 8), 8.0)
+eq("the owner's examples: The Rum Howler's 79.5 is 7.95", round(N.to_10("critic100", 79.5), 2), 7.95)
+for sc, top in (("critic100", 100), ("wine_enthusiast", 100), ("iwsc", 100), ("murray", 100), ("tequila_matchmaker", 100),
+                ("competition100", 100), ("critic100_harsh", 100), ("drinkhacker", 10), ("ten", 10), ("barrels5", 5), ("stars5", 5)):
+    eq(f"{sc}: a straight line from 0 to {top}, with no curve",
+       [round(N.to_10(sc, top * f), 6) for f in (0, 0.25, 0.5, 0.795, 0.92, 1)], [0.0, 2.5, 5.0, 7.95, 9.2, 10.0])
+eq("every scale is listed in that check", len(N.ANCHORS), 11)
+eq("critic 92 -> 9.0 shown (9.2)", r("critic100", 92), 9.0)
+eq("critic 95 -> 9.5", r("critic100", 95), 9.5)
+eq("critic 88 -> 9.0 shown (8.8)", r("critic100", 88), 9.0)
 eq("critic 100 -> 10.0", r("critic100", 100), 10.0)
-eq("critic 60 clamps to 4.0", r("critic100", 60), 4.0)
-eq("IWSC 95 Gold -> 8.0", r("iwsc", 95), 8.0)
-eq("IWSC 92 Silver -> 7.5", r("iwsc", 92), 7.5)
-eq("IWSC 98 Gold Outstanding -> 9.0", r("iwsc", 98), 9.0)
-eq("IWSC 87 Bronze -> 6.5", r("iwsc", 87), 6.5)
-eq("Wine Enthusiast 93 -> 8.5 (8.25 rounds up)", r("wine_enthusiast", 93), 8.5)
-eq("Murray 94.5 -> 8.0", r("murray", 94.5), 8.0)
-eq("Tequila Matchmaker 89 -> 8.5 (8.25 rounds up)", r("tequila_matchmaker", 89), 8.5)
+eq("critic 60 -> 6.0, no floor", r("critic100", 60), 6.0)
+eq("IWSC 95 Gold -> 9.5", r("iwsc", 95), 9.5)
+eq("Wine Enthusiast 92 -> 9.2", round(N.to_10("wine_enthusiast", 92), 2), 9.2)
 eq("10-pt identity 7 -> 7.0", r("ten", 7), 7.0)
-eq("Drinkhacker A- 9.0 -> 8.0 (same as a critic 92)", r("drinkhacker", 9.0), r("critic100", 92))
-eq("Drinkhacker A 9.5 -> 9.0 (8.75 rounds up)", r("drinkhacker", 9.5), 9.0)
-eq("Drinkhacker B 8.0 -> 7.0 (6.75 rounds up)", r("drinkhacker", 8.0), 7.0)
+eq("Drinkhacker A- 9.0 reads the same as a critic's 90", r("drinkhacker", 9.0), r("critic100", 90))
 eq("Breaking Bourbon 4 barrels -> 8.0", r("barrels5", 4), 8.0)
-eq("5 stars 4 -> 7.5", r("stars5", 4), 7.5)
+eq("4 stars -> 8.0, 4.5 stars -> 9.0", (N.to_10("stars5", 4), N.to_10("stars5", 4.5)), (8.0, 9.0))
 eq("round_half 7.74 -> 7.5", N.round_half(7.74), 7.5)
 eq("round_half clamps", (N.round_half(-1), N.round_half(12)), (0.0, 10.0))
 try:
@@ -60,8 +61,10 @@ except ValueError:
     eq("unknown scale raises", True, True)
 
 # --- medals -------------------------------------------------------------------
-eq("SFWSC Double Gold -> 8.5", N.medal_to_10("sfwsc", "Double Gold"), 8.5)
-eq("IWSC 'Spirit Gold Outstanding' -> 9.0", N.medal_to_10("iwsc", "Spirit Gold Outstanding"), 9.0)
+eq("one medal ladder: Bronze 6, Silver 7, Gold 8, Double Gold 9, Platinum 9.5",
+   [N.medal_to_10("default", m) for m in ("Bronze", "Silver", "Gold", "Double Gold", "Platinum")], [6.0, 7.0, 8.0, 9.0, 9.5])
+eq("a Gold is a Gold at every competition", {N.medal_to_10(s, "Gold") for s in ("sfwsc", "iwsc", "denver", "tag", "acsa", "spirits_selection", "cmb")}, {8.0})
+eq("IWSC 'Spirit Gold Outstanding' -> 8.5", N.medal_to_10("iwsc", "Spirit Gold Outstanding"), 8.5)
 eq("IWSC old 'Silver Outstanding' -> 7.5", N.medal_to_10("iwsc", "Silver Outstanding"), 7.5)
 eq("packaging award ignored", N.clean_medal("Packaging Gold"), None)
 eq("highball award ignored", N.clean_medal("Whisky Highball Bronze"), None)
@@ -147,7 +150,7 @@ eq("detail: country", d["country"], "USA")
 eq("detail: abv", d["abv"], 50.0)
 src = {"scale": "iwsc", "default_weight": 0.8}
 row, why = R.iwsc_review_row("120667", d, src)
-eq("row: score_10 for 95", row["score_10"], 8.0)
+eq("row: score_10 for 95", row["score_10"], 9.5)
 eq("row: weight with points", row["weight"], 0.8)
 
 OLD = """<html><head><title>Silver Outstanding 2014 - Knob Creek Bourbon 9 YO</title></head>
@@ -235,13 +238,13 @@ eq("import: medals saved as bulk origin at half weight", {(r["origin"], r["weigh
 eq("import: a non-medal row is skipped", len(revs), 4)
 
 # --- 2026-11-12: new scales, the spirit-type rule, batch harvest + import -------
-eq("competition 95 -> 8.0", r("competition100", 95), 8.0)
-eq("competition 87 -> 6.5 (a typical BSA silver)", r("competition100", 87), 6.5)
-eq("hard grader's 86 -> 7.0 (a critic's 88)", r("critic100_harsh", 86), 7.0)
-eq("hard grader's 90 -> 8.0", r("critic100_harsh", 90), 8.0)
-eq("Spirits Selection Grand Gold -> 8.0", N.medal_to_10("spirits_selection", "Grand Gold"), 8.0)
-eq("Denver Double Gold -> 8.0", N.medal_to_10("denver", "Double Gold"), 8.0)
-eq("TAG Platinum -> 8.0", N.medal_to_10("tag", "Platinum"), 8.0)
+eq("competition 95 -> 9.5", r("competition100", 95), 9.5)
+eq("competition 87 -> 8.7 (a typical BSA silver)", round(N.to_10("competition100", 87), 2), 8.7)
+eq("a hard grader's 86 is an 8.6, the same as anyone's", N.to_10("critic100_harsh", 86), N.to_10("critic100", 86))
+eq("hard grader's 90 -> 9.0", r("critic100_harsh", 90), 9.0)
+eq("Spirits Selection Grand Gold -> 9.0", N.medal_to_10("spirits_selection", "Grand Gold"), 9.0)
+eq("Denver Double Gold -> 9.0", N.medal_to_10("denver", "Double Gold"), 9.0)
+eq("TAG Platinum -> 9.5", N.medal_to_10("tag", "Platinum"), 9.5)
 sb_ = lambda a, b: N.same_bottle(N.norm_name(a), N.norm_name(b))
 eq("type rule: Cutwater Gin is not Cutwater Vodka", sb_("Cutwater Gin", "Cutwater Vodka"), False)
 eq("type rule: mezcal añejo is not tequila añejo", sb_("Cutwater Mezcal Añejo", "Cutwater Tequila Añejo"), False)
@@ -285,7 +288,7 @@ eq("plan: ...and one score that year", P["skipped"].get("already held (same bott
 eq("plan: a bare type word is left out", P["skipped"].get("only generic words (a bare 'Gin')"), 1)
 eq("plan: a row with no score is left out", P["skipped"].get("no usable score"), 1)
 eq("plan: a joined bottle's new spelling becomes an alias for it", ("elijah craig small batch bourbon", "p-ec") in P["aliases"], True)
-eq("plan: scores land on competition100 (90 -> 7.0)", {round(sc, 2) for _, _, sc in P["reviews"]}, {7.0})
+eq("plan: scores land on competition100 (90 -> 9.0)", {round(sc, 2) for _, _, sc in P["reviews"]}, {9.0})
 J = R.plan_batch(B, PRODS, ALIASES, have=set(), join_only=True)
 eq("plan --join-only: no new bottles", (len(J["new"]), len(J["joined"])), (0, 2))
 eq("plan --join-only: says why the rest were left out", J["skipped"].get("not in the catalog (--join-only)", 0) >= 6, True)
@@ -415,8 +418,8 @@ eq("harvest_distiller: a name that says whiskey or gin is filed as that, a rum s
 eq("harvest_distiller: a known non-rum (Lillet Blanc) is left out of the rum file", "Lillet Blanc" in [r["name"] for r in drows], False)
 eq("harvest_distiller: the community rating is never read", any("community" in r or "4.5" in str(r) for r in drows), False)
 DPL = R.plan_batch(dict(dm, rows=drows), [{"id": "p-ed", "canonical_name": "El Dorado 15 Year Old Rum", "name_norm": "el dorado 15 year old rum", "category": "rum", "age_years": 15, "abv": None, "batch": None}], [], set())
-eq("distiller import: the El Dorado joins its catalog bottle at 94 → 8.5, the others become new bottles",
-   ([(pid, round(sc, 1)) for _, pid, sc in DPL["reviews"] if pid == "p-ed"], len(DPL["new"])), ([("p-ed", 8.5)], 2))
+eq("distiller import: the El Dorado joins its catalog bottle at 94 → 9.4, the others become new bottles",
+   ([(pid, round(sc, 1)) for _, pid, sc in DPL["reviews"] if pid == "p-ed"], len(DPL["new"])), ([("p-ed", 9.4)], 2))
 import shutil; shutil.rmtree(tmpd)
 
 # The three critics' own feeds (2026-11-12)
@@ -568,7 +571,7 @@ PM = R.plan_batch(MB, [], [], {("drinkhacker", "p-x", "https://dh/kc")})
 eq("mixed batch: two critics' scores land on one new bottle", (len(PM["new"]), len(PM["reviews"])), (2, 3))
 rr = [R.review_row(MB, row, pid, sc) for row, pid, sc in PM["reviews"]]
 eq("mixed batch: each review keeps its own source, scale and curated origin", sorted((r["source_id"], r["score_10"], r["origin"]) for r in rr),
-   [("drinkhacker", 8.0, "curated"), ("drinkhacker", 8.0, "curated"), ("whisky_advocate", 8.0, "curated")])
+   [("drinkhacker", 9.0, "curated"), ("drinkhacker", 9.0, "curated"), ("whisky_advocate", 9.2, "curated")])
 eq("mixed batch: one page reviewing two bottles gives two distinct refs", len({r["source_ref"] for r in rr}), 3)
 posts3 = []
 def fake_sb_mixed(method, path, body=None, prefer="return=representation"):

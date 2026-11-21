@@ -190,30 +190,23 @@ function attrsCompatible(a: Attrs, b: Attrs): boolean {
   if (a.batch && b.batch && a.batch !== b.batch) return false;
   return true;
 }
+// A score means what its source says: 8/10 is 8.0, 79.5 points is 7.95, 4.5 stars is
+// 9.0. How much a source counts is its weight, never a bent score (2026-11-21).
+// KEEP IN SYNC with normalize.py ANCHORS (bottle_normalize_parity_test.py checks).
+const OUT_OF_100: [number, number][] = [[0, 0], [100, 10]];
+const OUT_OF_10: [number, number][] = [[0, 0], [10, 10]];
+const OUT_OF_5: [number, number][] = [[0, 0], [5, 10]];
 const SCORE_ANCHORS: Record<string, [number, number][]> = {
-  critic100: [[70, 4.0], [80, 5.5], [85, 6.5], [88, 7.0], [90, 7.5], [92, 8.0], [94, 8.5], [96, 9.0], [98, 9.5], [100, 10.0]],
-  wine_enthusiast: [[80, 5.5], [83, 6.0], [87, 7.0], [90, 7.5], [94, 8.5], [98, 9.5], [100, 10.0]],
-  iwsc: [[80, 5.0], [85, 6.0], [90, 7.0], [95, 8.0], [98, 9.0], [100, 9.5]],
-  murray: [[80, 5.0], [85, 6.0], [90, 7.0], [94, 8.0], [96, 8.5], [97.5, 9.0], [99, 9.5], [100, 10.0]],
-  tequila_matchmaker: [[75, 5.0], [80, 6.0], [85, 7.0], [88, 8.0], [90, 8.5], [92, 9.5], [100, 10.0]],
-  drinkhacker: [[4.0, 4.0], [6.0, 5.0], [7.0, 6.0], [8.0, 6.75], [8.5, 7.25], [9.0, 8.0], [9.5, 8.75], [10.0, 9.5]],
-  ten: [[0, 0.0], [10, 10.0]],
-  barrels5: [[0, 0.0], [5, 10.0]],
-  stars5: [[1, 3.0], [2, 4.5], [3, 6.0], [4, 7.5], [5, 9.0]],
-  // A competition's own points (BSA, Denver, TAG): 70-90% of entries medal.
-  competition100: [[80, 5.0], [85, 6.0], [90, 7.0], [95, 8.0], [98, 9.0], [100, 9.5]],
-  // Hard-grading single palates (Whiskyfun, The Lone Caner): the critic curve 2 points lower.
-  critic100_harsh: [[68, 4.0], [78, 5.5], [83, 6.5], [86, 7.0], [88, 7.5], [90, 8.0], [92, 8.5], [94, 9.0], [96, 9.5], [98, 10.0]]
+  critic100: OUT_OF_100, wine_enthusiast: OUT_OF_100, iwsc: OUT_OF_100, murray: OUT_OF_100,
+  tequila_matchmaker: OUT_OF_100, competition100: OUT_OF_100, critic100_harsh: OUT_OF_100,
+  drinkhacker: OUT_OF_10, ten: OUT_OF_10,
+  barrels5: OUT_OF_5, stars5: OUT_OF_5
 };
+// A medal with no published points: one ladder for every competition, Gold at 8.
 // KEEP IN SYNC with normalize.py MEDALS (bottle_normalize_parity_test.py checks).
 const MEDAL_SCORES: Record<string, Record<string, number>> = {
-  spirits_selection: { "silver": 6.0, "gold": 7.0, "grand gold": 8.0 },
-  denver: { "bronze": 5.5, "silver": 6.5, "gold": 7.0, "double gold": 8.0, "platinum": 8.5 },
-  acsa: { "bronze": 5.0, "silver": 6.0, "gold": 7.0 },
-  tag: { "bronze": 5.5, "silver": 6.0, "gold": 7.0, "double gold": 7.5, "platinum": 8.0 },
-  sfwsc: { "bronze": 5.5, "silver": 6.5, "gold": 7.5, "double gold": 8.5, "platinum": 8.5, "best in show": 9.0 },
-  iwsc: { "bronze": 6.0, "silver": 7.0, "silver outstanding": 7.5, "gold": 8.0, "gold outstanding": 9.0, "trophy": 9.0 },
-  default: { "bronze": 6.0, "silver": 7.0, "gold": 8.0, "double gold": 8.5, "grand gold": 8.5, "platinum": 9.0 }
+  default: { "bronze": 6.0, "silver": 7.0, "silver outstanding": 7.5, "gold": 8.0, "gold outstanding": 8.5,
+             "double gold": 9.0, "grand gold": 9.0, "platinum": 9.5, "trophy": 9.5, "best in show": 9.5 }
 };
 function to10(scale: string, raw: number): number {
   const table = SCORE_ANCHORS[scale];
@@ -352,8 +345,6 @@ const DOMAIN_SOURCES: Record<string, string> = {
   "whiskyfun.com": "whiskyfun", "spiritsselection.com": "cmb", "denverspiritscomp.com": "denver_isc",
   "tagspiritsawards.com": "tag", "americancraftspirits.org": "acsa", "whiskycompetition.com": "whisky_competition"
 };
-// The medal ladder each competition's medals are read on (else its scale's, else default).
-const SOURCE_MEDALS: Record<string, string> = { cmb: "spirits_selection", denver_isc: "denver", acsa: "acsa", tag: "tag" };
 // 100-point scales a source row may name; any other points source reads as a critic.
 const POINT_SCALES = new Set(["critic100", "critic100_harsh", "competition100", "wine_enthusiast", "iwsc", "murray", "tequila_matchmaker"]);
 const NAME_SOURCES: [RegExp, string][] = [
@@ -692,7 +683,7 @@ function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRo
     let score10: number | null = null, weight = Number(src.default_weight) || 0.5;
     let raw: number | null = null, medal: string | null = null;
     if (r.scale === "medal") {
-      score10 = medalTo10(SOURCE_MEDALS[source] || src.scale, r.medal);
+      score10 = medalTo10(src.scale, r.medal);
       medal = r.medal;
       weight = 0.5;
     } else if (r.scale === "letter_grade") {
@@ -700,16 +691,13 @@ function vet(found: Research, wantAttrs: Attrs, sourceRows: Map<string, SourceRo
       const n = LETTER_GRADES[gradeKey(r.grade)];
       if (n != null) {
         raw = n;
-        score10 = source.startsWith("other_") ? to10("critic100", n * 10) : to10(SCALE_FOR.out_of_10(source), n);
+        score10 = to10(SCALE_FOR.out_of_10(source), n);
       }
     } else if (SCALE_FOR[r.scale] && r.score != null && Number.isFinite(Number(r.score))) {
       raw = Number(r.score);
       const [lo, hi] = SCALE_RANGE[r.scale];
       if (raw < lo || raw > hi) { drop("score out of range"); continue; }
-      // An unnamed reviewer's x/10 reads like a critic's x0/100 (an 8.5/10 blog
-      // score is an 85, not an 8.5); the named 10-point sources keep their own curve.
-      score10 = r.scale === "out_of_10" && source.startsWith("other_") ? to10("critic100", raw * 10)
-        : r.scale === "points_100" && POINT_SCALES.has(src.scale) ? to10(src.scale, raw)
+      score10 = r.scale === "points_100" && POINT_SCALES.has(src.scale) ? to10(src.scale, raw)
         : to10(SCALE_FOR[r.scale](source), raw);
       if (r.medal && cleanMedal(r.medal)) medal = r.medal;
     }

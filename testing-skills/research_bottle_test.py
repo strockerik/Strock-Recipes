@@ -210,7 +210,7 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     const base = (reviews, urls, cites) => ({ reviews, resultUrls: new Set(urls), cited: new Map(Object.entries(cites || {})), searches: 1 });
     const one = (rev, urls, cites, want) => vet(base([rev], urls, cites), want || {}, srcMap);
     let v = one(__R__(__WE__, "Wine Enthusiast", "points_100", 92), [__WE__], { [__WE__]: ["rating 92"] });
-    ok("kept: WE 92, cited → wine_enthusiast scale (8.0, as normalize.py)", v.kept.length === 1 && v.kept[0].row.source_id === "wine_enthusiast" && v.kept[0].row.score_10 === 8 && v.kept[0].row.weight === 1, v);
+    ok("kept: WE 92, cited → 9.2, what the source said (as normalize.py)", v.kept.length === 1 && v.kept[0].row.source_id === "wine_enthusiast" && v.kept[0].row.score_10 === 9.2 && v.kept[0].row.weight === 1, v);
     v = one(__R__("https://invented.example/review", "Wine Enthusiast", "points_100", 92), [__WE__]);
     ok("dropped: URL not in the search results", !v.kept.length && v.dropped["url not in search results"] === 1, v.dropped);
     v = one(__R__("https://distiller.com/spirits/buffalo-trace", "Distiller", "points_100", 90), ["https://distiller.com/spirits/buffalo-trace"]);
@@ -228,20 +228,20 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     v = one(__R__(__WE__, "Wine Enthusiast", "points_100", 92), [__WE__], {});
     ok("kept: in the results but uncited (counts ¾ as unverified)", v.kept.length === 1, v.dropped);
     v = one(__R__(__DH__, "Drinkhacker", "out_of_10", 9.0), [__DH__], { [__DH__]: ["a- / $30"] });
-    ok("kept: Drinkhacker 9.0 cited as its letter grade A- → 8.0", v.kept.length === 1 && v.kept[0].row.score_10 === 8 && v.kept[0].row.source_id === "drinkhacker", v);
+    ok("kept: Drinkhacker 9.0 cited as its letter grade A- → 9.0", v.kept.length === 1 && v.kept[0].row.score_10 === 9 && v.kept[0].row.source_id === "drinkhacker", v);
     // A letter grade arrives as a letter (Tiki Lovers White's "A-" was dropped as "no usable score", 2026-11-11).
     const G = (grade, named) => Object.assign(__R__(__DH__, "Drinkhacker", "letter_grade", null, null, 2018, named || "Tiki Lovers White Rum"), { grade });
     v = one(G("A-"), [__DH__], { [__DH__]: ["100 proof. a- / $30"] });
-    ok("kept: a Drinkhacker letter grade A- → stored as 9.0, scored 8.0", v.kept.length === 1 && v.kept[0].row.source_id === "drinkhacker" && v.kept[0].row.score_raw === 9 && v.kept[0].row.score_10 === 8, v);
+    ok("kept: a Drinkhacker letter grade A- → stored and scored as 9.0", v.kept.length === 1 && v.kept[0].row.source_id === "drinkhacker" && v.kept[0].row.score_raw === 9 && v.kept[0].row.score_10 === 9, v);
     v = one(G(" b+ "), [__DH__], {});
-    ok("a grade's case and spaces don't matter (b+ → 8.5 → 7.25)", v.kept.length === 1 && v.kept[0].row.score_raw === 8.5 && v.kept[0].row.score_10 === 7.25, v);
+    ok("a grade's case and spaces don't matter (b+ → 8.5)", v.kept.length === 1 && v.kept[0].row.score_raw === 8.5 && v.kept[0].row.score_10 === 8.5, v);
     v = one(G("A-"), [__DH__], { [__DH__]: ["114 proof. b+ / $30"] });
     ok("dropped: the cited line shows another expression's grade, not A-", !v.kept.length && v.dropped["score not in cited text"] === 1, v.dropped);
     v = one(G("Excellent"), [__DH__]);
     ok("dropped: a 'grade' that isn't a letter grade", !v.kept.length && v.dropped["no usable score"] === 1, v.dropped);
     ok("…and the drop names the site, for the lookup's log", (v.droppedAt["no usable score"] || []).join() === "drinkhacker.com", v.droppedAt);
     v = one(Object.assign(__R__("https://smallblog.example/tl", "Some Rum Blog", "letter_grade", null), { grade: "B" }), ["https://smallblog.example/tl"]);
-    ok("an unnamed blog's B reads like an 80/100 (5.5), as its x/10 does", v.kept.length === 1 && v.kept[0].row.source_id === "other_critic" && v.kept[0].row.score_10 === 5.5, v);
+    ok("an unnamed blog's B is 8.0, as its x/10 is", v.kept.length === 1 && v.kept[0].row.source_id === "other_critic" && v.kept[0].row.score_10 === 8, v);
     ok("the record schema takes a letter grade", REVIEW_SCHEMA.properties.reviews.items.properties.scale.enum.includes("letter_grade") && REVIEW_SCHEMA.properties.reviews.items.required.includes("grade"), "");
     // Sources added 2026-11-12: each reads on its own row's scale / medal ladder.
     const SRC2 = new Map([...srcMap, ["lone_caner", { scale: "critic100_harsh", default_weight: 1, kind: "critic" }],
@@ -251,18 +251,18 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     const LC = "https://thelonecaner.com/r1154/", GI = "https://theginisin.com/gin-reviews/plymouth/", DC = "https://denverspiritscomp.com/wp-content/uploads/2026/05/2026-DISC_Win_.2xls.pdf", SS = "https://results.spiritsselection.com/en/results/2025/1-x";
     const two = (rev, url) => vet(base([rev], [url]), {}, SRC2);
     v = two(__R__(LC, "The Lone Caner", "points_100", 86, null, 2025, "Buffalo Trace"), LC);
-    ok("The Lone Caner's 86 reads on the hard-grader curve (7.0, not a critic's 6.67)", v.kept.length === 1 && v.kept[0].row.source_id === "lone_caner" && v.kept[0].row.score_10 === 7, v);
+    ok("The Lone Caner's 86 is an 8.6, the same as anyone's", v.kept.length === 1 && v.kept[0].row.source_id === "lone_caner" && v.kept[0].row.score_10 === 8.6, v);
     v = two(__R__(GI, "The GIN is IN", "stars_5", 4.5, null, 2024, "Buffalo Trace"), GI);
-    ok("The GIN is IN's 4.5 stars → 8.25", v.kept.length === 1 && v.kept[0].row.source_id === "gin_is_in" && v.kept[0].row.score_10 === 8.25, v);
+    ok("The GIN is IN's 4.5 stars → 9.0", v.kept.length === 1 && v.kept[0].row.source_id === "gin_is_in" && v.kept[0].row.score_10 === 9, v);
     v = two(__R__(DC, "Denver International Spirits Competition", "points_100", 95, "Double Gold", 2026, "Buffalo Trace", "competition"), DC);
-    ok("Denver's 95 points read on the competition curve (8.0)", v.kept.length === 1 && v.kept[0].row.source_id === "denver_isc" && v.kept[0].row.score_10 === 8, v);
+    ok("Denver's 95 points → 9.5", v.kept.length === 1 && v.kept[0].row.source_id === "denver_isc" && v.kept[0].row.score_10 === 9.5, v);
     v = two(__R__(SS, "Spirits Selection by Concours Mondial", "medal", null, "Grand Gold", 2025, "Buffalo Trace", "competition"), SS);
-    ok("a Spirits Selection Grand Gold reads on its own ladder (8.0)", v.kept.length === 1 && v.kept[0].row.source_id === "cmb" && v.kept[0].row.score_10 === 8, v);
+    ok("a Spirits Selection Grand Gold reads on the one medal ladder (9.0)", v.kept.length === 1 && v.kept[0].row.source_id === "cmb" && v.kept[0].row.score_10 === 9, v);
     ok("a held Drinkhacker 6.0 is checked as C- (the old reverse table said C+)", tokensFor("out_of_10", 6, null, "drinkhacker").includes("c-") && !tokensFor("out_of_10", 6, null, "drinkhacker").includes("c+"), tokensFor("out_of_10", 6, null, "drinkhacker"));
     v = one(__R__(__BR__, "San Francisco World Spirits Competition", "medal", null, "Double Gold", 2024, "Buffalo Trace Bourbon", "competition"), [__BR__], { [__BR__]: ["2024 double gold, san francisco"] });
-    ok("kept: SFWSC Double Gold from the brand's page → sfwsc 8.5 at half weight", v.kept.length === 1 && v.kept[0].row.source_id === "sfwsc" && v.kept[0].row.score_10 === 8.5 && v.kept[0].row.weight === 0.5, v);
+    ok("kept: SFWSC Double Gold from the brand's page → sfwsc 9.0 at half weight", v.kept.length === 1 && v.kept[0].row.source_id === "sfwsc" && v.kept[0].row.score_10 === 9 && v.kept[0].row.weight === 0.5, v);
     v = one(__R__("https://thewhiskeywash.com/reviews/bt/", "The Whiskey Wash", "points_100", 86), ["https://thewhiskeywash.com/reviews/bt/"]);
-    ok("kept: Whiskey Wash's old 100-point review reads on the critic100 scale (6.67)", v.kept.length === 1 && v.kept[0].row.score_10 === 6.67, v);
+    ok("kept: Whiskey Wash's old 100-point review reads out of 100 (8.6)", v.kept.length === 1 && v.kept[0].row.score_10 === 8.6, v);
     v = one(__R__("https://smallblog.example/bt", "Some Bourbon Blog", "points_100", 88), ["https://smallblog.example/bt"]);
     ok("kept: an unknown critic → other_critic, publication as reviewer, half weight", v.kept.length === 1 && v.kept[0].row.source_id === "other_critic" && v.kept[0].row.reviewer === "Some Bourbon Blog" && v.kept[0].row.weight === 0.5, v);
     v = one(__R__(__WE__, "Wine Enthusiast", "points_100", 140), [__WE__]);
@@ -293,7 +293,7 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     v = vet({ reviews: [blog(1, 2019, 84), blog(2, 2025, 88), blog(3, 2023, 86)], resultUrls: new Set([1, 2, 3].map((i) => "https://blog" + i + ".example/bt")), cited: new Map(), titles: new Map(), searches: 1 }, {}, srcMap);
     ok("at most two independent reviewers, the most recent", v.kept.length === 2 && v.kept.map((k) => k.row.review_year).join() === "2025,2023" && v.dropped["more than two independent reviewers"] === 1, v.kept.map((k) => k.row.review_year));
     v = vet({ reviews: [__R__("https://blog9.example/bt", "Blog 9", "out_of_10", 8.5, null, 2024)], resultUrls: new Set(["https://blog9.example/bt"]), cited: new Map(), titles: new Map(), searches: 1 }, {}, srcMap);
-    ok("a blog's 8.5/10 reads like an 85/100 (6.5), not as 8.5", v.kept.length === 1 && v.kept[0].row.score_10 === 6.5 && v.kept[0].row.score_raw === 8.5, v.kept);
+    ok("a blog's 8.5/10 is 8.5", v.kept.length === 1 && v.kept[0].row.score_10 === 8.5 && v.kept[0].row.score_raw === 8.5, v.kept);
     const BAND = [{ id: "rb", ref: "r1", source_id: "wine_enthusiast", source: "Wine Enthusiast", scale: "wine_enthusiast", score_raw: 98, medal: null, review_year: 2007, url: __WE__ }];
     c = vetChecks({ checks: [{ review_ref: "r1", status: "changed", url: __WE__, now_says: "96-100" }], resultUrls: new Set([__WE__]), cited: new Map([[__WE__, ["rating 96-100"]]]) }, BAND);
     ok("a known band midpoint (98) is confirmed by a page printing 96-100, not flagged", c.confirmed.join() === "rb" && !c.changed.length, c);
@@ -384,7 +384,7 @@ const ok = (name, cond, detail) => results.push({ name, pass: !!cond, detail: de
     const sf = T.spirit_reviews.find((x) => x.source_id === "sfwsc");
     const reps = (T.spirit_reports || []).slice(reportsBefore);
     ok("a page now showing a different medal files a report…", reps.length === 1 && reps[0].review_id === sf.id && reps[0].kind === "wrong_score" && /now shows Silver/.test(reps[0].note) && reps[0].user_id === "user-3", reps);
-    ok("…and the stored score is left alone", sf.medal === "Double Gold" && sf.score_10 === 8.5, sf);
+    ok("…and the stored score is left alone", sf.medal === "Double Gold" && sf.score_10 === 9, sf);
     T.spirit_lookups.push({ id: "L7", status: "running", name_norm: "buffalo trace bourbon" });
     queue = [END([WS(__BR__), CITE(__BR__, "2024: silver medal")]), END(), END(),
       RECORD([Object.assign(REC([]), { input: Object.assign(REC([]).input, { checks: [{ review_ref: "r2", status: "changed", url: __BR__, now_says: "Silver" }] }) })])];

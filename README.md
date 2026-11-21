@@ -609,12 +609,19 @@ that wrote reviews or bottles, by `research-bottle` after a lookup writes scores
 `pg_cron` as a safety net. A materialized view has no RLS: signed-in users read it
 by grant, as before; anonymous visitors can't.
 
-**How a score is built.** Each source's raw score is converted to 0–10 through
-that source's own anchor table in `scripts/ratings/normalize.py`, because
-published spirits scores sit almost entirely in 80–97 (dividing by ten would
-squash everything into 8–9.7). IWSC 95 (Gold) → 8.0; a critic's 92 → 8.0.
-The view then takes an age-weighted average; how far to trust it is the
-`confidence` label's job, not the score's:
+**How a score is built.** A score means what its source says (2026-11-21): a
+100-point score is divided by ten (79.5 → 7.95, 92 → 9.2), an x/10 stays as it is
+(8/10 → 8.0), and 5 stars or barrels are doubled (4.5 → 9.0). A medal with no
+points has no number to read, so it uses one ladder for every competition, with
+Gold at 8 to keep scores above 8 rare: Bronze 6.0, Silver 7.0, Gold 8.0, Double or
+Grand Gold 9.0, Platinum 9.5. A competition that publishes points is read from its
+points. **No source's numbers are bent for being
+harsh, generous or less credible; that's what its weight is for.** (Each source
+used to have its own curve in `scripts/ratings/normalize.py`, which turned an 8/10
+into a 6.75 and a 79.5 into a 5.4. `supabase/sql/literal-scores.sql` recomputed the
+catalog and keeps the old scores in a backup table.) The view then takes an
+age-weighted average; how far to trust it is the `confidence` label's job, not
+the score's:
 
 ```
 score_10   = Σ weight·score / Σ weight                     shown rounded to 0.5
@@ -1153,7 +1160,7 @@ from w join public.spirit_products p on p.id = w.product_id
 group by p.id, p.canonical_name, p.category;
 
 -- 9. More sources (2026-11-12): critics and competitions whose robots.txt lets
---    Claude's agents in. Weights follow the research; harsh graders get their own curve.
+--    Claude's agents in. Weights follow the research.
 insert into public.rating_sources (id, name, kind, scale, default_weight, scrape_ok, homepage, tos_notes) values
  ('lone_caner','The Lone Caner','critic','critic100_harsh',1.0,true,'https://thelonecaner.com','Rum, 100-point, hard grader. robots allows; harvested through its WordPress feed.'),
  ('gin_is_in','The GIN is IN','critic','stars5',1.0,true,'https://theginisin.com','Gin, 0.5-5 stars: the site''s own rating, never reader votes. Crawl-delay 30.'),
@@ -1360,20 +1367,17 @@ before anything was merged; the checks are why some of it isn't:
   most critics the number isn't on the critic's page (images, widgets, or none).
   Only the 16 rows whose number is on the critic's own page are kept; the Fat
   Rum Pirate's come from its own harvest.
-- *Weights* come from how each critic's scores sit against the catalog's consensus
-  on bottles they share (Fat Rum Pirate −0.3, Bourbon Culture −0.5, like The Lone
-  Caner's −0.34; BevX +1.5 on the plain critic curve, +0.8 on the competition
-  curve, which is what it's read on). They are judgments, easy to change in
-  `rating_sources.default_weight`.
+- *Weights* are judgments about how much to trust each source, easy to change in
+  `rating_sources.default_weight`. They were set on 2026-11-13, before scores became
+  literal (2026-11-21).
 - *Weight policy (decided 2026-11-13):* the weights above are approved — Fat Rum
   Pirate 0.8, Bourbon Culture 0.7, BevX 0.6, Drinkhacker 1.0, Distiller 1.0, RumX
   critics 0.5, RumX community up to 0.7 by number of ratings (2026-11-15) — and every batch of a source uses that source's weight, so one
   critic never counts differently from one import to the next. Each new source or
   batch gets the same treatment before it's imported: run
   `python3 ratings.py calibrate batches/<file>.json` to see how its scores sit
-  against the consensus on the bottles it shares (mean gap in points of 10; the
-  reference is Lone Caner −0.34, Whiskyfun −0.36, Bartender Spirits Awards −0.11),
-  then set the weight, register it in `rating_sources.default_weight`, and put the
+  against the consensus on the bottles it shares (mean gap in points of 10),
+  then set the weight — never a curve on its scores — register it in `rating_sources.default_weight`, and put the
   same number in the batch. `import-batch` prints a NOTE if the batch's weight and
   the registered one disagree.
 - *Two importer bugs found after the first run (2026-11-13, fixed):* (1) A review page
@@ -1409,9 +1413,7 @@ is RumX's /10 conversion of the critic's own scale and links to their review.
 stored raw in `spirit_community` (setup SQL step 11) and, since 2026-11-15, **count in
 the score** — RumX is the only community source used ("I trust RumX"). Each becomes a
 `rumx_community` review (`supabase/sql/rumx-community-score.sql` registers the source),
-read as-is on the 0–10 scale: on the ~50 rums that also have 2+ expert reviews the
-median sits +0.22 above the consensus (sd ~1.0), as close as the critics already used.
-Its weight grows with the number of members who rated it — the full 0.70 at 25+
+read as-is on the 0–10 scale. Its weight grows with the number of members who rated it — the full 0.70 at 25+
 ratings, proportionally less below (4 ratings count 0.11) — and a later harvest
 updates the median in place. Like any review it counts toward confidence, so a rum
 with one expert review and a RumX median is "medium". The score card lists it with the

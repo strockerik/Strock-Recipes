@@ -9,75 +9,44 @@ pin it down:
   medal_to_10(scale, m)  -> medal-only result on the 0-10 scale
   attrs_compatible(a, b) -> False when two names disagree on a hard attribute
 
-Why anchors and not score/10: published spirits scores sit almost entirely in
-80-97, so dividing by ten would squash everything into 8.0-9.7. Each source gets
-a piecewise-linear anchor table instead (interpolate between anchors, clamp at
-the ends). These are calibration choices, not published conversions — once a
-source has ~200 scores in the database, swap its anchors for a percentile map.
+A score means what its source says (owner's rule, 2026-11-21): 8/10 is 8.0, 79.5
+points is 7.95, 4.5 of 5 stars is 9.0. No source's numbers are bent up or down for
+being harsh, generous or less credible; how much a source counts is its WEIGHT in
+the consensus. (Until then each source had its own curve, which turned an 8/10
+into a 6.75 and a 79.5 into a 5.4.)
 """
 import re
 import unicodedata
 
 # ---------------------------------------------------------------------------
 # Score scales. Keys match rating_sources.scale in the database.
-# Each table is a list of (source_score, house_score) pairs, ascending.
+# Each table is a list of (source_score, house_score) pairs: a straight line.
 # ---------------------------------------------------------------------------
+_OUT_OF_100 = [(0, 0.0), (100, 10.0)]
+_OUT_OF_10 = [(0, 0.0), (10, 10.0)]
+_OUT_OF_5 = [(0, 0.0), (5, 10.0)]
 ANCHORS = {
-    # Blind-panel / critic 100-point (Whisky Advocate, BTI, USC, Distiller expert)
-    "critic100": [(70, 4.0), (80, 5.5), (85, 6.5), (88, 7.0), (90, 7.5), (92, 8.0),
-                  (94, 8.5), (96, 9.0), (98, 9.5), (100, 10.0)],
-    # Wine Enthusiast never publishes below 80
-    "wine_enthusiast": [(80, 5.5), (83, 6.0), (87, 7.0), (90, 7.5), (94, 8.5),
-                        (98, 9.5), (100, 10.0)],
-    # IWSC is strict: Gold starts at 95, Silver 90-94, Bronze 85-89
-    "iwsc": [(80, 5.0), (85, 6.0), (90, 7.0), (95, 8.0), (98, 9.0), (100, 9.5)],
-    # Jim Murray's Whisky Bible runs high
-    "murray": [(80, 5.0), (85, 6.0), (90, 7.0), (94, 8.0), (96, 8.5), (97.5, 9.0),
-               (99, 9.5), (100, 10.0)],
-    # Tequila Matchmaker panel is compressed; ~92 behaves like a perfect score
-    "tequila_matchmaker": [(75, 5.0), (80, 6.0), (85, 7.0), (88, 8.0), (90, 8.5),
-                           (92, 9.5), (100, 10.0)],
-    # Drinkhacker's x/10 runs high and tracks its letter grades (A 9.5, A- 9.0,
-    # B+ 8.5, B 8.0, C+ 6.0): line each grade up with the critic 100-point band
-    # it corresponds to (A ~95, A- ~92, B+ ~89, B ~87)
-    "drinkhacker": [(4.0, 4.0), (6.0, 5.0), (7.0, 6.0), (8.0, 6.75), (8.5, 7.25),
-                    (9.0, 8.0), (9.5, 8.75), (10.0, 9.5)],
-    # Already a full-range 10-point scale (Whiskey Wash current, Bourbon Culture)
-    "ten": [(0, 0.0), (10, 10.0)],
-    # Breaking Bourbon barrels, 0.5-5
-    "barrels5": [(0, 0.0), (5, 10.0)],
-    # Generic 5 stars (Whiskey Wash 2017-era, The GIN is IN's half stars, misc.)
-    "stars5": [(1, 3.0), (2, 4.5), (3, 6.0), (4, 7.5), (5, 9.0)],
-    # A competition's own points (Bartender Spirits Awards, TAG, International
-    # Whisky Competition): 70-90% of entries medal, so its 90 is a critic's 85.
-    # Same anchors as IWSC.
-    "competition100": [(80, 5.0), (85, 6.0), (90, 7.0), (95, 8.0), (98, 9.0), (100, 9.5)],
-    # Single palates who grade hard — Whiskyfun (80-89 "high quality", 90+
-    # exceptional) and The Lone Caner (an 86 is "among the most startling, original
-    # rums"): the critic curve two points lower. 2026-11-12 research, uncalibrated.
-    "critic100_harsh": [(68, 4.0), (78, 5.5), (83, 6.5), (86, 7.0), (88, 7.5), (90, 8.0),
-                        (92, 8.5), (94, 9.0), (96, 9.5), (98, 10.0)],
+    "critic100": _OUT_OF_100,           # Whisky Advocate, BTI, USC, Distiller expert
+    "wine_enthusiast": _OUT_OF_100,
+    "iwsc": _OUT_OF_100,
+    "murray": _OUT_OF_100,
+    "tequila_matchmaker": _OUT_OF_100,
+    "competition100": _OUT_OF_100,      # Bartender Spirits Awards, Denver, TAG
+    "critic100_harsh": _OUT_OF_100,     # Whiskyfun, The Lone Caner
+    "drinkhacker": _OUT_OF_10,
+    "ten": _OUT_OF_10,                  # Bourbon Culture, Whiskey Wash, RumX
+    "barrels5": _OUT_OF_5,              # Breaking Bourbon
+    "stars5": _OUT_OF_5,                # The GIN is IN, Fat Rum Pirate
 }
 
-# Medal-only results (no points published). Values are on the 0-10 scale.
+# A medal with no published points has no number to read, so it gets one ladder for
+# every competition, with Gold at 8 (owner's choice, 2026-11-21: scores above 8 should
+# stay rare, and most entries to a competition win something). A competition that
+# publishes points is read from its points. How much it counts is its weight.
 MEDALS = {
-    "sfwsc": {"bronze": 5.5, "silver": 6.5, "gold": 7.5, "double gold": 8.5,
-              "platinum": 8.5, "best in show": 9.0},
-    # IWSC before points were published, plus its pre-2020 "Outstanding" tiers
-    "iwsc": {"bronze": 6.0, "silver": 7.0, "silver outstanding": 7.5,
-             "gold": 8.0, "gold outstanding": 9.0, "trophy": 9.0},
-    # Also Concours Mondial de Bruxelles' Grand Gold, its top tier.
-    "default": {"bronze": 6.0, "silver": 7.0, "gold": 8.0, "double gold": 8.5,
-                "grand gold": 8.5, "platinum": 9.0},
-    # Spirits Selection by Concours Mondial: medals capped at 30% of entries, on
-    # its own point bands (Silver 82-84.9, Gold 85-91.9, Grand Gold 92+).
-    "spirits_selection": {"silver": 6.0, "gold": 7.0, "grand gold": 8.0},
-    # Denver International Spirits Competition (72% of 2021 entries medalled).
-    "denver": {"bronze": 5.5, "silver": 6.5, "gold": 7.0, "double gold": 8.0, "platinum": 8.5},
-    # ACSA Craft Spirits: Bronze 70-79, Silver 80-89, Gold 90-100, members only.
-    "acsa": {"bronze": 5.0, "silver": 6.0, "gold": 7.0},
-    # TAG Global Spirits Awards: Platinum is common (46 of ~250 medals in 2025).
-    "tag": {"bronze": 5.5, "silver": 6.0, "gold": 7.0, "double gold": 7.5, "platinum": 8.0},
+    "default": {"bronze": 6.0, "silver": 7.0, "silver outstanding": 7.5, "gold": 8.0,
+                "gold outstanding": 8.5, "double gold": 9.0, "grand gold": 9.0,
+                "platinum": 9.5, "trophy": 9.5, "best in show": 9.5},
 }
 
 

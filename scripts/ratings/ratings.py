@@ -1187,22 +1187,21 @@ def cmd_calibrate(args):
     mean = sum(diffs) / len(diffs)
     sd = (sum((d - mean) ** 2 for d in diffs) / len(diffs)) ** 0.5
     print(f"  against the catalog's consensus on {len(pairs)} shared bottles: mean {mean:+.2f}, spread {sd:.2f}")
-    print("  For reference, long-standing sources sit within about ±0.4 (The Lone Caner -0.34, Whiskyfun -0.36, BSA -0.11).")
     if len(pairs) < 15:
         print("  Only a few shared bottles: treat this as a hint, not a finding.")
+    # A source's numbers are never bent to fit (normalize.py): the answer to a harsh or
+    # generous source is its weight, once the batch's scale is known to be the right one.
     if abs(mean) > 1.0:
-        print("  Far from consensus: a scale or curve problem more than a weight one. Try another scale before changing the weight.")
+        print("  Far from consensus: first check the batch's scale (points read as stars?). If it's right, give this source a lower weight.")
     elif abs(mean) > 0.6:
-        print("  Noticeably " + ("generous" if mean > 0 else "harsh") + ": a lower weight, or a scale that fits better, would keep it from pulling scores.")
+        print("  Noticeably " + ("generous" if mean > 0 else "harsh") + ": a lower weight would keep it from pulling scores.")
     else:
         print("  In line with the catalog: the source's default weight is fine.")
 
 
 # RumX's community medians count in the score (user decision 2026-11-15: "I trust
-# RumX"; RumX is the only community source used). Calibrated on the ~50 rums that
-# also have 2+ expert reviews: RumX sits +0.22 above the consensus (sd ~1.0), as
-# close as the critics we use, so its 0-10 median is read as-is. A median counts
-# more the more members rated it: full weight at COMMUNITY_FULL_AT ratings,
+# RumX"; RumX is the only community source used). Its 0-10 median is read as-is, like
+# every score. A median counts more the more members rated it: full weight at COMMUNITY_FULL_AT ratings,
 # proportionally less below (a median of 4 counts 0.11).
 COMMUNITY_SOURCE = "rumx_community"
 COMMUNITY_WEIGHT = 0.7
@@ -1746,7 +1745,7 @@ def harvest_whiskyfun(args):
     core = sum(1 for r in rows if not r["join_only"])
     print(f"  {len(pages)} pages: {len(rows)} official-bottling notes ({core} core range, {len(rows) - core} limited)")
     return "whiskyfun", {"source_id": "whiskyfun", "scale": "critic100_harsh", "weight": 1.0, "origin": "bulk", "ref": "url",
-                         "note": "Whiskyfun's scored notes on official bottlings (hard graders; their own curve). "
+                         "note": "Whiskyfun's scored notes on official bottlings (hard graders). "
                                  "Limited releases only join bottles already in the catalog."}, rows
 
 
@@ -1868,8 +1867,7 @@ def harvest_bevx(args):
     print(f"  {len(posts)} posts, {len(rows)} scored spirit reviews")
     return "bevx", {"source_id": "bevx", "scale": "competition100", "weight": 0.6, "origin": "bulk", "ref": "url",
                     "note": "BevX (Sean Ludford), spirits sections only. Stars are read through BevX's own stars-to-points pairing; "
-                            "its points run generous (on the 31 bottles it shares with the catalog the plain critic curve sat 1.5 "
-                            "above consensus, the competition-points curve 0.8), so they're read as a competition's."}, rows
+                            "its points run generous, which its 0.6 weight allows for."}, rows
 
 
 # --- RumX (rumx.com) ---------------------------------------------------------
