@@ -30,9 +30,10 @@
       <h1 class="site-title">The House Index</h1>
       <p id="auth-sub" class="auth-sub">Sign in to view your recipes.</p>
 
-      <!-- Sign in. Accounts are by invitation (README "Accounts"): there's no
-           sign-up here, and the project doesn't accept new sign-ups. -->
+      <!-- Sign in, or create a profile with New Here (README "Accounts"). -->
       <form id="auth-form" class="auth-form">
+        <input id="auth-name" class="search" type="text" autocomplete="name"
+               maxlength="40" placeholder="Your name" aria-label="Your name" hidden>
         <input id="auth-email" class="search" type="email" inputmode="email"
                autocomplete="email" placeholder="you@example.com" required
                aria-label="Email address">
@@ -47,7 +48,8 @@
       </form>
       <button type="button" id="auth-forgot" class="auth-link">Forgot password?</button>
       <p id="auth-status" class="auth-status" aria-live="polite"></p>
-      <p class="auth-switch">New here? Accounts are by invitation — ask whoever runs this House Index.</p>
+      <button type="button" id="auth-new" class="ghost-btn auth-new">New Here</button>
+      <button type="button" id="auth-back" class="auth-link" hidden>Already have a profile? Sign in</button>
     </div>
   </div>
 

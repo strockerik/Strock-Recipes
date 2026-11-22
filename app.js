@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "1.9.2";
+  const APP_VERSION = "2.2";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -166,10 +166,14 @@
   const tonightEl = $("#tonight-card");
   const authGate = $("#auth-gate");
   const authForm = $("#auth-form");
+  const authSubEl = $("#auth-sub");
+  const authNameEl = $("#auth-name");
   const authEmailEl = $("#auth-email");
   const authPasswordEl = $("#auth-password");
   const authSubmitBtn = $("#auth-submit");
   const authForgotBtn = $("#auth-forgot");
+  const authNewBtn = $("#auth-new");
+  const authBackBtn = $("#auth-back");
   const authStatusEl = $("#auth-status");
   const accountArea = $("#account-area");
   const accountBtn = $("#account-btn");
@@ -904,7 +908,10 @@
 
   async function ensureProfile() {
     if (!session || profileNames[session.user.id]) return;
-    const displayName = session.user.email.split("@")[0];
+    // The name typed under New Here; older accounts fall back to the email.
+    const chosenName = session.user.user_metadata?.display_name;
+    const displayName = (typeof chosenName === "string" && chosenName.trim().slice(0, 40))
+      || session.user.email.split("@")[0];
     const { error } = await supabaseClient.from("profiles")
       .upsert({ id: session.user.id, display_name: displayName }, { onConflict: "id" });
     if (!error) profileNames[session.user.id] = displayName;
@@ -1519,10 +1526,19 @@
   function friendlyAuthError(error) {
     const raw = (error && error.message) || "Something went wrong — try again.";
     const m = raw.toLowerCase();
+    const code = (error && error.code) || "";
     if (m.includes("invalid login credentials"))
       return { text: "That email or password didn’t match. Check them, or reset your password." };
     if (m.includes("email not confirmed"))
       return { text: "Your email isn’t confirmed yet — check your inbox for the link.", resend: true };
+    if (code === "user_already_exists" || code === "email_exists" || m.includes("already registered"))
+      return { text: "That email already has a profile. Sign in, or reset your password." };
+    if (code === "signup_disabled" || m.includes("signups not allowed"))
+      return { text: "New profiles are turned off right now. Let the person who sent you this link know." };
+    if (code === "email_address_not_authorized" || m.includes("not authorized") || m.includes("error sending"))
+      return { text: "We couldn’t send your email. Let the person who sent you this link know." };
+    if (code === "over_email_send_rate_limit" || m.includes("email rate limit"))
+      return { text: "Too many emails have gone out recently. Try again in an hour." };
     if (m.includes("rate limit") || m.includes("too many") || m.includes("for security purposes"))
       return { text: "Too many tries — wait a moment, then try again." };
     return { text: raw };
@@ -1556,7 +1572,25 @@
     }
   }
 
-  // --- Sign in (accounts are by invitation; there is no sign-up) ---
+  // --- Sign in, or create a profile (New Here) ---
+  let authMode = "signin";
+  const authSubmitLabel = () => (authMode === "signup" ? "Create profile" : "Sign in");
+  function setAuthMode(mode) {
+    authMode = mode;
+    const joining = mode === "signup";
+    authNameEl.hidden = !joining;
+    authNameEl.required = joining; // a hidden required field would block sign-in
+    authPasswordEl.setAttribute("autocomplete", joining ? "new-password" : "current-password");
+    authPasswordEl.placeholder = joining ? "Password (8+ characters)" : "Password";
+    authSubEl.textContent = joining ? "Create a profile for your own recipe book." : "Sign in to view your recipes.";
+    authSubmitBtn.textContent = authSubmitLabel();
+    authForgotBtn.hidden = joining;
+    authNewBtn.hidden = joining;
+    authBackBtn.hidden = !joining;
+    authStatusEl.textContent = "";
+  }
+  authNewBtn.addEventListener("click", () => { setAuthMode("signup"); authNameEl.focus(); });
+  authBackBtn.addEventListener("click", () => { setAuthMode("signin"); authEmailEl.focus(); });
 
   // One auth request at a time. Pressing Enter twice (or double-tapping) would
   // otherwise fire two requests and trip Supabase's rate limit, locking the user
@@ -1567,8 +1601,41 @@
     authBusy = busy;
     authSubmitBtn.disabled = busy;
     authForgotBtn.disabled = busy;
-    if (busy) authSubmitBtn.innerHTML = '<span class="spinner btn-spin"></span>Signing in…';
-    else authSubmitBtn.textContent = "Sign in";
+    authNewBtn.disabled = busy;
+    authBackBtn.disabled = busy;
+    if (busy) {
+      const label = authMode === "signup" ? "Creating profile…" : "Signing in…";
+      authSubmitBtn.innerHTML = `<span class="spinner btn-spin"></span>${label}`;
+    } else authSubmitBtn.textContent = authSubmitLabel();
+  }
+
+  async function createProfile(email, password) {
+    const name = authNameEl.value.trim().replace(/\s+/g, " ").slice(0, 40);
+    if (!name) { authStatusEl.textContent = "Enter your name first."; authNameEl.focus(); return; }
+    if (password.length < 8) { authStatusEl.textContent = "Choose a password of at least 8 characters."; return; }
+    setAuthBusy(true);
+    authStatusEl.textContent = "Creating your profile…";
+    try {
+      const { data, error } = await supabaseClient.auth.signUp({
+        email, password,
+        options: { data: { display_name: name }, emailRedirectTo: authRedirectTo() }
+      });
+      if (error) { showAuthStatus(friendlyAuthError(error), email); return; }
+      setAuthMode("signin");
+      authNameEl.value = "";
+      authPasswordEl.value = "";
+      // With email confirmation off there's already a session: onAuthStateChange
+      // opens the app. The wording stays the same for an email that's already
+      // registered, so this screen can't be used to test who has an account.
+      if (!data.session) {
+        showAuthStatus({
+          text: `Almost there. Check ${email} for a link to confirm your profile. If nothing arrives, that email may already have a profile, so try signing in.`,
+          resend: true
+        }, email);
+      }
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
   // Password show/hide — works for every [data-pw-toggle] field (gate + reset)
@@ -1584,7 +1651,7 @@
     t.textContent = reveal ? "Hide" : "Show";
   });
 
-  // Submit → sign in
+  // Submit → sign in, or create a profile
   authForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (authBusy) return;
@@ -1594,6 +1661,7 @@
       authStatusEl.textContent = "Enter an email and password first.";
       return;
     }
+    if (authMode === "signup") { await createProfile(email, password); return; }
     setAuthBusy(true);
     authStatusEl.textContent = "Signing in…";
     try {

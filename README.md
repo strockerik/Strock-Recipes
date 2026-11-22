@@ -73,15 +73,25 @@ loads the real page head and fails on any violation.
 
 ## Accounts
 
-Accounts are **by invitation** (since v1.9). The sign-in screen only signs in;
-there is no "Create an account" link, and the Supabase project should refuse new
-sign-ups too (**Authentication → Sign In / Providers → "Allow new users to sign
-up" → off**), because every account gets its own daily allowance on the paid AI
-features and the publishable key in `config.js` is public. To add a household
-member: **Authentication → Users → Add user → Create new user** (email + a
-starting password, "Auto Confirm User" on), then they can change the password
-from **Account ▾** or with **Forgot password?**.
+Anyone with the link can join (since v2.2). **New Here** on the sign-in screen
+asks for a name, email, and password, then emails a confirmation link. Each
+profile has its own private recipes, plan, list, and pantry.
 
+**Open sign-up needs three Supabase settings:**
+
+- **Authentication → Sign In / Providers:** "Allow new users to sign up" on and
+  "Confirm email" on. Confirmation is what stops throwaway accounts, and every
+  account gets its own daily allowance on the paid AI features.
+- **Authentication → Emails → SMTP Settings:** a custom email provider. Supabase's
+  built-in sender delivers **only to the project's team members**, at 2 emails an
+  hour, so without this nobody else receives a confirmation or reset email.
+- **Authentication → Rate Limits:** raise the email limit if needed. It starts at
+  30 an hour once custom SMTP is on.
+
+In the app:
+
+- **New Here** creates a profile. The name is saved to the profile and shown on
+  recipes that person shares.
 - **Sign in** with your email + password. The password field has a
   **Show/Hide** toggle, and the button shows a spinner while a request is in flight.
 - **Forgot password?** emails a link that returns to the app and drops you

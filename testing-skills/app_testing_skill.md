@@ -360,8 +360,8 @@ Smoke tests worth having (each its own `test_*.html` or one with sub-cases):
   is no `window.prompt` anymore.
 - **One-action sign-in gate** — opens in sign-in mode (`#auth-submit` reads
   "Sign in", password `autocomplete="current-password"`, `#auth-forgot` visible);
-  clicking `#auth-switch` flips to sign-up (button "Create account",
-  `autocomplete="new-password"`, forgot link hidden). Submit calls
+  clicking `#auth-new` (New Here) flips to sign-up (button "Create profile",
+  `#auth-name` shown, `autocomplete="new-password"`, forgot link hidden). Submit calls
   `signInWithPassword` in signin mode and `signUp` in signup mode. A
   double-`submit` in one tick fires **exactly one** call (the `authBusy` guard).
 - **Password show/hide** — clicking a `[data-pw-toggle]` flips its input between

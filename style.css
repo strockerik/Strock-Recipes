@@ -233,10 +233,9 @@ button:focus-visible, input:focus-visible {
   padding: 4px;
 }
 .auth-link:hover { color: var(--accent); }
-.auth-switch {
-  margin-top: 16px;
-  font-size: 0.88rem;
-  color: var(--faint);
+.auth-new {
+  width: 100%;
+  margin-top: 6px;
 }
 
 /* Password field with an inline Show/Hide toggle */

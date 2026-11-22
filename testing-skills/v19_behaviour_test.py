@@ -3,7 +3,7 @@
 
 Boots the REAL index.html DOM + app.js against an in-memory Supabase that keeps
 table state and logs every call, then checks:
-  - sign-in only        (no "Create an account"; accounts are by invitation)
+  - sign-in screen      (opens on sign-in; signup_flow_test.py covers New Here)
   - names               (from my_people(), not a read of every profile)
   - plan → grocery list (ADDS: other recipes, typed items, check-offs stay; the
                          larger serving count wins, so pressing twice never doubles;
@@ -159,9 +159,9 @@ async function toPlan() { click($("#mode-mealplan")); await until(function () { 
 
 async function runTests() {
   try {
-    // ---------- sign-in only ----------
-    assert("the sign-in screen has no Create an account", !$("#auth-switch"), "");
-    assert("…and says accounts are by invitation", /by invitation/i.test(txt($(".auth-switch"))), txt($(".auth-switch")));
+    // ---------- sign-in screen ----------
+    assert("the sign-in screen offers New Here", txt($("#auth-new")) === "New Here", txt($("#auth-new")));
+    assert("…and opens on sign-in", txt($("#auth-submit")) === "Sign in" && $("#auth-name").hidden, txt($("#auth-submit")));
     assert("the sign-in password has no 8-character minimum", !$("#auth-password").hasAttribute("minlength"), "");
 
     // ---------- names ----------
