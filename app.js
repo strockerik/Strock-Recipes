@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "2.2";
+  const APP_VERSION = "2.3";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -175,6 +175,12 @@
   const authNewBtn = $("#auth-new");
   const authBackBtn = $("#auth-back");
   const authStatusEl = $("#auth-status");
+  const authEntryEl = $("#auth-entry");
+  const authWaitingEl = $("#auth-waiting");
+  const authWaitingMsgEl = $("#auth-waiting-msg");
+  const authWaitingActionsEl = $("#auth-waiting-actions");
+  const authWaitingCheckBtn = $("#auth-waiting-check");
+  const authWaitingStatusEl = $("#auth-waiting-status");
   const accountArea = $("#account-area");
   const accountBtn = $("#account-btn");
   const accountPanel = $("#account-panel");
@@ -1403,6 +1409,7 @@
     // An offline session has no live token yet: refreshing it fires
     // TOKEN_REFRESHED, which reloads the data (see initAuth).
     if (session.offline) { supabaseClient.auth.refreshSession().catch(() => {}); return; }
+    if (memberStatus !== "approved") { recheckApproval(); return; }
     loadData(); // fresh data, and loadData replays any queued check-offs
   });
 
@@ -1455,9 +1462,28 @@
     return (first + last).toUpperCase();
   }
 
+  // Approval of a new profile (README "Accounts"). The database enforces it; this
+  // only decides which screen to show.
+  let memberStatus = "none"; // "none" | "checking" | "waiting" | "approved"
+  function isKnownMember(userId) {
+    try { return localStorage.getItem(`hi:${userId}:member`) === "true"; } catch { return false; }
+  }
+  function renderWaiting() {
+    const checking = memberStatus === "checking";
+    authWaitingActionsEl.hidden = checking;
+    const name = session.user.user_metadata?.display_name;
+    authWaitingMsgEl.textContent = checking
+      ? "One moment…"
+      : `Thanks${typeof name === "string" && name.trim() ? `, ${name.trim()}` : ""}. Your request is in. You can start using The House Index once it’s approved, so let the person who sent you the link know you’ve signed up.`;
+  }
+
   function updateAuthUI() {
-    authGate.hidden = !!session;
-    accountArea.hidden = !session;
+    const held = !!session && memberStatus !== "approved";
+    authGate.hidden = !!session && !held;
+    authEntryEl.hidden = held;
+    authWaitingEl.hidden = !held;
+    accountArea.hidden = !session || held;
+    if (held) renderWaiting();
     if (session) {
       accountEmailEl.textContent = session.user.email;
       accountBtn.textContent = initialsFrom(session.user.email);
@@ -1465,6 +1491,53 @@
   }
 
   let loadedUserId = null; // whose data is currently loaded
+
+  // Ask the server whether this profile is approved. Only a definite "no" holds
+  // someone back, so a dropped connection never locks out a real member.
+  async function checkMembership() {
+    const userId = session && session.user.id;
+    if (!userId) return;
+    let answer = null;
+    try {
+      const { data, error } = await supabaseClient.rpc("is_approved_member");
+      if (!error) answer = data;
+    } catch { /* offline: the server still enforces it */ }
+    if (!session || session.user.id !== userId) return;
+    memberStatus = answer === false ? "waiting" : "approved";
+    if (answer === true) saveLocal("member", true);
+    if (answer === false) { try { localStorage.removeItem(userKey("member")); } catch {} }
+    updateAuthUI();
+  }
+
+  // Known members go straight in and are re-checked alongside the load; anyone
+  // else stays on the gate until the answer arrives.
+  async function openForMember(showIntro) {
+    const known = memberStatus === "approved";
+    const start = () => { if (showIntro) maybeShowIntro(); loadData(); };
+    if (known) start();
+    await checkMembership();
+    if (!session) return;
+    if (!known && memberStatus === "approved") start();
+    if (known && memberStatus === "waiting") clearData();
+  }
+
+  let recheckBusy = false;
+  async function recheckApproval() {
+    if (recheckBusy || memberStatus !== "waiting") return;
+    recheckBusy = true;
+    authWaitingCheckBtn.disabled = true;
+    authWaitingStatusEl.textContent = "Checking…";
+    try {
+      await openForMember(true);
+      authWaitingStatusEl.textContent = memberStatus === "waiting" ? "Not approved yet. Check back soon." : "";
+    } finally {
+      recheckBusy = false;
+      authWaitingCheckBtn.disabled = false;
+    }
+  }
+  authWaitingCheckBtn.addEventListener("click", recheckApproval);
+  $("#auth-waiting-signout").addEventListener("click", () => supabaseClient.auth.signOut());
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) recheckApproval(); });
 
   function initAuth() {
     // onAuthStateChange fires an INITIAL_SESSION event on subscribe, so it
@@ -1489,6 +1562,10 @@
         if (user) newSession = { user, offline: true };
       }
       session = newSession;
+      if (!session) memberStatus = "none";
+      else if (session.user.id !== loadedUserId) {
+        memberStatus = session.offline || isKnownMember(session.user.id) ? "approved" : "checking";
+      }
       updateAuthUI();
       renderOfflineBanner();
       if (session) {
@@ -1498,10 +1575,12 @@
         const userChanged = session.user.id !== loadedUserId;
         loadedUserId = session.user.id;
         if (userChanged) loadUserLocalState();
-        if (userChanged && event !== "PASSWORD_RECOVERY") setTimeout(maybeShowIntro, 0);
         // Coming back from an offline session, the first real token is the cue to
         // swap the cached copy for live data.
-        if (userChanged || event !== "TOKEN_REFRESHED" || wasOffline) setTimeout(loadData, 0);
+        if (userChanged || event !== "TOKEN_REFRESHED" || wasOffline) {
+          const showIntro = userChanged && event !== "PASSWORD_RECOVERY";
+          setTimeout(() => openForMember(showIntro), 0);
+        }
         // Returning from a Kroger "Connect King Soopers" login (?code=…&state=…).
         if (/[?&]code=/.test(window.location.search) && /[?&]state=/.test(window.location.search)) {
           setTimeout(handleKrogerOAuthReturn, 0);
@@ -1582,7 +1661,7 @@
     authNameEl.required = joining; // a hidden required field would block sign-in
     authPasswordEl.setAttribute("autocomplete", joining ? "new-password" : "current-password");
     authPasswordEl.placeholder = joining ? "Password (8+ characters)" : "Password";
-    authSubEl.textContent = joining ? "Create a profile for your own recipe book." : "Sign in to view your recipes.";
+    authSubEl.textContent = joining ? "Create a profile, and you’ll be in once it’s approved." : "Sign in to view your recipes.";
     authSubmitBtn.textContent = authSubmitLabel();
     authForgotBtn.hidden = joining;
     authNewBtn.hidden = joining;
@@ -1747,7 +1826,10 @@
     if (e.target === accountPanel) accountPanel.hidden = true;
   });
   $("#account-change-pw").addEventListener("click", () => showAccountView("reset"));
-  $("#account-reset-cancel").addEventListener("click", () => showAccountView("menu"));
+  $("#account-reset-cancel").addEventListener("click", () => {
+    if (memberStatus === "approved") showAccountView("menu");
+    else accountPanel.hidden = true; // a waiting profile goes back to its screen
+  });
   $("#account-backup").addEventListener("click", () => {
     accountPanel.hidden = true;
     openBackupPanel();

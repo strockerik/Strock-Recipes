@@ -1058,6 +1058,13 @@ Deno.serve(async (req) => {
     const { data: userData, error: userError } = await supabaseClient.auth.getUser();
     if (userError || !userData?.user) return json({ error: "Please sign in first." });
 
+    // A new profile waiting for the owner's approval can't use this yet, including
+    // the free link reader below (supabase/sql/member-approval.sql). If it can't
+    // be checked, refuse.
+    const { data: approved, error: approvalError } = await supabaseClient.rpc("is_approved_member");
+    if (approvalError) return json({ error: "Couldn’t check your account — try again in a minute." });
+    if (approved !== true) return json({ error: "Your profile is waiting for approval." });
+
     const body = await req.json();
     let userContent;
     // Message shown if the model returns no recipe — made input-specific below

@@ -28,6 +28,18 @@
   <div id="auth-gate" class="auth-gate">
     <div class="auth-card">
       <h1 class="site-title">The House Index</h1>
+
+      <!-- Signed in, but this profile hasn't been approved yet (README "Accounts"). -->
+      <div id="auth-waiting" hidden>
+        <p id="auth-waiting-msg" class="auth-sub" aria-live="polite"></p>
+        <div id="auth-waiting-actions" class="auth-form">
+          <button type="button" id="auth-waiting-check" class="solid-btn">Check again</button>
+          <button type="button" id="auth-waiting-signout" class="auth-link">Sign out</button>
+        </div>
+        <p id="auth-waiting-status" class="auth-status" aria-live="polite"></p>
+      </div>
+
+      <div id="auth-entry">
       <p id="auth-sub" class="auth-sub">Sign in to view your recipes.</p>
 
       <!-- Sign in, or create a profile with New Here (README "Accounts"). -->
@@ -50,6 +62,7 @@
       <p id="auth-status" class="auth-status" aria-live="polite"></p>
       <button type="button" id="auth-new" class="ghost-btn auth-new">New Here</button>
       <button type="button" id="auth-back" class="auth-link" hidden>Already have a profile? Sign in</button>
+      </div>
     </div>
   </div>
 

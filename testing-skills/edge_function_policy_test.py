@@ -50,5 +50,12 @@ rb = FNS["research-bottle"]
 ok("research-bottle refreshes scores where a lookup writes them (order: research_bottle_test)",
    rb.count("await refreshScores(admin);") == 2)
 
+for name in ("kroger", "extract-recipe"):
+    src = FNS[name]
+    ok(f"{name}: checks approval before reading the request",
+       before(src, 'rpc("is_approved_member")', "await req.json()"))
+    ok(f"{name}: refuses when approval can't be checked",
+       "if (approvalError) return json(" in src and "if (approved !== true) return json(" in src)
+
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

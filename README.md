@@ -73,24 +73,37 @@ loads the real page head and fails on any violation.
 
 ## Accounts
 
-Anyone with the link can join (since v2.2). **New Here** on the sign-in screen
-asks for a name, email, and password, then emails a confirmation link. Each
-profile has its own private recipes, plan, list, and pantry.
+Anyone with the link can **ask** to join, and the owner approves them (since
+v2.3). **New Here** on the sign-in screen asks for a name, email, and password.
+The person then sees a waiting screen until they're approved. Each profile has
+its own private recipes, plan, list, and pantry.
 
-**Open sign-up needs three Supabase settings:**
+**To approve someone:** Supabase → **Table Editor → `member_requests`** → set
+`approved` to true. They're in the next time they open the app or tap **Check
+again**. **To refuse someone:** **Authentication → Users** → delete the user.
+Supabase doesn't send an alert when a request arrives, so ask people to tell you
+after they sign up.
 
-- **Authentication → Sign In / Providers:** "Allow new users to sign up" on and
-  "Confirm email" on. Confirmation is what stops throwaway accounts, and every
-  account gets its own daily allowance on the paid AI features.
-- **Authentication → Emails → SMTP Settings:** a custom email provider. Supabase's
-  built-in sender delivers **only to the project's team members**, at 2 emails an
-  hour, so without this nobody else receives a confirmation or reset email.
-- **Authentication → Rate Limits:** raise the email limit if needed. It starts at
-  30 an hour once custom SMTP is on.
+Approval is enforced in the database by `supabase/sql/member-approval.sql`, not
+just in the app. Until approved, a person can't read or write personal data, use
+the AI features or King Soopers, change the bottle catalog, or look up members.
+Bottle scores stay readable because `spirit_consensus` is a materialized view,
+which can't carry row-level security. It holds no personal data. **A new table
+that has policies needs that script run again** so the approval rule covers it.
+The script's header has a one-line off switch.
+
+**Supabase settings:**
+
+- **Authentication → Sign In / Providers:** "Allow new users to sign up" on, and
+  "Confirm email" off, so joining needs no email sender. Someone could type
+  another person's address, so only approve people you recognize.
+- **Authentication → Emails → SMTP Settings (optional):** Supabase's built-in
+  sender delivers **only to the project's team members**, at 2 emails an hour.
+  Without a custom sender, **Forgot password?** won't reach anyone else.
 
 In the app:
 
-- **New Here** creates a profile. The name is saved to the profile and shown on
+- **New Here** requests a profile. The name is saved to the profile and shown on
   recipes that person shares.
 - **Sign in** with your email + password. The password field has a
   **Show/Hide** toggle, and the button shows a spinner while a request is in flight.

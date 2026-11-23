@@ -237,6 +237,8 @@ button:focus-visible, input:focus-visible {
   width: 100%;
   margin-top: 6px;
 }
+/* Above the gate, so a waiting profile can finish a password-reset link. */
+#account-panel { z-index: 55; }
 
 /* Password field with an inline Show/Hide toggle */
 .pw-field { position: relative; display: flex; }
