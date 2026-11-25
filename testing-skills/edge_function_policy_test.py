@@ -43,8 +43,8 @@ ok("cocktail options are capped before the model call",
 
 ext = FNS["extract-recipe"]
 ok("link import reads the page through the size cap", "html = await readCapped(pageRes);" in ext and "await pageRes.text()" not in ext)
-ok("link import resolves the host before fetching", before(ext, "await resolvesPublic(url.hostname)", "const pageRes = await fetch(url"))
-ok("…and re-checks where a redirect landed", "resolvesPublic(landed.hostname)" in ext)
+ok("link import resolves the host before fetching", before(ext, "await resolvesPublic(url.hostname)", "const pageRes = await fetchFollowingSafely(url"))
+ok("…and checks each redirect target before requesting it", "!(await resolvesPublic(next.hostname))" in ext)
 ok("carrier-grade NAT (100.64/10) is refused as a literal address", "(a === 100 && b >= 64 && b <= 127)" in ext)
 rb = FNS["research-bottle"]
 ok("research-bottle refreshes scores where a lookup writes them (order: research_bottle_test)",
@@ -56,6 +56,13 @@ for name in ("kroger", "extract-recipe"):
        before(src, 'rpc("is_approved_member")', "await req.json()"))
     ok(f"{name}: refuses when approval can't be checked",
        "if (approvalError) return json(" in src and "if (approved !== true) return json(" in src)
+
+ext = FNS["extract-recipe"]
+ok("link import checks every redirect hop before requesting it",
+   "redirect: \"manual\"" in ext and "await fetchFollowingSafely(url," in ext and "redirect: \"follow\",\n          signal: AbortSignal.timeout(15_000)" not in ext)
+ok("IPv6 answers are read as numbers, not text patterns", "function ipv6Groups" in ext and "(g[0] & 0xfe00) === 0xfc00" in ext)
+ok("pasted text is capped before the model call", before(ext, "body.text.length > MAX_TEXT_CHARS", "Extract the recipe from the following text"))
+ok("each photo is capped before the model call", before(ext, "img.data.length > MAX_IMAGE_BASE64_CHARS", 'type: "image", source:'))
 
 print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

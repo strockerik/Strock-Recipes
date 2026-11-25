@@ -6,7 +6,7 @@
   // release ships (minor for features and fixes, e.g. 1.1; major for a big
   // change). It is a label for people, separate from the service worker's
   // cache VERSION in sw.js, which only needs bumping to retire old caches.
-  const APP_VERSION = "2.3";
+  const APP_VERSION = "2.3.1";
 
   // ---------- State ----------
   let section = "recipes"; // "recipes" | "cocktails"
@@ -1077,11 +1077,19 @@
       supabaseClient.from("grocery_manual_items").select("*").order("created_at"),
       supabaseClient.from("grocery_checked_items").select("item_key")
     ]);
-    basket.clear();
-    if (!basketRes.error) (basketRes.data || []).forEach((r) => basket.set(r.recipe_id, { servings: r.servings }));
-    manualGroceryItems = manualRes.error ? [] : (manualRes.data || []).map((r) => ({ key: r.id, name: r.name, sourceInventoryId: r.source_inventory_id }));
-    checkedGroceryItems.clear();
-    if (!checkedRes.error) (checkedRes.data || []).forEach((r) => checkedGroceryItems.add(r.item_key));
+    // A read that failed leaves that part of the list as it was, instead of
+    // emptying it on screen.
+    if (!basketRes.error) {
+      basket.clear();
+      (basketRes.data || []).forEach((r) => basket.set(r.recipe_id, { servings: r.servings }));
+    }
+    if (!manualRes.error) {
+      manualGroceryItems = (manualRes.data || []).map((r) => ({ key: r.id, name: r.name, sourceInventoryId: r.source_inventory_id }));
+    }
+    if (!checkedRes.error) {
+      checkedGroceryItems.clear();
+      (checkedRes.data || []).forEach((r) => checkedGroceryItems.add(r.item_key));
+    }
     applyPendingChecks(); // ticks made offline outrank the last-synced copy
   }
 
@@ -1416,6 +1424,7 @@
   // Check-offs made offline: item key -> checked (the latest tap wins), kept
   // per user in localStorage until they reach the server.
   let pendingChecks = {};
+  function isOffline() { return navigator.onLine === false || !!(session && session.offline); }
   function isOfflineError(error) {
     return navigator.onLine === false ||
       /failed to fetch|load failed|networkerror|network request failed/i.test(String((error && error.message) || error || ""));
@@ -3846,7 +3855,7 @@
       .gte("plan_date", isoDate(addDays(midnight(), -7)))
       .lte("plan_date", isoDate(addDays(midnight(), 6)))
       .order("plan_date");
-    if (error) { mealPlan = []; return; }
+    if (error) return; // keep what's on screen rather than blank the plan
     mealPlan = (data || []).map((r) => ({
       id: r.id, recipeId: r.recipe_id, date: r.plan_date,
       slot: r.slot, servings: r.servings, purchasedAt: r.purchased_at
@@ -4669,7 +4678,9 @@
     renderTonight();
     if (mode === "mealplan") {
       if (!session) { toast("Sign in to plan meals."); setViewMode("recipes"); return; }
-      loadMealPlan().then(() => renderMealPlan());
+      // Offline, what's in memory is the newest copy there is.
+      if (isOffline()) renderMealPlan();
+      else loadMealPlan().then(() => renderMealPlan());
     }
     if (mode === "bottles") {
       if (!session) { toast("Sign in to look up bottles."); setViewMode("recipes"); return; }
@@ -5383,11 +5394,15 @@
   async function removeSharedWithMe(item) {
     if (!session) { toast("You've been signed out — sign in again."); return; }
     if (!confirm(`Remove “${item.name}” from your shared recipes? This only removes it from your list — the owner keeps their copy.`)) return;
-    const { error } = await supabaseClient.from("recipe_shares")
+    // .select() returns the rows actually deleted: a refusal deletes none with no
+    // error (before supabase/sql/v2.3.1-repairs.sql, every time), so check.
+    const { data: removed, error } = await supabaseClient.from("recipe_shares")
       .delete()
       .eq("recipe_id", item.id)
-      .eq("shared_with_user_id", session.user.id);
+      .eq("shared_with_user_id", session.user.id)
+      .select("recipe_id");
     if (error) { toastError("Couldn\u2019t remove that", error); return; }
+    if (!removed || !removed.length) { toast("Couldn\u2019t remove that \u2014 try again in a minute."); return; }
     openItems.delete(item.id);
     await loadData();
     toast("Removed from your shared recipes.");
@@ -7304,7 +7319,9 @@
   function openGroceryPanel() {
     renderGroceryPanel(); // whatever's already in memory — no blank flash
     groceryPanel.hidden = false;
-    // Refetch on open so a change made on another device shows up here.
+    // Refetch on open so a change made on another device shows up here. Offline,
+    // what's in memory is the newest copy there is.
+    if (isOffline()) return;
     loadGroceryList().then(() => { if (!groceryPanel.hidden) renderGroceryPanel(); });
   }
   // The header cart is the one way in (the bottom bar is gone), so it's there

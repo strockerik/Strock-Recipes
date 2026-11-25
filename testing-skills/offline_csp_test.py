@@ -9,8 +9,10 @@ Three parts, all in headless Chrome against a local server:
      registers under the policy.
   B. The REAL sw.js against a server that can be switched "offline": a signed-in
      user's reads are served from cache once the network is gone, the app shell
-     opens offline, anon reads are never cached, a different user wipes the copy,
-     and "clear-data" (sign-out) wipes it.
+     opens offline, anon reads are never cached, a successful write refreshes that
+     table's copies (a single-row read stays single; a failed or offline write
+     changes nothing), a different user wipes the copy, and "clear-data"
+     (sign-out) wipes it.
   C. app.js offline logic with Supabase stubbed: an expired stored session opens
      the app (not the sign-in gate) with the offline banner, a grocery tick made
      offline is kept and queued, and coming back online replays it.
@@ -26,6 +28,7 @@ def find_repo():
 REPO = find_repo()
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 OFFLINE = {"on": False}
+WRITES = {}   # table -> successful writes so far; every read reports it as "v"
 RESULTS = {"latest": None}
 
 # A tiny fake JWT: the service worker only base64-decodes the payload.
@@ -126,6 +129,14 @@ const USER_A = "%USER_A%", USER_B = "%USER_B%", ANON = "%ANON%";
     catch { return null; }   // a network error — what an app sees offline with no copy
   };
   const net = (state) => fetch("/__" + state).catch(() => null);
+  const getAs = async (url, token, accept) => {
+    try { const r = await fetch(url, { headers: { Authorization: "Bearer " + token, Accept: accept } }); return r.ok ? await r.json() : null; }
+    catch { return null; }
+  };
+  const send = async (method, url, token) => {
+    try { const r = await fetch(url, { method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: "{}" }); return r.status; }
+    catch { return null; }
+  };
   try {
     step("registering");
     await navigator.serviceWorker.register("sw.js");
@@ -146,6 +157,25 @@ const USER_A = "%USER_A%", USER_B = "%USER_B%", ANON = "%ANON%";
     ok("B: offline, an unseen read is a network error (no fake data)", (await get("/rest/v1/never_seen?select=*", USER_A)) === null);
     ok("B: offline, the page itself opens from cache", ((await get("index.html")) || "").includes("The House Index"));
     ok("B: offline, app.js opens from cache", ((await get("app.js")) || "").includes("supabaseClient"));
+    // A write made online refreshes that table's saved copy.
+    await net("online");
+    const listBefore = JSON.parse(await get("/rest/v1/grocery_basket_items?select=*", USER_A));
+    const oneBefore = await getAs("/rest/v1/profiles?select=*&id=eq.user-a", USER_A, "application/vnd.pgrst.object+json");
+    await later(300);
+    ok("B: write passes through to the server", (await send("POST", "/rest/v1/grocery_basket_items", USER_A)) === 201);
+    ok("B: a PATCH with filters passes through", (await send("PATCH", "/rest/v1/profiles?id=eq.user-a", USER_A)) === 204);
+    ok("B: a failed write passes its error through", (await send("POST", "/rest/v1/fail_table", USER_A)) === 400);
+    ok("B: an RPC call is left alone", (await send("POST", "/rest/v1/rpc/is_approved_member", USER_A)) === 200);
+    await later(800);
+    await net("offline");
+    const listAfter = await getAs("/rest/v1/grocery_basket_items?select=*", USER_A, "application/json");
+    ok("B: offline after a write, the list copy includes it", listBefore.v === 0 && listAfter && listAfter.v === 1, JSON.stringify(listAfter));
+    const oneAfter = await getAs("/rest/v1/profiles?select=*&id=eq.user-a", USER_A, "application/vnd.pgrst.object+json");
+    ok("B: a single-row copy is refreshed as a single row", oneBefore.single && oneAfter && oneAfter.single && oneAfter.v === 1, JSON.stringify(oneAfter));
+    ok("B: other tables' copies are untouched", (await get("/rest/v1/recipes?select=*", USER_A)) === recipesOnline);
+    ok("B: a write made offline is a network error", (await send("POST", "/rest/v1/grocery_basket_items", USER_A)) === null);
+    const listStill = await getAs("/rest/v1/grocery_basket_items?select=*", USER_A, "application/json");
+    ok("B: ...and leaves the copy as it was", listStill && listStill.v === 1, JSON.stringify(listStill));
     // A different user signs in on this device: user A's copy must go.
     await net("online");
     await get("/rest/v1/profiles?select=*", USER_B);
@@ -172,6 +202,7 @@ localStorage.setItem("sb-localhost-auth-token", JSON.stringify({ access_token: "
 var NET = { online: false };
 Object.defineProperty(Navigator.prototype, "onLine", { configurable: true, get: function () { return NET.online; } });
 window.CALLS = [];
+window.READS = [];
 var AUTH_CB = null;
 var RECIPES = [{ id: "r1", user_id: "u1", section: "kitchen", name: "Test Soup", subtitle: null, source: null, tags: [],
   base_servings: 4, servings_label: "servings", created_at: "2026-01-01T00:00:00Z",
@@ -184,6 +215,7 @@ function builder(table) {
       CALLS.push([table, op]);
       return NET.online ? { data: null, error: null } : { data: null, error: { message: "TypeError: Failed to fetch" } };
     }
+    READS.push(table);
     if (table === "recipes") return { data: RECIPES, error: null };
     if (table === "grocery_basket_items") return { data: [{ recipe_id: "r1", servings: 4 }], error: null };
     var prof = { id: "u1", display_name: "T", diet_prefs: null, grocery_prefs: null, kroger_prefs: null };
@@ -222,9 +254,11 @@ async function run() {
     for (var i = 0; i < 60 && !$('.item[data-id="r1"]'); i++) await later(50);
     ok("C: offline + expired token opens the app, not the sign-in gate", !!$('.item[data-id="r1"]') && $("#auth-gate").hidden, "gate hidden=" + $("#auth-gate").hidden);
     ok("C: the offline banner shows", !$("#offline-banner").hidden);
+    var readsBefore = READS.length;
     $("#open-grocery-top").click(); await later(100);
     var box = document.querySelector(".g-item-check");
     ok("C: grocery list renders offline", !!box);
+    ok("C: opening the list offline doesn't re-read it (memory is the newest copy)", READS.length === readsBefore, READS.slice(readsBefore).join(","));
     box.checked = true; box.dispatchEvent(new Event("change", { bubbles: true })); await later(80);
     var key = box.dataset.key;
     var queued = JSON.parse(localStorage.getItem("hi:u1:pendingChecks") || "{}");
@@ -261,10 +295,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.close_connection = True   # no response at all: the browser sees a network error
             return
         if self.path.startswith("/rest/v1/"):
-            body = json.dumps({"path": self.path, "auth": self.headers.get("Authorization", "")[-12:]}).encode()
-            return self._send(200, body, "application/json")
+            table = self.path.split("?")[0].rsplit("/", 1)[-1]
+            single = "vnd.pgrst.object" in self.headers.get("Accept", "")
+            body = json.dumps({"path": self.path, "auth": self.headers.get("Authorization", "")[-12:],
+                               "v": WRITES.get(table, 0), "single": single}).encode()
+            return self._send(200, body, "application/vnd.pgrst.object+json" if single else "application/json")
         return super().do_GET()
+    def _write(self, code):
+        n = int(self.headers.get("Content-Length", 0))
+        if n: self.rfile.read(n)
+        if OFFLINE["on"]:
+            self.close_connection = True
+            return
+        path = self.path.split("?")[0]
+        if "/rpc/" in path: return self._send(200, b"true", "application/json")
+        table = path.rsplit("/", 1)[-1]
+        if table.startswith("fail"): return self._send(400, b'{"message":"no"}', "application/json")
+        WRITES[table] = WRITES.get(table, 0) + 1
+        return self._send(code, b"")
+    def do_PATCH(self): return self._write(204)
+    def do_DELETE(self): return self._write(204)
     def do_POST(self):
+        if self.path.startswith("/rest/v1/"): return self._write(201)
         if self.path == "/__results":
             n = int(self.headers.get("Content-Length", 0))
             RESULTS["latest"] = json.loads(self.rfile.read(n) or b"{}")

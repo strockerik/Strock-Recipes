@@ -62,7 +62,7 @@ HOUSEHOLD_TABLES = {
     "profiles": "id", "recipe_shares": "recipe_id,shared_with_user_id",
     "meal_plan_entries": "id", "grocery_basket_items": "user_id,recipe_id",
     "grocery_manual_items": "id", "grocery_checked_items": "user_id,item_key",
-    "inventory_items": "id",
+    "inventory_items": "id", "member_requests": "user_id",   # who's approved (v2.3)
 }
 CATALOG_TABLES = {
     "rating_sources": "id", "spirit_products": "id", "spirit_aliases": "alias_norm",
@@ -140,16 +140,17 @@ def sb_request(method, path, body=None):
 
 
 def fetch_recipes():
-    return sb_request("GET", f"/rest/v1/recipes?select={SELECT_COLS}&order=name") or []
+    # Paged like every other table: one request stops at 1,000 rows, silently.
+    return fetch_all("recipes", "name,id", select=SELECT_COLS) or []
 
 
-def fetch_all(table, order, page=1000):
+def fetch_all(table, order, page=1000, select="*"):
     """Every row of a table, a page at a time (Supabase caps a response at 1,000).
     None if the table isn't in this database."""
     rows, offset = [], 0
     while True:
         try:
-            chunk = sb_request("GET", f"/rest/v1/{table}?select=*&order={order}&limit={page}&offset={offset}") or []
+            chunk = sb_request("GET", f"/rest/v1/{table}?select={select}&order={order}&limit={page}&offset={offset}") or []
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None

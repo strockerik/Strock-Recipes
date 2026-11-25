@@ -12,12 +12,13 @@
  *    reads are stored, and the cache belongs to one user at a time.
  *
  * Writes, auth, and the Edge Functions (AI, King Soopers) always go straight to
- * the network: there is nothing sensible to serve for them offline.
+ * the network: there is nothing sensible to serve for them offline. A write that
+ * succeeds re-reads that table's saved copies, so an offline open shows it.
  *
  * Kill switch: if this ever misbehaves, replace this file with one whose
  * activate handler calls self.registration.unregister() and deploy.
  */
-const VERSION = "v2"; // bump to retire every old shell cache on the next visit (v2: v1.9, self-hosted fonts)
+const VERSION = "v3"; // bump to retire every old shell cache on the next visit (v3: v2.3.1, copies refreshed after writes)
 const SHELL_CACHE = `shell-${VERSION}`;
 const DATA_CACHE = "data-v1";
 const META_KEY = "/__sw-meta/user"; // which user the DATA cache belongs to
@@ -131,6 +132,42 @@ async function handleData(event) {
   return cached || network;
 }
 
+// A write that reached the server makes this device's saved copies of that table
+// stale: adding a recipe to the list at home, then opening the list in a store
+// with no signal, used to show the list from before the add. Re-read each saved
+// copy of the table (same user, same Accept, so a single-row read stays one row);
+// a copy that can't be re-read is dropped rather than kept stale.
+async function refreshTable(table, userId, headers) {
+  const cache = await caches.open(DATA_CACHE);
+  const owner = await cache.match(META_KEY);
+  if (!owner || (await owner.text()) !== userId) return;
+  for (const key of await cache.keys()) {
+    if (!new URL(key.url).pathname.endsWith(`/rest/v1/${table}`)) continue;
+    const old = await cache.match(key);
+    const single = ((old && old.headers.get("content-type")) || "").includes("vnd.pgrst.object");
+    try {
+      const fresh = await fetch(key.url, {
+        headers: { ...headers, Accept: single ? "application/vnd.pgrst.object+json" : "application/json" }
+      });
+      if (fresh.ok) { await cache.put(key.url, fresh); continue; }
+    } catch { /* fall through: drop the stale copy */ }
+    await cache.delete(key);
+  }
+}
+
+async function handleWrite(event, table) {
+  const { request } = event;
+  const userId = userIdFromRequest(request);
+  const headers = {};
+  for (const h of ["Authorization", "apikey"]) if (request.headers.get(h)) headers[h] = request.headers.get(h);
+  const response = await fetch(request);   // offline: rejects, exactly as without a worker
+  if (response.ok && userId) {
+    storeQueue = storeQueue.then(() => refreshTable(table, userId, headers)).catch(() => {});
+    event.waitUntil(storeQueue);
+  }
+  return response;
+}
+
 async function handleShell(event) {
   const { request } = event;
   const network = fetch(request).then((response) => {
@@ -161,8 +198,14 @@ async function handleFont(event) {
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
-  if (request.method !== "GET") return;
   const url = new URL(request.url);
+  if (request.method !== "GET") {
+    // Writes to a table (not /rpc/) pass straight through, then refresh its copies.
+    const table = ["POST", "PATCH", "PUT", "DELETE"].includes(request.method)
+      && url.pathname.match(/\/rest\/v1\/([A-Za-z0-9_]+)$/);
+    if (table) event.respondWith(handleWrite(event, table[1]));
+    return;
+  }
   if (url.pathname.includes("/rest/v1/")) { event.respondWith(handleData(event)); return; }
   if (url.origin === self.location.origin && url.pathname.includes("/fonts/")) { event.respondWith(handleFont(event)); return; }
   if (url.origin === self.location.origin && !url.pathname.endsWith("/sw.js")) event.respondWith(handleShell(event));

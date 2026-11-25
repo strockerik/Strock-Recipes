@@ -927,7 +927,10 @@ lands on one of three screens:
   editable); renaming it to a different bottle saves it unlinked from that card.
 - **Several close matches** → *Which one is it?* (the label's age, proof and
   batch already rule out the impossible ones). Picking one teaches the catalog
-  that label's wording, so the next scan of it is instant.
+  that label's wording, so the next scan of it is instant. Since v2.3.1 the
+  wording is saved only when it shares words with the bottle's name, so a
+  mis-tap ("eagle rare" on Buffalo Trace) isn't saved for everyone, and each
+  saved wording records who saved it (`spirit_aliases.created_by`).
 - **Not in the catalog** → *Look it up*: the `research-bottle` function searches
   critic reviews and competition results on the web and saves what it can cite.
   About 20–30 seconds; it keeps going if the sheet is closed, and a toast says
@@ -1048,6 +1051,8 @@ create unique index spirit_lookups_one_running on public.spirit_lookups (name_no
 create index spirit_lookups_recent on public.spirit_lookups (name_norm, created_at desc);
 alter table public.spirit_lookups enable row level security;
 create policy "signed-in read" on public.spirit_lookups for select to authenticated using (true);
+-- v2.3.1 (supabase/sql/v2.3.1-repairs.sql): members can read only id, status,
+-- product_id and added, so nobody sees who looked up what.
 
 -- 4. "Wrong bottle?" / "wrong score" from the score card.
 create table public.spirit_reports (
@@ -1067,6 +1072,8 @@ create policy "users see their reports" on public.spirit_reports for select to a
   using (user_id = auth.uid());
 
 -- 5. Picking a bottle teaches the catalog that label's wording.
+--    v2.3.1 (supabase/sql/v2.3.1-repairs.sql) replaces this with a version that
+--    saves the wording only when it shares words with the bottle's name.
 create or replace function public.spirit_confirm_alias(p_product uuid, p_alias_norm text)
 returns void
 language plpgsql
@@ -2139,6 +2146,10 @@ How it stays safe and current:
   of a stalled connection, for grocery-store "lie-fi").
 - Recipe data is cached **only for a signed-in user's reads**; a different user
   signing in on the device wipes it, and so does signing out.
+- A change saved online (adding a recipe to the list, planning a meal) makes the
+  service worker re-read that table's saved copy, so the list you open in a store
+  with no signal includes it (v2.3.1). Offline, opening the list or the plan
+  shows what's on screen rather than re-reading an older copy.
 - If an hour-old login can't refresh because you're offline, the app opens as you
   (read-only) instead of showing the sign-in screen, and swaps in live data as
   soon as the connection is back.
@@ -2182,7 +2193,7 @@ gitignored `notes.md` (the legacy service-role key was retired 2026-11-15).
 Each run writes two files to `backups/` and keeps the newest 8 of each:
 `house-index-YYYY-MM-DD.json` — every recipe, plus the household's other data
 under `"tables"` (pantry and bar, meal plan, grocery list, shares, profile
-settings) — and `catalog-YYYY-MM-DD.json.gz`, the spirits catalog (bottles,
+settings, and who's approved) — and `catalog-YYYY-MM-DD.json.gz`, the spirits catalog (bottles,
 aliases, reviews, community medians, reports, lookups).
 
 ```bash

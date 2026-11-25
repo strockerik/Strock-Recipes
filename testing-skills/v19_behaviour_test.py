@@ -13,6 +13,7 @@ table state and logs every call, then checks:
                          shares, planned meals and grocery entry)
   - cook mode           (follows the Original | US | Metric toggle)
   - coach history       (kept per account; the old account-less keys are dropped)
+  - remove a shared recipe (says so when nothing was removed, v2.3.1; works when it was)
 NOTE: runs UNSTYLED — no layout assertions (those live in viewport_smoke_test.py).
 Run: python3 testing-skills/v19_behaviour_test.py
 """
@@ -92,7 +93,7 @@ function makeBuilder(table) {
           DB[t] = DB[t].filter(function (x) { return x.recipe_id !== g.id; });
         });
       });
-      return { data: null, error: null };
+      return { data: clone(gone), error: null };          // .delete().select() returns what went
     }
     if (st.op === "update") { rows.filter(match).forEach(function (r) { Object.assign(r, st.patch); }); return { data: null, error: null }; }
     var hits = clone(rows.filter(match));
@@ -252,6 +253,28 @@ async function runTests() {
     await until(function () { return /less dressing/.test(txt($("#coach-thread"))); });
     assert("a coach thread is saved under the account", !!localStorage.getItem("hi:u1:coach:r2") && localStorage.getItem("coach:v1:r2") === null,
       Object.keys(localStorage).filter(function (k) { return /coach/.test(k); }).join(","));
+
+    // ---------- removing a recipe shared with you ----------
+    async function removeShared() {
+      click($("#toggle-shared"));
+      await until(function () { return !!document.querySelector('.item[data-id="r3"]'); });
+      var row = document.querySelector('.item[data-id="r3"]');
+      if (!row.querySelector(".detail-more-btn")) click(row.querySelector(".item-head"));
+      await until(function () { return !!document.querySelector('.item[data-id="r3"] .detail-more-btn'); });
+      click(document.querySelector('.item[data-id="r3"] .detail-more-btn'));
+      await until(function () { return !!$(".remove-shared-btn"); });
+      click($(".remove-shared-btn"));
+      await delay(400);
+      return txt($(".toast"));
+    }
+    var refused = await removeShared();
+    assert("Remove that deletes nothing says so", /Couldn.t remove that/.test(refused), refused);
+    assert("…and doesn't claim success", !/Removed from your shared/.test(refused), refused);
+    DB.recipe_shares.push({ recipe_id:"r3", shared_with_user_id:"u1", shared_by_user_id:"u2", created_at:"2026-04-02T00:00:00Z" });
+    click($("#toggle-shared")); await delay(200);
+    var removed = await removeShared();
+    assert("Remove that works says so", /Removed from your shared recipes/.test(removed), removed);
+    assert("…and the share row is gone", !DB.recipe_shares.some(function (r) { return r.recipe_id === "r3" && r.shared_with_user_id === "u1"; }), JSON.stringify(DB.recipe_shares));
   } catch (e) {
     assert("no exception", false, String(e && e.stack || e));
   }

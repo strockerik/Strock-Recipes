@@ -46,6 +46,11 @@ const MAX_IMAGE_NOTE_CHARS = 300;
 // What Claude's vision API accepts. The browser always uploads JPEG, but this
 // endpoint takes client input, so reject anything else before paying for a call.
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+// Size caps checked here, not only in the page (anyone with a session can call
+// this directly): the model's own per-image limit is 5 MB (~6.7 MB of base64),
+// and pasted text matches the paste box's 50,000-character limit.
+const MAX_IMAGE_BASE64_CHARS = 7_000_000;
+const MAX_TEXT_CHARS = 50_000;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 // The project's publishable key (SUPABASE_PUBLISHABLE_KEYS, a JSON object keyed
@@ -250,15 +255,64 @@ function parseAllowedUrl(raw: string): URL | null {
 // answers. If the runtime can't resolve names, the literal check stands alone
 // (logged once). A name could still change between this check and the fetch;
 // that window is small and only exposes what the redirect re-check also guards.
-function isPrivateAddress(ip: string): boolean {
-  const v4 = ip.match(/^(?:::ffff:)?(\d+)\.(\d+)\.\d+\.\d+$/i);
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
+function isPrivateV4(a: number, b: number): boolean {
+  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
+}
+// An IPv6 address as eight 16-bit groups, whatever way it was written
+// (compressed "::", uncompressed zeros, or with a dotted IPv4 tail). Null if it
+// isn't a valid address.
+function ipv6Groups(ip: string): number[] | null {
+  let s = ip.toLowerCase().replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+  const tail = s.match(/^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (tail) {
+    const o = tail.slice(2).map(Number);
+    if (o.some((n) => n > 255)) return null;
+    s = `${tail[1]}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
   }
-  const v6 = ip.toLowerCase();
-  return v6 === "::1" || v6 === "::" || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6);
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const part = (h: string) => (h ? h.split(":") : []);
+  const head = part(halves[0]), rest = halves.length === 2 ? part(halves[1]) : [];
+  const fill = 8 - head.length - rest.length;
+  if (halves.length === 2 ? fill < 1 : fill !== 0) return null;
+  const groups = [...head, ...Array(halves.length === 2 ? fill : 0).fill("0"), ...rest];
+  if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+  return groups.map((g) => parseInt(g, 16));
+}
+function isPrivateAddress(ip: string): boolean {
+  const v4 = ip.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (v4) return isPrivateV4(Number(v4[1]), Number(v4[2]));
+  const g = ipv6Groups(ip);
+  if (!g) return true;                                         // unreadable: refuse
+  const embedded = (hi: number) => isPrivateV4(hi >> 8, hi & 255);
+  if (g.slice(0, 6).every((x) => x === 0)) return true;        // ::, ::1, and old IPv4-compatible forms
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return embedded(g[6]);   // ::ffff:a.b.c.d (IPv4-mapped)
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return embedded(g[6]); // NAT64
+  if (g[0] === 0x2002) return embedded(g[1]);                  // 6to4
+  return (g[0] & 0xfe00) === 0xfc00                            // unique-local fc00::/7
+    || (g[0] & 0xffc0) === 0xfe80                              // link-local fe80::/10
+    || (g[0] & 0xff00) === 0xff00;                             // multicast ff00::/8
+}
+
+// Fetch a page one redirect at a time, checking every hop the same way as the
+// link we were given: redirect:"follow" would already have requested a private
+// address before anything could look at it.
+const MAX_REDIRECTS = 5;
+async function fetchFollowingSafely(start: URL, init: RequestInit): Promise<Response | null> {
+  let url = start;
+  for (let hop = 0; ; hop++) {
+    const res = await fetch(url, { ...init, redirect: "manual" });
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+    if (!location) return res;
+    await res.body?.cancel();
+    const next = hop < MAX_REDIRECTS ? parseAllowedUrl(new URL(location, url).href) : null;
+    if (!next || !(await resolvesPublic(next.hostname))) {
+      console.error("URL redirected to a disallowed address:", start.href, "->", location);
+      return null;
+    }
+    url = next;
+  }
 }
 let dnsUnavailableLogged = false;
 async function resolvesPublic(host: string): Promise<boolean> {
@@ -1076,7 +1130,10 @@ Deno.serve(async (req) => {
       if (images.length === 0) return json({ error: "No image was received." });
       if (images.length > MAX_IMAGES) return json({ error: `Please send at most ${MAX_IMAGES} photos at a time.` });
       for (const img of images) {
-        if (!img?.data || !img?.mediaType) return json({ error: "No image was received." });
+        if (!img?.data || !img?.mediaType || typeof img.data !== "string") return json({ error: "No image was received." });
+        if (img.data.length > MAX_IMAGE_BASE64_CHARS) {
+          return json({ error: "That photo is too large — try a smaller one or a screenshot." });
+        }
         if (!ALLOWED_IMAGE_TYPES.includes(img.mediaType)) {
           return json({ error: "Unsupported image format — use a JPEG, PNG, GIF, or WebP photo." });
         }
@@ -1107,7 +1164,10 @@ Deno.serve(async (req) => {
         });
       }
     } else if (body.type === "text") {
-      if (!body.text || !body.text.trim()) return json({ error: "No text was received." });
+      if (typeof body.text !== "string" || !body.text.trim()) return json({ error: "No text was received." });
+      if (body.text.length > MAX_TEXT_CHARS) {
+        return json({ error: `That’s more than ${MAX_TEXT_CHARS.toLocaleString("en-US")} characters — paste just the recipe.` });
+      }
       userContent = [
         { type: "text", text: `Extract the recipe from the following text by calling save_recipe:\n\n${body.text}` }
       ];
@@ -1170,8 +1230,7 @@ Deno.serve(async (req) => {
       }
       let html = "";
       try {
-        const pageRes = await fetch(url, {
-          redirect: "follow",
+        const pageRes = await fetchFollowingSafely(url, {
           signal: AbortSignal.timeout(15_000),
           headers: {
             // A browser-ish UA — many recipe sites refuse obvious bots outright.
@@ -1183,14 +1242,8 @@ Deno.serve(async (req) => {
             ...(onYouTube ? { "Cookie": "SOCS=CAI" } : {})
           }
         });
-        // parseAllowedUrl vetted the link we were given, not where redirect:"follow"
-        // landed — a public URL can 302 to localhost or a private address. Re-check
-        // the final URL before reading the body, so internal pages can never be
-        // fed to the model and echoed back as a "recipe".
-        const landed = pageRes.redirected ? parseAllowedUrl(pageRes.url) : url;
-        if (!landed || (pageRes.redirected && !(await resolvesPublic(landed.hostname)))) {
-          await pageRes.body?.cancel();
-          console.error("URL redirected to a disallowed address:", url.href, "->", pageRes.url);
+        // Every redirect hop was checked before it was requested (fetchFollowingSafely).
+        if (!pageRes) {
           return json({ error: "That link redirects somewhere we can’t read — copy the recipe text and paste it instead." });
         }
         html = await readCapped(pageRes);
